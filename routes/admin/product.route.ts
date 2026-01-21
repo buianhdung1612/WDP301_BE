@@ -21,4 +21,19 @@ router.patch(
 router.patch('/category/delete/:id', productController.deleteCategory);
 
 
+// Thuộc tính
+router.get('/attribute/list', productController.getAttributeList);
+router.get('/attribute/detail/:id', productController.getAttributeDetail);
+router.post(
+    '/attribute/create',
+    productValidate.createAttributePost,
+    productController.createAttribute
+);
+router.patch(
+    '/attribute/edit/:id',
+    productValidate.createAttributePost,
+    productController.updateAttribute
+);
+router.patch('/attribute/delete/:id', productController.deleteAttribute);
+
 export default router;

@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import CategoryProduct from '../../models/category-product.model';
 import slugify from 'slugify';
 import { buildCategoryTree } from '../../helpers/category.helper';
+import AttributeProduct from '../../models/attribute-product.model';
 
 
 // Danh mục sản phẩm
@@ -237,5 +238,154 @@ export const deleteCategory = async (req: Request, res: Response) => {
             success: false,
             message: "Id không hợp lệ!"
         })
+    }
+}
+export const getAttributeList = async (req: Request, res: Response) => {
+    try {
+        const find: any = {
+            deleted: false
+        };
+
+        if (req.query.keyword) {
+            const keyword = slugify(`${req.query.keyword}`, {
+                replacement: ' ',
+                lower: true,
+            });
+            find.search = new RegExp(keyword, "i");
+        }
+
+        const limitItems = 20;
+        const page = Math.max(1, parseInt(`${req.query.page}`) || 1);
+        const skip = (page - 1) * limitItems;
+
+        const [recordList, totalRecords] = await Promise.all([
+            AttributeProduct.find(find)
+                .sort({ createdAt: "desc" })
+                .limit(limitItems)
+                .skip(skip),
+            AttributeProduct.countDocuments(find)
+        ]);
+
+        return res.json({
+            success: true,
+            message: "Lấy danh sách thuộc tính thành công",
+            data: {
+                recordList: recordList,
+                pagination: {
+                    totalRecords,
+                    totalPages: Math.ceil(totalRecords / limitItems),
+                    currentPage: page,
+                    limit: limitItems
+                }
+            }
+        });
+    } catch (error) {
+        return res.status(500).json({
+            success: false,
+            message: "Lỗi hệ thống!"
+        });
+    }
+}
+
+export const createAttribute = async (req: Request, res: Response) => {
+    try {
+        req.body.search = slugify(`${req.body.name}`, {
+            replacement: " ",
+            lower: true
+        });
+
+        const newRecord = new AttributeProduct(req.body);
+        await newRecord.save();
+
+        return res.json({
+            success: true,
+            message: "Tạo thuộc tính thành công!",
+            data: newRecord
+        });
+    } catch (error) {
+        console.error(error);
+        return res.status(400).json({
+            success: false,
+            message: "Dữ liệu không hợp lệ!"
+        });
+    }
+}
+
+export const getAttributeDetail = async (req: Request, res: Response) => {
+    try {
+        const id = req.params.id;
+        const attributeDetail = await AttributeProduct.findOne({
+            _id: id,
+            deleted: false
+        });
+
+        if (!attributeDetail) {
+            return res.status(404).json({
+                success: false,
+                message: "Không tìm thấy thuộc tính!"
+            });
+        }
+
+        return res.json({
+            success: true,
+            message: "Lấy chi tiết thuộc tính thành công",
+            data: attributeDetail
+        });
+    } catch (error) {
+        return res.status(400).json({
+            success: false,
+            message: "ID không hợp lệ!"
+        });
+    }
+}
+
+export const updateAttribute = async (req: Request, res: Response) => {
+    try {
+        const id = req.params.id;
+
+        req.body.search = slugify(req.body.name, {
+            replacement: ' ',
+            lower: true,
+        });
+
+        await AttributeProduct.updateOne({
+            _id: id,
+            deleted: false
+        }, req.body);
+
+        return res.json({
+            success: true,
+            message: "Cập nhật thuộc tính thành công!"
+        });
+    } catch (error) {
+        console.log(error);
+        return res.status(400).json({
+            success: false,
+            message: "Dữ liệu không hợp lệ!"
+        });
+    }
+}
+
+export const deleteAttribute = async (req: Request, res: Response) => {
+    try {
+        const id = req.params.id;
+
+        await AttributeProduct.updateOne({
+            _id: id
+        }, {
+            deleted: true,
+            deletedAt: Date.now(),
+        });
+
+        return res.json({
+            success: true,
+            message: "Xóa thuộc tính thành công!"
+        });
+    } catch (error) {
+        console.log(error);
+        return res.status(400).json({
+            success: false,
+            message: "Id không hợp lệ!"
+        });
     }
 }
