@@ -4,7 +4,8 @@
   "main": "index.js",
   "license": "MIT",
   "scripts": {
-    "start": "nodemon --exec \"node --inspect -r ts-node/register\" index.ts"
+    "start": "nodemon --exec \"node --inspect -r ts-node/register\" index.ts",
+    "seed": "ts-node seeds/seed.ts"
   },
   "dependencies": {
     "dotenv": "^17.2.3",
