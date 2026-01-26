@@ -20,6 +20,21 @@ router.patch(
 );
 router.patch('/category/delete/:id', productController.deleteCategory);
 
+// Sản phẩm
+router.get('/list', productController.list);
+router.get('/create', productController.create);
+router.post(
+    '/create',
+    productValidate.createPost,
+    productController.createPost
+);
+router.get('/edit/:id', productController.edit);
+router.patch(
+    '/edit/:id',
+    productValidate.createPost,
+    productController.editPatch
+);
+router.patch('/delete/:id', productController.deletePatch);
 
 // Thuộc tính
 router.get('/attribute/list', productController.getAttributeList);
@@ -35,5 +50,12 @@ router.patch(
     productController.updateAttribute
 );
 router.patch('/attribute/delete/:id', productController.deleteAttribute);
+
+// Import/Export
+// router.get('/export-csv', productController.exportCSV);
+// router.post(
+//     '/import-csv',
+//     productController.importCSVPost
+// );
 
 export default router;
