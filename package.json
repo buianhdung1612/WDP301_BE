@@ -8,9 +8,12 @@
     "seed": "ts-node seeds/seed.ts"
   },
   "dependencies": {
+    "@types/jsonwebtoken": "^9.0.10",
+    "bcryptjs": "^3.0.3",
     "dotenv": "^17.2.3",
     "express": "^5.2.1",
     "joi": "^18.0.2",
+    "jsonwebtoken": "^9.0.3",
     "moment": "^2.30.1",
     "mongoose": "^9.1.3",
     "slugify": "^1.6.6"
