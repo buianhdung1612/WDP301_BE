@@ -1,4 +1,6 @@
 import express from 'express';
+import cors from 'cors';
+import cookieParser from 'cookie-parser';
 import dotenv from "dotenv";
 import adminRoutes from "./routes/admin/index.route";
 import clientRoutes from "./routes/client/index.route";
@@ -15,6 +17,17 @@ connectDB();
 
 // Cho phép gửi data lên dạng json
 app.use(express.json());
+app.use(cookieParser());
+
+// CORS
+app.use(cors({
+    origin: [
+        'http://localhost:5173',
+        'http://127.0.0.1:5173',
+        'https://hyperdolichocephalic-aerodynamic-ashlee.ngrok-free.dev'
+    ],
+    credentials: true
+}));
 
 // Cấu hình routes
 app.use('/api/v1/admin', adminRoutes);

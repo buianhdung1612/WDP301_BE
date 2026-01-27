@@ -8,8 +8,15 @@
     "seed": "ts-node seeds/seed.ts"
   },
   "dependencies": {
+    "@types/cookie-parser": "^1.4.10",
+    "@types/cors": "^2.8.19",
+    "@types/crypto-js": "^4.2.2",
     "@types/jsonwebtoken": "^9.0.10",
+    "axios": "^1.13.3",
     "bcryptjs": "^3.0.3",
+    "cookie-parser": "^1.4.7",
+    "cors": "^2.8.6",
+    "crypto-js": "^4.2.0",
     "dotenv": "^17.2.3",
     "express": "^5.2.1",
     "joi": "^18.0.2",

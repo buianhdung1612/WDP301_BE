@@ -1,11 +1,10 @@
 import { Request, Response } from "express";
 import AccountUser from "../../models/account-user.model";
+import ForgotPassword from "../../models/forgot-password.model";
 import bcrypt from "bcryptjs";
 import slugify from "slugify";
 import jwt from "jsonwebtoken";
-// import { generateRandomNumber } from "../../helpers/generate.helper";
-// import VerifyOTP from "../../models/verify-otp.model";
-// import { sendMail } from "../../helpers/mail.helper";
+import * as generateHelper from "../../helpers/generate.helper";
 
 // [POST] /api/v1/client/auth/register
 export const registerPost = async (req: Request, res: Response) => {
@@ -17,7 +16,7 @@ export const registerPost = async (req: Request, res: Response) => {
 
         if (existEmail) {
             return res.json({
-                code: "error",
+                success: false,
                 message: "Email đã được sử dụng!"
             });
         }
@@ -29,7 +28,7 @@ export const registerPost = async (req: Request, res: Response) => {
 
         if (existPhone) {
             return res.json({
-                code: "error",
+                success: false,
                 message: "Số điện thoại đã được sử dụng!"
             });
         }
@@ -63,7 +62,7 @@ export const registerPost = async (req: Request, res: Response) => {
         });
 
         res.json({
-            code: "success",
+            success: true,
             message: "Đăng ký tài khoản thành công!",
             token: tokenUser,
             user: {
@@ -74,7 +73,7 @@ export const registerPost = async (req: Request, res: Response) => {
         });
     } catch (error) {
         res.json({
-            code: "error",
+            success: false,
             message: "Dữ liệu không hợp lệ!"
         })
     }
@@ -92,7 +91,7 @@ export const loginPost = async (req: Request, res: Response) => {
 
         if (!existAccount) {
             return res.json({
-                code: "error",
+                success: false,
                 message: "Tài khoản không tồn tại!"
             });
         }
@@ -101,14 +100,14 @@ export const loginPost = async (req: Request, res: Response) => {
 
         if (!checkPassword) {
             return res.json({
-                code: "error",
+                success: false,
                 message: "Mật khẩu không đúng!"
             });
         }
 
         if (existAccount.status != "active") {
             return res.json({
-                code: "error",
+                success: false,
                 message: "Tài khoản không hoạt động!"
             });
         }
@@ -132,7 +131,7 @@ export const loginPost = async (req: Request, res: Response) => {
         });
 
         res.json({
-            code: "success",
+            success: true,
             message: "Đăng nhập thành công!",
             token: tokenUser,
             user: {
@@ -144,7 +143,7 @@ export const loginPost = async (req: Request, res: Response) => {
         });
     } catch (error) {
         res.json({
-            code: "error",
+            success: false,
             message: "Dữ liệu không hợp lệ!"
         });
     }
@@ -154,30 +153,126 @@ export const loginPost = async (req: Request, res: Response) => {
 export const logout = async (req: Request, res: Response) => {
     res.clearCookie("tokenUser");
     res.json({
-        code: "success",
+        success: true,
         message: "Đăng xuất thành công!"
     });
 }
 
-/* 
-// Logic tạm thời ẩn đi
-export const callbackGoogle = async (req: Request, res: Response) => {
-    // ... logic
-}
-
-export const callbackFacebook = async (req: Request, res: Response) => {
-    // ... logic
-}
-
+// [POST] /api/v1/client/auth/forgot-password
 export const forgotPasswordPost = async (req: Request, res: Response) => {
-    // ... logic
+    try {
+        const email = req.body.email;
+
+        const user = await AccountUser.findOne({
+            email: email,
+            deleted: false
+        });
+
+        if (!user) {
+            return res.json({
+                success: false,
+                message: "Email không tồn tại!"
+            });
+        }
+
+        const otp = generateHelper.generateRandomNumber(6);
+
+        const objectForgotPassword = {
+            email: email,
+            otp: otp,
+            expireAt: Date.now()
+        };
+
+        const forgotPassword = new ForgotPassword(objectForgotPassword);
+        await forgotPassword.save();
+
+        // Gửi OTP qua email (Ở đây chỉ console.log vì chưa có helper gửi mail)
+        console.log(`OTP reset password của email ${email} là: ${otp}`);
+
+        res.json({
+            success: true,
+            message: "Đã gửi mã OTP qua email!"
+        });
+    } catch (error) {
+        res.json({
+            success: false,
+            message: "Gửi mã OTP thất bại!"
+        });
+    }
 }
 
+// [POST] /api/v1/client/auth/otp-password
 export const otpPasswordPost = async (req: Request, res: Response) => {
-    // ... logic
+    try {
+        const { email, otp } = req.body;
+
+        const result = await ForgotPassword.findOne({
+            email: email,
+            otp: otp
+        });
+
+        if (!result) {
+            return res.json({
+                success: false,
+                message: "Mã OTP không hợp lệ!"
+            });
+        }
+
+        const user = await AccountUser.findOne({
+            email: email
+        });
+
+        // Set cookie tạm thời để cho phép reset password
+        res.cookie("tokenResetPassword", user?.id, {
+            httpOnly: true,
+            maxAge: 5 * 60 * 1000, // 5 phút
+            sameSite: "strict",
+            secure: process.env.NODE_ENV === 'production'
+        });
+
+        res.json({
+            success: true,
+            message: "Xác nhận OTP thành công!"
+        });
+    } catch (error) {
+        res.json({
+            success: false,
+            message: "Xác nhận OTP thất bại!"
+        });
+    }
 }
 
+// [POST] /api/v1/client/auth/reset-password
 export const resetPasswordPost = async (req: Request, res: Response) => {
-    // ... logic
+    try {
+        const password = req.body.password;
+        const id = req.cookies.tokenResetPassword;
+
+        if (!id) {
+            return res.json({
+                success: false,
+                message: "Phiên làm việc đã hết hạn!"
+            });
+        }
+
+        const newPassword = await bcrypt.hash(password, 10);
+
+        await AccountUser.updateOne({
+            _id: id
+        }, {
+            password: newPassword
+        });
+
+        res.clearCookie("tokenResetPassword");
+
+        res.json({
+            success: true,
+            message: "Đổi mật khẩu thành công!"
+        });
+    } catch (error) {
+        res.json({
+            success: false,
+            message: "Đổi mật khẩu thất bại!"
+        });
+    }
 }
-*/

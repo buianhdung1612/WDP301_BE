@@ -62,13 +62,10 @@ export const registerPost = (req: Request, res: Response, next: NextFunction) =>
     const { error } = schema.validate(req.body);
 
     if (error) {
-        const errorMessage = error.details[0].message;
-
-        res.json({
-            code: "error",
-            message: errorMessage
+        return res.json({
+            success: false,
+            message: error.details[0].message
         });
-        return;
     }
 
     next();
@@ -98,13 +95,10 @@ export const loginPost = (req: Request, res: Response, next: NextFunction) => {
     const { error } = schema.validate(req.body);
 
     if (error) {
-        const errorMessage = error.details[0].message;
-
-        res.json({
-            code: "error",
-            message: errorMessage
+        return res.json({
+            success: false,
+            message: error.details[0].message
         });
-        return;
     }
 
     next();
@@ -124,13 +118,10 @@ export const forgotPasswordPost = (req: Request, res: Response, next: NextFuncti
     const { error } = schema.validate(req.body);
 
     if (error) {
-        const errorMessage = error.details[0].message;
-
-        res.json({
-            code: "error",
-            message: errorMessage
+        return res.json({
+            success: false,
+            message: error.details[0].message
         });
-        return;
     }
 
     next();
@@ -155,13 +146,10 @@ export const otpPasswordPost = (req: Request, res: Response, next: NextFunction)
     const { error } = schema.validate(req.body);
 
     if (error) {
-        const errorMessage = error.details[0].message;
-
-        res.json({
-            code: "error",
-            message: errorMessage
+        return res.json({
+            success: false,
+            message: error.details[0].message
         });
-        return;
     }
 
     next();
@@ -200,13 +188,10 @@ export const resetPasswordPost = (req: Request, res: Response, next: NextFunctio
     const { error } = schema.validate(req.body);
 
     if (error) {
-        const errorMessage = error.details[0].message;
-
-        res.json({
-            code: "error",
-            message: errorMessage
+        return res.json({
+            success: false,
+            message: error.details[0].message
         });
-        return;
     }
 
     next();
