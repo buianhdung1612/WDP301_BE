@@ -1,6 +1,6 @@
 import express, { Request, Response } from "express";
 import Service from "../../models/service.model";
-import ServiceCategory from "../../models/service-category.model";
+import ServiceCategory from "../../models/category-service.model";
 
 // [GET] /api/v1/admin/services
 export const listServices = async (req: Request, res: Response) => {

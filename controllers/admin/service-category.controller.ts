@@ -1,5 +1,5 @@
 import express, { Request, Response } from "express";
-import ServiceCategory from "../../models/service-category.model";
+import ServiceCategory from "../../models/category-service.model";
 
 // [GET] /api/v1/admin/service-categories
 export const listCategories = async (req: Request, res: Response) => {

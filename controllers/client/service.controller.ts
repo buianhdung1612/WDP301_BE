@@ -1,6 +1,6 @@
 import express, { Request, Response } from "express";
 import Service from "../../models/service.model";
-import ServiceCategory from "../../models/service-category.model";
+import ServiceCategory from "../../models/category-service.model";
 
 // [GET] /api/v1/client/services
 export const listServices = async (req: Request, res: Response) => {
@@ -69,9 +69,9 @@ export const getService = async (req: Request, res: Response) => {
 // [GET] /api/v1/client/service-categories
 export const getCategories = async (req: Request, res: Response) => {
     try {
-        const categories = await ServiceCategory.find({ 
-            deleted: false, 
-            status: "active" 
+        const categories = await ServiceCategory.find({
+            deleted: false,
+            status: "active"
         }).sort({ createdAt: 1 });
 
         res.json({

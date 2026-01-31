@@ -12,7 +12,7 @@ const schema = new mongoose.Schema(
         customerPhone: String,
         staffId: String, // ID nhân viên thực hiện (nếu có)
         notes: String, // Ghi chú từ khách hàng (yêu cầu đặc biệt)
-        
+
         // Giá và thanh toán
         basePrice: Number, // Giá gốc
         discountAmount: {
@@ -27,21 +27,21 @@ const schema = new mongoose.Schema(
             default: "unpaid"
         },
         paymentMethod: String, // Phương thức thanh toán
-        
+
         // Trạng thái booking
         status: {
             type: String,
             enum: ["pending", "confirmed", "in-progress", "completed", "cancelled"],
             default: "pending"
         },
-        
+
         // Hủy lịch
         cancelledReason: String, // Lý do hủy
         cancelledAt: Date, // Ngày hủy
         cancelledBy: String, // Người hủy (customer/staff)
-        
+
         completedAt: Date, // Ngày hoàn thành
-        
+
         search: String,
         deleted: {
             type: Boolean,

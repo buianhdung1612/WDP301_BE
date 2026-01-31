@@ -4,9 +4,8 @@ const schema = new mongoose.Schema(
     {
         serviceId: String, // Tham chiếu dịch vụ
         date: Date, // Ngày
-        startTime: String, // Giờ bắt đầu (HH:mm)
-        endTime: String, // Giờ kết thúc (HH:mm)
-        maxCapacity: Number, // Số slot tối đa có sẵn
+        startTime: String,
+        endTime: String,
         currentBookings: {
             type: Number,
             default: 0
