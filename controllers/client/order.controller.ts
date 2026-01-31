@@ -8,6 +8,7 @@ import { generateRandomNumber, generateRandomString } from '../../helpers/genera
 import { getInfoAddress } from '../../helpers/location.helper';
 import hmacSHA256 from 'crypto-js/hmac-sha256';
 import moment from 'moment';
+import puppeteer from 'puppeteer';
 
 // [POST] /api/v1/client/order/create
 export const createPost = async (req: Request, res: Response) => {
@@ -503,6 +504,248 @@ export const paymentVNPayResult = async (req: Request, res: Response) => {
         res.render('success', { code: '97' })
     }
 }
+
+export const exportPdf = async (req: Request, res: Response) => {
+    const { orderCode, phone } = req.query;
+
+    const orderDetail = await Order.findOne({
+        code: orderCode,
+        phone: phone,
+        deleted: false,
+    });
+
+    if (!orderDetail) {
+        return res.status(404).json({ message: "Order not found" });
+    }
+
+    const html = `
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <title>Hóa đơn ${orderDetail.code}</title>
+
+  <style>
+    * { box-sizing: border-box; }
+
+    body {
+      font-family: "Segoe UI", Arial, Helvetica, sans-serif;
+      font-size: 13px;
+      color: #2c2c2c;
+      padding: 20px;
+      background: #f6f7fb;
+    }
+
+    .invoice {
+      max-width: 820px;
+      margin: auto;
+      background: #fff;
+      padding: 28px 30px;
+      border-radius: 6px;
+      box-shadow: 0 0 0 1px #e5e7eb;
+    }
+
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+    }
+
+    .header h2 {
+      margin: 0;
+      font-size: 22px;
+    }
+
+    .header p {
+      margin: 2px 0;
+      font-size: 12.5px;
+      color: #555;
+    }
+
+    hr {
+      margin: 18px 0;
+      border: none;
+      border-top: 1px dashed #ddd;
+    }
+
+    .section {
+      margin-top: 22px;
+    }
+
+    .section h3 {
+      margin-bottom: 10px;
+      font-size: 14px;
+      text-transform: uppercase;
+      color: #3a7bd5;
+      border-bottom: 2px solid #3a7bd5;
+      padding-bottom: 4px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 12px;
+    }
+
+    th {
+      background: #f3f6fb;
+      padding: 9px 6px;
+      border: 1px solid #e1e5ea;
+      font-size: 12.5px;
+    }
+
+    td {
+      border: 1px solid #e1e5ea;
+      padding: 9px 6px;
+      font-size: 12.5px;
+      text-align: center;
+    }
+
+    td.name { text-align: left; font-weight: 500; }
+    td.variant { text-align: left; font-size: 12px; color: #555; }
+
+    .two-col {
+      display: flex;
+      justify-content: space-between;
+      gap: 20px;
+    }
+
+    .two-col .col { width: 50%; }
+
+    .badge {
+      display: inline-block;
+      padding: 3px 8px;
+      border-radius: 12px;
+      font-size: 11.5px;
+      margin-left: 6px;
+    }
+
+    .paid { background: #e6f7ee; color: #1e8f5c; }
+    .unpaid { background: #ffeaea; color: #c0392b; }
+    .pending { background: #fff5e6; color: #e67e22; }
+    .confirmed { background: #e6f7ee; color: #29ae27; }
+    .shipping { background: #e8f2ff; color: #3a7bd5; }
+    .completed { background: #e6f7ee; color: #27ae60; }
+    .cancelled, .returned { background: #fbeaea; color: #c0392b; }
+
+    .summary {
+      margin-top: 26px;
+      display: flex;
+      justify-content: flex-end;
+    }
+
+    .summary table { width: 380px; }
+    .summary td { border: none; padding: 6px 4px; }
+    .summary .total td {
+      font-size: 16px;
+      font-weight: bold;
+      border-top: 2px solid #333;
+    }
+
+    .footer {
+      margin-top: 45px;
+      text-align: center;
+      font-size: 12px;
+      color: #888;
+    }
+
+    @media print {
+      body { background: #fff; padding: 0; }
+      .invoice { box-shadow: none; }
+    }
+  </style>
+</head>
+
+<body>
+  <div class="invoice">
+
+    <div class="header">
+      <div>
+        <h2>MAIKA.SHOP</h2>
+        <p>Hóa đơn bán hàng</p>
+      </div>
+      <div>
+        <p><strong>Mã đơn:</strong> ${orderDetail.code}</p>
+        <p><strong>Ngày tạo:</strong> ${new Date(orderDetail.createdAt).toLocaleString("vi-VN")}</p>
+      </div>
+    </div>
+
+    <hr />
+
+    <div class="section">
+      <h3>Thông tin khách hàng</h3>
+      <p><strong>Họ tên:</strong> ${orderDetail.fullName}</p>
+      <p><strong>SĐT:</strong> ${orderDetail.phone}</p>
+      <p><strong>Địa chỉ:</strong> ${orderDetail.address}</p>
+    </div>
+
+    <div class="section">
+      <h3>Chi tiết sản phẩm</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>STT</th>
+            <th>Sản phẩm</th>
+            <th>Phân loại</th>
+            <th>SL</th>
+            <th>Giá</th>
+            <th>Thành tiền</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${orderDetail.items.map((item: any, i: number) => `
+            <tr>
+              <td>${i + 1}</td>
+              <td class="name">${item.name}</td>
+              <td class="variant">${item.variant?.join(", ") || "—"}</td>
+              <td>${item.quantity}</td>
+              <td>${item.price.toLocaleString("vi-VN")} đ</td>
+              <td>${(item.price * item.quantity).toLocaleString("vi-VN")} đ</td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="summary">
+      <table>
+        <tr>
+          <td>Tạm tính</td>
+          <td>${(orderDetail.subTotal || 0).toLocaleString("vi-VN")} đ</td>
+        </tr>
+        <tr>
+          <td>Phí vận chuyển</td>
+          <td>${(orderDetail.shipping?.fee || 0).toLocaleString("vi-VN")} đ</td>
+        </tr>
+        <tr class="total">
+          <td>Tổng thanh toán</td>
+          <td>${(orderDetail.total || 0).toLocaleString("vi-VN")} đ</td>
+        </tr>
+      </table>
+    </div>
+
+    <div class="footer">
+      <p>Cảm ơn quý khách đã mua hàng ❤️</p>
+    </div>
+
+  </div>
+</body>
+</html>
+`;
+
+    // Tạo PDF từ HTML sử dụng Puppeteer
+    const browser = await puppeteer.launch(); // Mở trình duyệt ẩn
+    const page = await browser.newPage(); // Mở tab mới
+    await page.setContent(html, { waitUntil: 'networkidle0' }); // Đặt nội dung HTML
+    const pdfBuffer = await page.pdf({ format: 'A4' }); // Tạo PDF dưới dạng buffer
+    await browser.close(); // Đóng trình duyệt
+
+    // Gửi file PDF về client
+    res.setHeader('Content-Type', 'application/pdf'); // Thiết lập header để trình duyệt nhận biết đây là file PDF
+    res.setHeader('Content-Disposition', `attachment; filename=invoice_${orderCode}.pdf`); // Thiết lập tên file khi tải về
+    res.send(pdfBuffer); // Gửi buffer PDF về client
+};
+
 
 function sortObject(obj: any) {
     let sorted: any = {};

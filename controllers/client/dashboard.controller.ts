@@ -4,6 +4,7 @@ import UserAddress from "../../models/user-address.model";
 import slugify from "slugify";
 import jwt from "jsonwebtoken";
 import bcrypt from "bcryptjs";
+import Order from "../../models/order.model";
 
 // [PATCH] /api/v1/client/dashboard/profile/edit
 export const profileEdit = async (req: Request, res: Response) => {
@@ -297,6 +298,93 @@ export const changePassword = async (req: Request, res: Response) => {
         return res.status(500).json({
             success: false,
             message: "Đã có lỗi xảy ra!"
+        });
+    }
+}
+
+export const profileChangeAvatar = async (req: Request, res: Response) => {
+    try {
+        const userId = res.locals.accountUser.id;
+        const { avatar } = req.body;
+
+        if (!avatar) {
+            return res.json({
+                success: false,
+                message: "Vui lòng gửi kèm đường dẫn ảnh!"
+            });
+        }
+
+        await AccountUser.updateOne({
+            _id: userId
+        }, {
+            avatar: avatar
+        });
+
+        return res.json({
+            success: true,
+            message: "Đã cập nhật ảnh đại diện!",
+            avatar: avatar
+        });
+    } catch (error) {
+        console.error(error);
+        return res.status(500).json({
+            success: false,
+            message: "Lỗi hệ thống!"
+        });
+    }
+}
+
+export const orderList = async (req: Request, res: Response) => {
+    try {
+        const id = res.locals.accountUser.id;
+
+        const orders = await Order
+            .find({
+                userId: id,
+                deleted: false
+            })
+            .sort({
+                createdAt: "desc"
+            });
+
+        return res.json({
+            success: true,
+            orders: orders
+        });
+    } catch (error) {
+        return res.status(500).json({
+            success: false,
+            message: "Lỗi hệ thống!"
+        });
+    }
+}
+
+export const orderDetail = async (req: Request, res: Response) => {
+    try {
+        const userId = res.locals.accountUser.id;
+        const orderId = req.params.id;
+
+        const orderDetail = await Order.findOne({
+            _id: orderId,
+            userId: userId,
+            deleted: false
+        });
+
+        if (!orderDetail) {
+            return res.json({
+                success: false,
+                message: "Không tìm thấy đơn hàng!"
+            });
+        }
+
+        return res.json({
+            success: true,
+            order: orderDetail
+        });
+    } catch (error) {
+        return res.status(500).json({
+            success: false,
+            message: "Lỗi hệ thống!"
         });
     }
 }
