@@ -2,8 +2,11 @@ import mongoose from "mongoose";
 
 const schema = new mongoose.Schema(
     {
-        userId: String, // ID chủ sở hữu
-        name: String, // Tên thú cưng
+        userId: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "User",           // Tên model User
+            required: true
+        }, name: String, // Tên thú cưng
         type: {
             type: String,
             enum: ["dog", "cat"],
@@ -14,16 +17,17 @@ const schema = new mongoose.Schema(
         age: Number, // Tuổi
         color: String, // Màu lông
         avatar: String, // Ảnh thú cưng
+        gender: {
+            type: String,
+            enum: ["male", "female", "unknown"]
+        },
         healthStatus: {
             type: String,
             enum: ["healthy", "sick", "vaccination-pending"],
             default: "healthy"
         },
         notes: String, // Ghi chú đặc biệt (dị ứng, hành vi, vv)
-        vaccineStatus: {
-            lastVaccinedDate: Date,
-            expiryDate: Date
-        },
+
         status: {
             type: String,
             enum: ["active", "inactive"],

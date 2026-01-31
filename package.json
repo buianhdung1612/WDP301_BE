@@ -8,8 +8,6 @@
     "seed": "ts-node seeds/seed.ts"
   },
   "dependencies": {
-    "@types/cookie-parser": "^1.4.10",
-    "@types/cors": "^2.8.19",
     "@types/crypto-js": "^4.2.2",
     "@types/jsonwebtoken": "^9.0.10",
     "axios": "^1.13.3",
@@ -26,6 +24,8 @@
     "slugify": "^1.6.6"
   },
   "devDependencies": {
+    "@types/cookie-parser": "^1.4.10",
+    "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
     "@types/node": "^25.0.6",
     "nodemon": "^3.1.11",
