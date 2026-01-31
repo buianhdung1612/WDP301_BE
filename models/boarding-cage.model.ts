@@ -13,18 +13,15 @@ const schema = new mongoose.Schema(
             enum: ["M", "L", "XL", "C", "B", "A"], // M, L, XL cho standard; C, B, A cho VIP
             required: true
         },
-        
+
         maxWeightCapacity: Number, // Cân nặng tối đa chó có thể ở (kg)
         dailyPrice: Number, // Giá mỗi ngày
-        
-        amenities: [String], // Tiện nghi (bed, toys, air conditioning, etc.)
-        
-        currentStatus: {
+        amenities: [String], // Tiện nghi (bed, toys, air conditioning, etc.)       
+        status: {
             type: String,
             enum: ["available", "occupied", "maintenance"],
             default: "available"
         },
-        
         deleted: {
             type: Boolean,
             default: false

@@ -28,17 +28,11 @@ const schema = new mongoose.Schema(
         // Giá cả
         baseFare: {
             bike: 0, // Miễn phí dưới 10km
-            car: 0 // Miễn phí dưới 10km
         },
         costPerKm: {
             bike: 10, // 10k/km
-            car: 15 // 15k/km
         },
-        totalPrice: Number, // Giá tổng cộng
-        
-        driverId: String, // ID tài xế
-        driverName: String,
-        driverPhone: String,
+        totalPrice: Number, // Giá tổng cộng       
         
         status: {
             type: String,
