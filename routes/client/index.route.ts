@@ -6,15 +6,17 @@ import cartRoutes from "./cart.route"
 import dashboardRoutes from "./dashboard.route"
 import { orderRoutes } from "./order.route"
 import petRoutes from "./pet.route"
+import serviceRoutes from "./service.route"
 const router = Router();
 
-router.use('/booking', bookingRoutes);
+// router.use('/booking', bookingRoutes);
 router.use('/auth', authRoutes);
 router.use('/product', productRoutes);
 router.use('/cart', cartRoutes);
 router.use('/dashboard', dashboardRoutes);
 router.use('/order', orderRoutes);
 router.use("/pet", petRoutes);
+router.use("/service", serviceRoutes);
 
 
 export default router;

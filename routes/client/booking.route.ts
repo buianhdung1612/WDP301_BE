@@ -13,6 +13,7 @@ router.get("/services/:id", serviceController.getService);
 router.get("/service-categories", serviceController.getCategories);
 
 // ================= SERVICE BOOKINGS =================
+router.get("/time-slots", bookingController.getAvailableTimeSlots);
 router.get("/bookings", bookingController.listMyBookings);
 router.get("/bookings/:id", bookingController.getMyBooking);
 router.post("/bookings", bookingController.createBooking);

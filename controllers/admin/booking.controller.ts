@@ -3,6 +3,65 @@ import Booking from "../../models/booking.model";
 import Service from "../../models/service.model";
 import TimeSlot from "../../models/time-slot.model";
 import Pet from "../../models/pet.model";
+import AccountAdmin from "../../models/account-admin.model";
+import Role from "../../models/role.model";
+
+// [PATCH] /api/v1/admin/bookings/:id/assign-staff
+export const assignStaff = async (req: Request, res: Response) => {
+    try {
+        const { staffId } = req.body;
+        const booking = await Booking.findById(req.params.id);
+
+        if (!booking || booking.deleted) {
+            return res.status(404).json({
+                code: 404,
+                message: "Lịch đặt không tồn tại"
+            });
+        }
+
+        // 1. Kiểm tra nhân viên tồn tại
+        const staff = await AccountAdmin.findOne({ _id: staffId, deleted: false });
+        if (!staff) {
+            return res.status(400).json({
+                code: 400,
+                message: "Nhân viên không tồn tại"
+            });
+        }
+
+        // 2. Kiểm tra xem nhân viên có thuộc Role "Nhân viên thực hiện dịch vụ" (isStaffRole: true) không
+        const roles = await Role.find({
+            _id: { $in: staff.roles },
+            isStaffRole: true,
+            status: "active",
+            deleted: false
+        });
+
+        if (roles.length === 0) {
+            return res.status(400).json({
+                code: 400,
+                message: "Tài khoản này không phải là nhân viên thực hiện dịch vụ (vui lòng kiểm tra Nhóm quyền)"
+            });
+        }
+
+        booking.staffId = staffId;
+        await booking.save();
+
+        res.json({
+            code: 200,
+            message: "Phân công nhân viên thành công",
+            data: {
+                bookingId: booking._id,
+                staffName: staff.fullName,
+                skills: roles.flatMap(r => r.skillSet || [])
+            }
+        });
+    } catch (error) {
+        res.status(500).json({
+            code: 500,
+            message: "Lỗi khi phân công nhân viên"
+        });
+    }
+};
 
 // [GET] /api/v1/admin/bookings
 export const listBookings = async (req: Request, res: Response) => {
@@ -113,17 +172,17 @@ export const cancelBooking = async (req: Request, res: Response) => {
         booking.cancelledReason = reason || "Hủy từ admin";
         booking.cancelledAt = new Date();
         booking.cancelledBy = "admin";
-        
+
         // Cập nhật slot
         if (booking.slotId) {
             const slot = await TimeSlot.findById(booking.slotId);
-            if (slot && slot.currentBookings > 0) {
-                slot.currentBookings -= 1;
-                if (slot.maxCapacity && slot.currentBookings < slot.maxCapacity) {
-                    slot.status = "available";
-                }
-                await slot.save();
-            }
+            // if (slot && slot.currentBookings > 0) {
+            //     slot.currentBookings -= 1;
+            //     if (slot.maxCapacity && slot.currentBookings < slot.maxCapacity) {
+            //         slot.status = "available";
+            //     }
+            //     await slot.save();
+            // }
         }
 
         await booking.save();

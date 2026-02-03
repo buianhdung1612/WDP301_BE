@@ -16,6 +16,7 @@ export const listServices = async (req: Request, res: Response) => {
         if (petType) filter.petType = petType;
 
         const services = await Service.find(filter)
+            .populate("categoryId")
             .skip(skip)
             .limit(limit)
             .sort({ createdAt: -1 });

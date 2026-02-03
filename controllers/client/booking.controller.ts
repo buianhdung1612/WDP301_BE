@@ -4,6 +4,57 @@ import TimeSlot from "../../models/time-slot.model";
 import Service from "../../models/service.model";
 import Pet from "../../models/pet.model";
 
+// [GET] /api/v1/client/time-slots
+export const getAvailableTimeSlots = async (req: Request, res: Response) => {
+    try {
+        const { serviceId, date } = req.query;
+
+        if (!date) {
+            return res.status(400).json({
+                code: 400,
+                message: "Vui lòng chọn ngày"
+            });
+        }
+
+        const queryDate = new Date(date as string);
+        const startOfDay = new Date(queryDate.setHours(0, 0, 0, 0));
+        const endOfDay = new Date(queryDate.setHours(23, 59, 59, 999));
+
+        const filter: any = {
+            deleted: false,
+            date: { $gte: startOfDay, $lte: endOfDay }
+        };
+
+        // Nếu slot đặc thù theo dịch vụ thì filter theo serviceId
+        // Nếu slot chung cho cả shop thì không cần
+        if (serviceId) {
+            // Có thể filter những slot hỗ trợ service này hoặc slot chung
+            // filter.$or = [{ serviceId: serviceId }, { serviceId: { $exists: false } }];
+        }
+
+        const slots = await TimeSlot.find(filter).sort({ startTime: 1 });
+
+        res.json({
+            code: 200,
+            message: "Danh sách khung giờ",
+            data: slots.map(slot => ({
+                _id: slot._id,
+                startTime: slot.startTime,
+                endTime: slot.endTime,
+                maxCapacity: slot.maxCapacity,
+                currentBookings: slot.currentBookings,
+                isFull: slot.currentBookings >= (slot.maxCapacity || 1),
+                status: slot.status
+            }))
+        });
+    } catch (error) {
+        res.status(500).json({
+            code: 500,
+            message: "Lỗi khi lấy khung giờ"
+        });
+    }
+};
+
 // [GET] /api/v1/client/bookings
 export const listMyBookings = async (req: Request, res: Response) => {
     try {
