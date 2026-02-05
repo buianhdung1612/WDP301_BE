@@ -34,5 +34,6 @@ app.use('/api/v1/admin', adminRoutes);
 app.use('/api/v1/client', clientRoutes);
 
 app.listen(port, () => {
-    console.log(`Website đang chạy trên cổng ${port}`)
+    console.log(`Website đang chạy trên cổng ${port}`);
+    console.log(`Updated at ${new Date().toISOString()}`);
 })

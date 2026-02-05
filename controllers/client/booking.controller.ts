@@ -1,4 +1,6 @@
 import express, { Request, Response } from "express";
+import mongoose from "mongoose";
+import moment from "moment";
 import Booking from "../../models/booking.model";
 import TimeSlot from "../../models/time-slot.model";
 import Service from "../../models/service.model";
@@ -7,16 +9,15 @@ import Pet from "../../models/pet.model";
 // [GET] /api/v1/client/bookings
 export const listMyBookings = async (req: Request, res: Response) => {
     try {
-        const userId = req.query.userId;
+        const userId = res.locals.accountUser._id;
+
         const page = parseInt(req.query.page as string) || 1;
         const limit = parseInt(req.query.limit as string) || 10;
         const skip = (page - 1) * limit;
         const status = req.query.status as string;
 
         let filter: any = { deleted: false, userId };
-        if (status) {
-            filter.status = status;
-        }
+        if (status) filter.status = status;
 
         const bookings = await Booking.find(filter)
             .skip(skip)
@@ -44,13 +45,19 @@ export const listMyBookings = async (req: Request, res: Response) => {
     }
 };
 
+
 // [GET] /api/v1/client/bookings/:id
 export const getMyBooking = async (req: Request, res: Response) => {
     try {
-        const userId = req.query.userId;
+        const userId = res.locals.accountUser._id.toString();
         const booking = await Booking.findById(req.params.id);
 
-        if (!booking || booking.deleted || booking.userId !== userId) {
+        if (
+            !booking ||
+            booking.deleted ||
+            !booking.userId ||
+            booking.userId.toString() !== userId
+        ) {
             return res.status(404).json({
                 code: 404,
                 message: "Lịch đặt không tồn tại"
@@ -73,9 +80,20 @@ export const getMyBooking = async (req: Request, res: Response) => {
 // [POST] /api/v1/client/bookings
 export const createBooking = async (req: Request, res: Response) => {
     try {
-        const { serviceId, slotId, petIds, customerName, customerPhone, customerEmail, notes } = req.body;
-        const userId = req.query.userId;
+        const user = res.locals.accountUser || null;
 
+        const userId = user ? user._id.toString() : null;
+        const isGuest = !userId;
+
+        const {
+            serviceId,
+            slotId,
+            petIds = [],   // ⭐ FIX QUAN TRỌNG
+            customerName,
+            customerPhone,
+            customerEmail,
+            notes
+        } = req.body;
         // Validate service
         const service = await Service.findById(serviceId);
         if (!service || service.deleted || service.status === "inactive") {
@@ -86,7 +104,51 @@ export const createBooking = async (req: Request, res: Response) => {
         }
 
         // Validate slot
-        const slot = await TimeSlot.findById(slotId);
+        let slot;
+        if (mongoose.Types.ObjectId.isValid(slotId)) {
+            slot = await TimeSlot.findById(slotId);
+        } else {
+            // Case: slotId is a string "YYYY-MM-DD HH:mm"
+            const dateTime = moment(slotId, "YYYY-MM-DD HH:mm");
+            if (dateTime.isValid()) {
+                const dateStr = dateTime.format("YYYY-MM-DD");
+                const timeStr = dateTime.format("HH:mm");
+
+                // Find existing slot
+                slot = await TimeSlot.findOne({
+                    serviceId,
+                    // Comparison of dates in mongo can be tricky, 
+                    // usually we store dates.
+                    // But here let's try to match by date range or exact 
+                    // Assuming 'date' in TimeSlot is a Date object at 00:00:00 usually?
+                    // Let's rely on how other code sets it. 
+                    // If existing slots have date set to start of day:
+                    date: {
+                        $gte: dateTime.startOf('day').toDate(),
+                        $lte: dateTime.endOf('day').toDate()
+                    },
+                    startTime: timeStr
+                });
+
+                // If not found, create new
+                if (!slot) {
+                    // Calculate endTime
+                    const duration = service.duration || 60; // default 60 mins
+                    const endTime = dateTime.clone().add(duration, 'minutes').format("HH:mm");
+
+                    slot = await TimeSlot.create({
+                        serviceId,
+                        date: dateTime.toDate(),
+                        startTime: timeStr,
+                        endTime: endTime,
+                        currentBookings: 0,
+                        maxCapacity: 5, // Default capacity
+                        status: "available"
+                    });
+                }
+            }
+        }
+
         if (!slot || slot.deleted || slot.status === "unavailable") {
             return res.status(400).json({
                 code: 400,
@@ -102,21 +164,25 @@ export const createBooking = async (req: Request, res: Response) => {
         }
 
         // Validate pets
-        if (!petIds || petIds.length === 0) {
+        if (!isGuest && (!petIds || petIds.length === 0)) {
             return res.status(400).json({
                 code: 400,
                 message: "Vui lòng chọn thú cưng"
             });
         }
 
-        const pets = await Pet.find({ _id: { $in: petIds }, deleted: false });
-        if (pets.length !== petIds.length) {
-            return res.status(400).json({
-                code: 400,
-                message: "Một hoặc nhiều thú cưng không tồn tại"
-            });
-        }
 
+        let pets: any[] = [];
+
+        if (userId) {
+            pets = await Pet.find({ _id: { $in: petIds }, deleted: false });
+            if (pets.length !== petIds.length) {
+                return res.status(400).json({
+                    code: 400,
+                    message: "Một hoặc nhiều thú cưng không tồn tại"
+                });
+            }
+        }
         // Generate booking code
         const bookingCode = `BK${Date.now()}`;
 
@@ -141,7 +207,7 @@ export const createBooking = async (req: Request, res: Response) => {
             userId,
             serviceId,
             slotId,
-            petIds,
+            petIds: isGuest ? [] : petIds,
             customerName,
             customerPhone,
             customerEmail,
@@ -178,11 +244,18 @@ export const createBooking = async (req: Request, res: Response) => {
 // [PATCH] /api/v1/client/bookings/:id/cancel
 export const cancelMyBooking = async (req: Request, res: Response) => {
     try {
-        const userId = req.query.userId;
+        const userId = res.locals.accountUser._id.toString();
         const { reason } = req.body;
+
         const booking = await Booking.findById(req.params.id);
 
-        if (!booking || booking.deleted || booking.userId !== userId) {
+
+        if (
+            !booking ||
+            booking.deleted ||
+            !booking.userId ||
+            booking.userId.toString() !== userId
+        ) {
             return res.status(404).json({
                 code: 404,
                 message: "Lịch đặt không tồn tại"
@@ -206,9 +279,10 @@ export const cancelMyBooking = async (req: Request, res: Response) => {
             const slot = await TimeSlot.findById(booking.slotId);
             if (slot && slot.currentBookings > 0) {
                 slot.currentBookings -= 1;
-                if (slot.maxCapacity && slot.currentBookings < slot.maxCapacity) {
-                    slot.status = "available";
-                }
+                slot.status =
+                    slot.maxCapacity && slot.currentBookings < slot.maxCapacity
+                        ? "available"
+                        : slot.status;
                 await slot.save();
             }
         }

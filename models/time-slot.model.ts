@@ -16,6 +16,11 @@ const schema = new mongoose.Schema(
             enum: ["available", "full", "unavailable"],
             default: "available"
         },
+        maxCapacity: {
+    type: Number,
+    default: 1
+},
+
         notes: String, // Ghi chú
         deleted: {
             type: Boolean,
