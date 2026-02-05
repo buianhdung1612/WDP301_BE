@@ -91,3 +91,12 @@ export const permissionList = [
         name: "Quản lý file"
     },
 ];
+
+export const skillsList = [
+    { id: "grooming", name: "Cắt tỉa lông" },
+    { id: "bathing", name: "Tắm & Vệ sinh" },
+    { id: "spa", name: "Spa thư giãn" },
+    { id: "healthcare", name: "Chăm sóc sức khỏe" },
+    { id: "boarding", name: "Trông giữ thú cưng" },
+    { id: "training", name: "Huấn luyện" },
+];

@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import Coupon from '../../models/coupon.model';
 import moment from 'moment';
-import slugify from 'slugify';
+import { convertToSlug } from '../../helpers/slug.helper';
 
 export const create = async (req: Request, res: Response) => {
     try {
@@ -44,10 +44,8 @@ export const create = async (req: Request, res: Response) => {
             endDate: endDate
                 ? moment(endDate, "DD/MM/YYYY").toDate()
                 : undefined,
-            search: slugify(`${code} ${name}`, {
-                replacement: " ",
-                lower: true
-            })
+            search: convertToSlug(`${code} ${name}`).replace(/-/g, " ")
+
         };
 
         await Coupon.create(payload);
@@ -76,10 +74,7 @@ export const list = async (req: Request, res: Response) => {
 
         // Search
         if (req.query.keyword) {
-            const keyword = slugify(`${req.query.keyword}`, {
-                replacement: ' ',
-                lower: true,
-            });
+            const keyword = convertToSlug(`${req.query.keyword}`).replace(/-/g, " ");
             find.search = new RegExp(keyword, "i");
         }
 
@@ -104,7 +99,7 @@ export const list = async (req: Request, res: Response) => {
         });
     } catch (error) {
         console.error(error);
-return res.status(500).json({
+        return res.status(500).json({
             success: false,
             message: "Không thể lấy danh sách bài viết"
         });
@@ -209,12 +204,10 @@ export const edit = async (req: Request, res: Response) => {
             endDate: endDate
                 ? moment(endDate, "DD/MM/YYYY").toDate()
                 : undefined,
-            search: slugify(`${code} ${name}`, {
-                replacement: " ",
-                lower: true
-            })
+            search: convertToSlug(`${code} ${name}`).replace(/-/g, " ")
+
         };
-await Coupon.updateOne(
+        await Coupon.updateOne(
             { _id: id, deleted: false },
             payload
         );

@@ -2,15 +2,18 @@ import mongoose from "mongoose";
 
 const schema = new mongoose.Schema(
     {
-        categoryId: String,
+        categoryId: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "CategoryService"
+        },
         name: String,
         slug: String,
         description: String,
         duration: Number,
-        petType: {
-            type: String,
-            enum: ["DOG", "CAT", "BOTH"],
-            default: "BOTH"
+        petTypes: {
+            type: [String],
+            enum: ["DOG", "CAT"],
+            default: ["DOG", "CAT"]
         },
         pricingType: {
             type: String,

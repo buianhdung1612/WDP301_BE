@@ -2,6 +2,10 @@ import mongoose from "mongoose";
 
 const schema = new mongoose.Schema(
     {
+        parentId: {
+            type: String,
+            default: ""
+        },
         name: String, // Tên danh mục: Cắt tia lông, Tắm spa, Khách sạn, Vận chuyển, Tư vấn
         slug: String,
         description: String,
@@ -12,10 +16,10 @@ const schema = new mongoose.Schema(
             type: String,
             enum: ["HOTEL", "STANDALONE", "BOTH"]
         },
-        petType: {
-            type: String,
-            enum: ["DOG", "CAT", "BOTH"],
-            default: "BOTH"
+        petTypes: {
+            type: [String],
+            enum: ["DOG", "CAT"],
+            default: ["DOG", "CAT"]
         },
         status: {
             type: String,
