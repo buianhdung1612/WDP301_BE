@@ -60,7 +60,15 @@ export const getMyPet = async (req: Request, res: Response) => {
 export const createPet = async (req: Request, res: Response) => {
     try {
         const userId = res.locals.accountUser._id;
-        const { name, type, breed, weight, age, color, gender, notes,healthStatus,avatar } = req.body;
+        const { name, type, breed, weight, age, color, gender, notes, healthStatus, avatar } = req.body;
+
+        const normalizeHealthStatus = (value: string | undefined) => {
+            if (!value) return "accepted";
+            const v = value.toLowerCase();
+            if (v === "healthy" || v === "accepted") return "accepted";
+            if (v === "sick" || v === "rejected") return "rejected";
+            return "accepted";
+        };
 
         const newPet = new Pet({
             userId,
@@ -73,7 +81,7 @@ export const createPet = async (req: Request, res: Response) => {
             gender,
             notes,
             status: "active",
-            healthStatus,
+            healthStatus: normalizeHealthStatus(healthStatus),
             avatar
 
         });
