@@ -11,7 +11,6 @@ router.get("/services/:id", serviceController.getService);
 router.get("/service-categories", serviceController.getCategories);
 
 // ================= SERVICE BOOKINGS =================
-// ================= SERVICE BOOKINGS =================
 router.get("/time-slots", bookingController.getAvailableTimeSlots); // Thường ko cần auth để xem slot
 router.get("/bookings", requireAuth, bookingController.listMyBookings);
 router.get("/bookings/:id", requireAuth, bookingController.getMyBooking);

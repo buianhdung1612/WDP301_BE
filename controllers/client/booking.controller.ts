@@ -250,12 +250,38 @@ export const createBooking = async (req: Request, res: Response) => {
             totalPrice = (service.basePrice || 0) * (petIds.length || 1);
         } else if (service.pricingType === "by-weight") {
             for (const pet of pets) {
+                const petWeight = pet.weight || 0;
                 const priceItem = service.priceList?.find((item: any) => {
-                    const [min, max] = item.label.split("-").map((x: string) => parseInt(x));
-                    if (max) return pet.weight! >= min && pet.weight! < max;
-                    return pet.weight! >= min;
+                    const label = item.label;
+                    if (!label) return false;
+
+                    // Support "< 5kg", "<5", etc.
+                    if (label.includes('<')) {
+                        const maxWeight = parseFloat(label.replace(/[^\d.]/g, ''));
+                        return petWeight < maxWeight;
+                    }
+                    // Support "> 10kg", ">10", etc.
+                    if (label.includes('>')) {
+                        const minWeight = parseFloat(label.replace(/[^\d.]/g, ''));
+                        return petWeight > minWeight;
+                    }
+                    // Support "5-10kg", "5 - 10", etc.
+                    if (label.includes('-')) {
+                        const numbers = label.match(/\d+\.?\d*/g);
+                        if (numbers && numbers.length >= 2) {
+                            const [min, max] = numbers.map((v: string) => parseFloat(v));
+                            return petWeight >= min && petWeight <= max;
+                        }
+                    }
+                    // Default fallback for single numeric labels
+                    const singleNum = parseFloat(label.replace(/[^\d.]/g, ''));
+                    if (!isNaN(singleNum)) {
+                        return petWeight <= singleNum;
+                    }
+                    return false;
                 });
-                totalPrice += priceItem?.value || service.basePrice || 0;
+                if (!service) break;
+                totalPrice += priceItem ? (priceItem as any).value : (service.basePrice || 0);
             }
         }
 
@@ -398,10 +424,10 @@ export const exportBookingPdf = async (req: Request, res: Response) => {
       </thead>
       <tbody>
         <tr>
-          <td>${(booking.serviceId as any)?.name}</td>
+          <td>${(booking.serviceId as any)?.name || "N/A"}</td>
           <td>${dayjs(booking.start).format("DD/MM/YYYY")}</td>
           <td>${dayjs(booking.start).format("HH:mm")}</td>
-          <td>${(booking.petIds as any[]).map((p: any) => p.name).join(", ")}</td>
+          <td>${(booking.petIds as any[]).map((p: any) => p?.name || "N/A").join(", ")}</td>
           <td>${(booking.total || 0).toLocaleString("vi-VN")} đ</td>
         </tr>
       </tbody>
