@@ -21,6 +21,8 @@ export const list = async (req: Request, res: Response) => {
 
         const [recordList, totalRecords] = await Promise.all([
             Role.find(find)
+                .populate("serviceIds", "name")
+                .populate("departmentId", "name")
                 .sort({ createdAt: "desc" })
                 .limit(limitItems)
                 .skip(skip)

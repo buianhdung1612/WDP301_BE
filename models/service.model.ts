@@ -27,6 +27,10 @@ const schema = new mongoose.Schema(
                 value: Number // Giá tương ứng
             }
         ],
+        commissionRate: {
+            type: Number,
+            default: 0
+        }, // % hoa hồng cho nhân viên thực hiện (0-100)
         status: {
             type: String,
             enum: ["active", "inactive"],

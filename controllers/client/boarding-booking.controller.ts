@@ -66,12 +66,13 @@ export const createBoardingBooking = async (req: Request, res: Response) => {
             [
                 {
                     ...req.body,
-                    boardingBookingCode: bookingCode,
+                    userId: res.locals.accountUser._id,
+                    code: bookingCode,
                     numberOfDays: totalDays,
-                    totalDays,
-                    basePrice,
-                    totalPrice,
-                    status: "confirmed"
+                    subTotal: basePrice,
+                    total: totalPrice,
+                    discount: discountAmount,
+                    boardingStatus: "confirmed"
                 }
             ],
             { session }
@@ -110,12 +111,12 @@ export const checkInBoarding = async (req: Request, res: Response) => {
             return res.status(404).json({ message: "Booking not found" });
         }
 
-        if (booking.status !== "confirmed") {
+        if (booking.boardingStatus !== "confirmed") {
             return res.status(400).json({ message: "Booking is not ready for check-in" });
         }
 
         // Update booking
-        booking.status = "checked-in";
+        booking.boardingStatus = "checked-in";
         booking.actualCheckInDate = new Date();
         await booking.save({ session });
 
@@ -148,11 +149,11 @@ export const checkOutBoarding = async (req: Request, res: Response) => {
             return res.status(404).json({ message: "Booking not found" });
         }
 
-        if (booking.status !== "checked-in") {
+        if (booking.boardingStatus !== "checked-in") {
             return res.status(400).json({ message: "Booking is not checked-in" });
         }
 
-        booking.status = "checked-out";
+        booking.boardingStatus = "checked-out";
         booking.actualCheckOutDate = new Date();
         await booking.save({ session });
 
@@ -183,15 +184,15 @@ export const cancelBoardingBooking = async (req: Request, res: Response) => {
             return res.status(404).json({ message: "Booking not found" });
         }
 
-        if (booking.status === "checked-in" || booking.status === "checked-out") {
+        if (booking.boardingStatus === "checked-in" || booking.boardingStatus === "checked-out") {
             return res.status(400).json({ message: "Cannot cancel after check-in" });
         }
 
         // 🔑 LƯU LẠI status cũ
-        const previousStatus = booking.status;
+        const previousStatus = booking.boardingStatus;
 
         // 🔄 Update status
-        booking.status = "cancelled";
+        booking.boardingStatus = "cancelled";
         booking.cancelledAt = new Date();
 
         await booking.save();
@@ -211,7 +212,7 @@ export const cancelBoardingBooking = async (req: Request, res: Response) => {
 };
 export const listMyBoardingBookings = async (req: Request, res: Response) => {
     try {
-        const userId = (req as any).user?.id; // nếu có auth middleware
+        const userId = res.locals.accountUser._id;
 
         const bookings = await BoardingBooking.find({
             userId,

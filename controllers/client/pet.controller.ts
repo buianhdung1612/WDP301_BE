@@ -60,7 +60,7 @@ export const getMyPet = async (req: Request, res: Response) => {
 export const createPet = async (req: Request, res: Response) => {
     try {
         const userId = res.locals.accountUser._id;
-        const { name, type, breed, weight, age, color, gender, notes,healthStatus,avatar } = req.body;
+        const { name, type, breed, weight, age, color, gender, notes, healthStatus, avatar } = req.body;
 
         const newPet = new Pet({
             userId,
@@ -79,17 +79,14 @@ export const createPet = async (req: Request, res: Response) => {
         });
 
         await newPet.save();
-console.log("accountUser =", res.locals.accountUser);
-console.log("userId =", res.locals.accountUser?._id);
         res.status(201).json({
-
             code: 201,
             message: "Thêm thú cưng thành công",
             data: newPet
         });
     } catch (error) {
         res.status(500).json({
-            
+
             code: 500,
             message: "Lỗi khi thêm thú cưng"
         });

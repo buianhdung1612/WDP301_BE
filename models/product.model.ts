@@ -6,7 +6,10 @@ const schema = new mongoose.Schema(
         sku: String,
         slug: String,
         position: Number,
-        category: [String],
+        category: [{
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "CategoryProduct"
+        }],
         images: [String],
         priceOld: Number,
         priceNew: Number,
