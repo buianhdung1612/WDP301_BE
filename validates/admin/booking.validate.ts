@@ -5,9 +5,6 @@ export const createBookingSchema = Joi.object({
     serviceId: Joi.string().required().messages({
         "any.required": "Dịch vụ là bắt buộc"
     }),
-    slotId: Joi.string().required().messages({
-        "any.required": "Khung giờ là bắt buộc"
-    }),
     petIds: Joi.array().items(Joi.string()).min(1).required().messages({
         "any.required": "Vui lòng chọn ít nhất một thú cưng",
         "array.min": "Vui lòng chọn ít nhất một thú cưng"

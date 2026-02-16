@@ -5,12 +5,37 @@ const schema = new mongoose.Schema(
         fullName: String,
         email: String,
         password: String,
-        phoneNumber: String,
-        roles: [String], // Danh sách ID của Role (Nhóm quyền)
+        phone: String,
+        roles: [{
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "Role"
+        }], // Danh sách ID của Role (Nhóm quyền)
+        employeeCode: {
+            type: String,
+            unique: true,
+            sparse: true
+        }, // Mã nhân viên (auto-gen)
+        dateOfBirth: Date,
+        hireDate: Date, // Ngày vào làm
+        contractType: {
+            type: String,
+            enum: ["full-time", "part-time", "contract"],
+            default: "full-time"
+        },
+        baseSalary: {
+            type: Number,
+            default: 0
+        },
+        bankAccount: String,
+        emergencyContact: {
+            name: String,
+            phone: String,
+            relationship: String
+        },
         status: {
             type: String,
-            enum: ["initial", "active", "inactive"],
-            default: "initial"
+            enum: ["active", "inactive"],
+            default: "active"
         },
         avatar: String,
         search: String,

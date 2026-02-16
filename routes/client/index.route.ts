@@ -9,7 +9,7 @@ import petRoutes from "./pet.route"
 import serviceRoutes from "./service.route"
 const router = Router();
 
-// router.use('/booking', bookingRoutes);
+router.use('/booking', bookingRoutes);
 router.use('/auth', authRoutes);
 router.use('/product', productRoutes);
 router.use('/cart', cartRoutes);

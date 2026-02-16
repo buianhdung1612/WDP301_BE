@@ -9,7 +9,7 @@ const rolesData = [
         name: "Nhân viên Cắt tỉa (Grooming)",
         description: "Chuyên thực hiện các dịch vụ cắt tỉa lông cho thú cưng",
         isStaff: true,
-        skillSet: ["grooming"],
+        serviceIds: [], // Sẽ được assign sau khi có services
         permissions: ["dashboard", "booking"],
         status: "active",
     },
@@ -17,7 +17,7 @@ const rolesData = [
         name: "Nhân viên Vệ sinh (Bathing)",
         description: "Chuyên thực hiện các dịch vụ tắm và vệ sinh cho thú cưng",
         isStaff: true,
-        skillSet: ["bathing"],
+        serviceIds: [], // Sẽ được assign sau khi có services
         permissions: ["dashboard", "booking"],
         status: "active",
     },
@@ -25,7 +25,7 @@ const rolesData = [
         name: "Kỹ thuật viên Toàn diện (All-in-one)",
         description: "Thành thạo tất cả các kỹ năng Spa, Cắt tỉa và Vệ sinh",
         isStaff: true,
-        skillSet: ["grooming", "bathing", "spa"],
+        serviceIds: [], // Sẽ được assign sau khi có services
         permissions: ["dashboard", "booking", "service"],
         status: "active",
     }

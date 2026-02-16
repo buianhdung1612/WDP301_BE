@@ -25,6 +25,10 @@ const schema = new mongoose.Schema(
             type: Boolean,
             default: false
         },
+        createdBy: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "AccountAdmin"
+        },
         deletedAt: Date,
     },
     {

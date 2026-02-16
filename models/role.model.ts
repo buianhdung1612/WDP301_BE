@@ -8,7 +8,27 @@ const schema = new mongoose.Schema(
             type: Boolean,
             default: false
         }, // Đánh dấu đây là nhóm quyền dành cho nhân viên thực hiện dịch vụ
-        skillSet: [String], // Các kỹ năng/dịch vụ thuộc nhóm này (VD: ["Cắt tỉa", "Vệ sinh tai"])
+        serviceIds: [{
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "Service"
+        }], // Nếu isStaff=true: Danh sách dịch vụ mà nhân viên này có thể thực hiện
+        departmentId: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "Department"
+        }, // Role thuộc phòng ban nào
+        level: {
+            type: String,
+            enum: ["manager", "staff", "intern"],
+            default: "staff"
+        }, // Cấp bậc
+        canManageSchedule: {
+            type: Boolean,
+            default: false
+        }, // Được phân ca không?
+        commissionRate: {
+            type: Number,
+            default: 0
+        }, // % hoa hồng mặc định theo level/role
         permissions: [String],
         status: {
             type: String,

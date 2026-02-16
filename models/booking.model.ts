@@ -2,46 +2,61 @@ import mongoose from "mongoose";
 
 const schema = new mongoose.Schema(
     {
-        bookingCode: String, // Mã đặt lịch (VD: BK20250123001)
-        userId: String, // ID chủ thú cưng
-        serviceId: String, // ID dịch vụ
-        slotId: String, // ID khung giờ
-        petIds: [String], // Danh sách ID thú cưng
-        customerName: String, // Tên khách hàng
-        customerEmail: String,
+        code: String,
+        userId: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "AccountUser"
+        },
+        serviceId: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "Service"
+        },
+        petIds: [{
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "Pet"
+        }],
+        staffId: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "AccountAdmin"
+        },
+        customerName: String,
         customerPhone: String,
-        staffId: String, // ID nhân viên thực hiện (nếu có)
-        notes: String, // Ghi chú từ khách hàng (yêu cầu đặc biệt)
-
-        // Giá và thanh toán
-        basePrice: Number, // Giá gốc
-        discountAmount: {
+        customerEmail: String,
+        start: Date, // Thời gian bắt đầu
+        end: Date, // Thời gian kết thúc
+        notes: String,
+        subTotal: Number,
+        coupon: String,
+        discount: {
             type: Number,
             default: 0
-        }, // Số tiền giảm
-        appliedCoupon: String, // Mã coupon áp dụng
-        totalPrice: Number, // Giá tổng cộng
+        },
+        total: Number,
+        paymentMethod: {
+            type: String,
+            enum: ["money", "vnpay", "zalopay"],
+            default: "money"
+        },
         paymentStatus: {
             type: String,
-            enum: ["unpaid", "partial", "paid"],
+            enum: ["unpaid", "paid", "refunded"],
             default: "unpaid"
         },
-        paymentMethod: String, // Phương thức thanh toán
-
-        // Trạng thái booking
-        status: {
+        bookingStatus: {
             type: String,
-            enum: ["pending", "confirmed", "in-progress", "completed", "cancelled"],
+            enum: ["pending", "confirmed", "delayed", "in-progress", "completed", "cancelled", "returned"],
             default: "pending"
         },
-
-        // Hủy lịch
-        cancelledReason: String, // Lý do hủy
-        cancelledAt: Date, // Ngày hủy
-        cancelledBy: String, // Người hủy (customer/staff)
-
-        completedAt: Date, // Ngày hoàn thành
-
+        actualStart: Date, // Thời điểm thực tế nhân viên bắt đầu làm
+        expectedFinish: Date, // Thời điểm dự kiến xong (actualStart + duration)
+        rescheduledFrom: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "Booking"
+        }, // Lưu ID đơn gốc nếu khách đổi lịch
+        cancelledReason: String,
+        cancelledAt: Date,
+        cancelledBy: String,
+        completedAt: Date,
         search: String,
         deleted: {
             type: Boolean,

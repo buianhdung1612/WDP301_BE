@@ -4,7 +4,7 @@ const schema = new mongoose.Schema(
     {
         userId: {
             type: mongoose.Schema.Types.ObjectId,
-            ref: "User",           // Tên model User
+            ref: "AccountUser",           // Tên model User
             required: true
         },
         name: String, // Tên thú cưng

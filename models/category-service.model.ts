@@ -3,8 +3,9 @@ import mongoose from "mongoose";
 const schema = new mongoose.Schema(
     {
         parentId: {
-            type: String,
-            default: ""
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "CategoryService",
+            default: null
         },
         name: String, // Tên danh mục: Cắt tia lông, Tắm spa, Khách sạn, Vận chuyển, Tư vấn
         slug: String,
