@@ -28,6 +28,22 @@ export const index = async (req: Request, res: Response) => {
             filter.status = req.query.status;
         }
 
+        if (req.query.departmentId) {
+            const roles = await Role.find({
+                departmentId: req.query.departmentId,
+                deleted: false
+            }).select("_id");
+            const roleIds = roles.map(r => r._id);
+
+            const staffList = await AccountAdmin.find({
+                roles: { $in: roleIds },
+                deleted: false
+            }).select("_id");
+            const staffIds = staffList.map(s => s._id);
+
+            filter.staffId = { $in: staffIds };
+        }
+
         const attendances = await Attendance.find(filter)
             .populate("staffId", "fullName employeeCode baseSalary")
             .populate("approvedBy", "fullName")

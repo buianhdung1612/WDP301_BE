@@ -44,7 +44,7 @@ export const list = async (req: Request, res: Response) => {
         const populatedList = await Promise.all(recordList.map(async (item) => {
             if (item.roles && item.roles.length > 0) {
                 const roles = await Role.find({ _id: { $in: item.roles } })
-                    .select("name isStaff serviceIds")
+                    .select("name isStaff serviceIds departmentId")
                     .lean();
                 return { ...item, roles, rolesName: roles.map(r => r.name) };
             }

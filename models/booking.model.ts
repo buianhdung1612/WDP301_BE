@@ -19,9 +19,26 @@ const schema = new mongoose.Schema(
             type: mongoose.Schema.Types.ObjectId,
             ref: "AccountAdmin"
         },
-        customerName: String,
-        customerPhone: String,
-        customerEmail: String,
+        staffIds: [{
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "AccountAdmin"
+        }],
+        petStaffMap: [{
+            petId: { type: mongoose.Schema.Types.ObjectId, ref: "Pet" },
+            staffId: { type: mongoose.Schema.Types.ObjectId, ref: "AccountAdmin" },
+            status: {
+                type: String,
+                enum: ["pending", "in-progress", "completed"],
+                default: "pending"
+            },
+            startedAt: Date,
+            completedAt: Date,
+            surchargeAmount: {
+                type: Number,
+                default: 0
+            },
+            surchargeNotes: String
+        }],
         start: Date, // Thời gian bắt đầu
         end: Date, // Thời gian kết thúc
         notes: String,

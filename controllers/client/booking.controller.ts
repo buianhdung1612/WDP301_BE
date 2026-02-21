@@ -4,9 +4,11 @@ import Booking from "../../models/booking.model";
 import WorkSchedule from "../../models/work-schedule.model";
 import Service from "../../models/service.model";
 import Pet from "../../models/pet.model";
+import Role from "../../models/role.model";
 import dayjs from "dayjs";
 import puppeteer from 'puppeteer';
 import moment from "moment";
+import { findBestStaffForBooking, autoAssignPetsToStaff } from "../../helpers/booking-assignment.helper";
 
 // Helper to check if two time ranges overlap
 const isOverlap = (start1: Date, end1: Date, start2: Date, end2: Date) => {
@@ -16,18 +18,17 @@ const isOverlap = (start1: Date, end1: Date, start2: Date, end2: Date) => {
 // [GET] /api/v1/client/time-slots
 export const getAvailableTimeSlots = async (req: Request, res: Response) => {
     try {
-        const { serviceId, date } = req.query; // date format: YYYY-MM-DD
+        const { serviceId, date, count: petCount } = req.query; // date format: YYYY-MM-DD
+        const count = parseInt(petCount as string) || 1;
 
         if (!date) {
             return res.status(400).json({ code: 400, message: "Vui lòng chọn ngày" });
         }
 
         const service = await Service.findById(serviceId);
-        const duration = service?.duration || 30; // Mặc định 30p nếu ko có dịch vụ
+        const baseDuration = service?.duration || 30;
 
         const queryDateStr = date as string;
-
-        // 1. Lấy tất cả lịch trực của nhân viên trong ngày
         const startOfDay = new Date(queryDateStr);
         startOfDay.setHours(0, 0, 0, 0);
         const endOfDay = new Date(queryDateStr);
@@ -36,9 +37,8 @@ export const getAvailableTimeSlots = async (req: Request, res: Response) => {
         const schedules = await WorkSchedule.find({
             date: { $gte: startOfDay, $lte: endOfDay },
             status: { $in: ["scheduled", "checked-in"] }
-        }).populate("shiftId");
+        }).populate("staffId").populate("shiftId");
 
-        // 2. Lấy tất cả lịch đã đặt trong ngày
         const bookings = await Booking.find({
             start: { $gte: startOfDay, $lte: endOfDay },
             bookingStatus: { $nin: ["cancelled"] },
@@ -46,44 +46,62 @@ export const getAvailableTimeSlots = async (req: Request, res: Response) => {
         });
 
         const staffSchedules = new Map();
-        schedules.forEach((s: any) => {
-            if (!s.shiftId) return;
-            const staffId = s.staffId.toString();
-            if (!staffSchedules.has(staffId)) {
-                staffSchedules.set(staffId, {
-                    startTime: s.shiftId.startTime,
-                    endTime: s.shiftId.endTime,
-                    bookings: bookings.filter(b => b.staffId?.toString() === staffId || (!b.staffId && b.bookingStatus === 'pending'))
-                });
-            }
-        });
+        for (const s of schedules) {
+            if (!s.shiftId || !s.staffId) continue;
+            const staffStrId = s.staffId._id.toString();
 
-        // 3. Tính toán khung giờ từ 08:00 đến 20:00 (mỗi 15p)
+            const roles = await Role.find({
+                _id: { $in: (s.staffId as any).roles },
+                isStaff: true,
+                status: "active",
+                deleted: false
+            });
+
+            const canDoService = roles.some(role =>
+                role.serviceIds?.some((id: any) => id.toString() === serviceId)
+            );
+
+            if (!canDoService) continue;
+
+            staffSchedules.set(staffStrId, {
+                startTime: (s.shiftId as any).startTime,
+                endTime: (s.shiftId as any).endTime,
+                bookings: bookings.filter(b => {
+                    const bStaffId = b.staffId?.toString();
+                    const bStaffIds = b.staffIds?.map((id: any) => id.toString()) || [];
+                    return bStaffId === staffStrId || bStaffIds.includes(staffStrId);
+                })
+            });
+        }
+
         const availableSlots: any[] = [];
         let current = new Date(startOfDay);
         current.setHours(8, 0, 0, 0);
-        const endTime = new Date(startOfDay);
-        endTime.setHours(20, 0, 0, 0);
 
-        // Define lunch break
-        const lunchStart = new Date(startOfDay).setHours(12, 0, 0, 0);
-        const lunchEnd = new Date(startOfDay).setHours(13, 0, 0, 0);
+        // Tìm giờ kết thúc muộn nhất trong tất cả các ca làm việc của ngày đó
+        let maxShiftEndMinutes = 0;
+        staffSchedules.forEach(config => {
+            const [eH, eM] = config.endTime.split(":").map(Number);
+            const endMinutes = eH * 60 + eM;
+            if (endMinutes > maxShiftEndMinutes) maxShiftEndMinutes = endMinutes;
+        });
 
-        while (current.getTime() + duration * 60000 <= endTime.getTime()) {
+        if (maxShiftEndMinutes === 0) maxShiftEndMinutes = 21 * 60; // Fallback nếu không tìm thấy ca nào
+
+        const endTimeSlot = new Date(startOfDay);
+        endTimeSlot.setHours(Math.floor(maxShiftEndMinutes / 60), maxShiftEndMinutes % 60, 0, 0);
+
+        while (current.getTime() + baseDuration * 60000 <= endTimeSlot.getTime()) {
             const timeStr = moment(current).format("HH:mm");
-            const slotEnd = new Date(current.getTime() + duration * 60000);
 
-            // Skip slots during or overlapping lunch break
-            // 1. Slot starts or ends within [12:00, 13:00]
-            // 2. Slot crosses the lunch break
-            const isLunchConflict = (current.getTime() < lunchEnd && slotEnd.getTime() > lunchStart);
+            // Check Parallel Availability (N staff for base duration)
+            let parallelFreeCount = 0;
+            const parallelEnd = new Date(current.getTime() + baseDuration * 60000);
 
-            if (isLunchConflict) {
-                current = new Date(current.getTime() + 15 * 60000);
-                continue;
-            }
+            // Check Sequential Availability (1 staff for N*base duration)
+            let sequentialPossible = false;
+            const sequentialEnd = new Date(current.getTime() + (baseDuration * count) * 60000);
 
-            let freeStaffCount = 0;
             let totalStaffOnShift = 0;
 
             staffSchedules.forEach((config) => {
@@ -92,25 +110,36 @@ export const getAvailableTimeSlots = async (req: Request, res: Response) => {
                 const shiftStart = new Date(startOfDay).setHours(sH, sM, 0, 0);
                 const shiftEnd = new Date(startOfDay).setHours(eH, eM, 0, 0);
 
-                // Slot must be fully within a single staff's shift
-                if (current.getTime() >= shiftStart && slotEnd.getTime() <= shiftEnd) {
+                // Check for Parallel (base duration)
+                if (current.getTime() >= shiftStart && parallelEnd.getTime() <= shiftEnd) {
                     totalStaffOnShift++;
-                    const isBusy = config.bookings.some((b: any) => isOverlap(current, slotEnd, b.start, b.end));
-                    if (!isBusy) {
-                        freeStaffCount++;
+                    const isBusyParallel = config.bookings.some((b: any) => isOverlap(current, parallelEnd, b.start, b.end));
+                    if (!isBusyParallel) {
+                        parallelFreeCount++;
+                    }
+                }
+
+                // Check for Sequential (longer duration)
+                if (current.getTime() >= shiftStart && sequentialEnd.getTime() <= shiftEnd) {
+                    const isBusySequential = config.bookings.some((b: any) => isOverlap(current, sequentialEnd, b.start, b.end));
+                    if (!isBusySequential) {
+                        sequentialPossible = true;
                     }
                 }
             });
 
+            const isAvailable = (parallelFreeCount >= count) || sequentialPossible;
+
             availableSlots.push({
                 time: timeStr,
-                freeStaff: freeStaffCount,
-                availableSlots: freeStaffCount,
-                status: totalStaffOnShift === 0 ? "closed" : (freeStaffCount > 0 ? "available" : "full"),
-                totalStaff: totalStaffOnShift
+                freeStaff: parallelFreeCount,
+                availableSlots: parallelFreeCount,
+                status: totalStaffOnShift === 0 ? "closed" : (isAvailable ? "available" : "full"),
+                totalStaff: totalStaffOnShift,
+                mode: parallelFreeCount >= count ? "parallel" : "sequential"
             });
 
-            current = new Date(current.getTime() + 15 * 60000); // Bước nhảy 15p
+            current = new Date(current.getTime() + 15 * 60000);
         }
 
         res.json({
@@ -208,11 +237,12 @@ export const createBooking = async (req: Request, res: Response) => {
             serviceId,
             startTime,
             petIds = [],
-            customerName,
-            customerPhone,
-            customerEmail,
             notes
         } = req.body;
+
+        if (!userId) {
+            return res.status(401).json({ code: 401, message: "Vui lòng đăng nhập" });
+        }
 
         // 1. Validate Service
         const service = await Service.findById(serviceId);
@@ -220,96 +250,86 @@ export const createBooking = async (req: Request, res: Response) => {
             return res.status(400).json({ code: 400, message: "Dịch vụ không tồn tại" });
         }
 
-        const duration = service.duration || 30;
+        const baseDuration = service.duration || 30;
         const start = new Date(startTime);
-        const end = new Date(start.getTime() + duration * 60000);
+        const numPets = petIds.length;
 
-        // 2. Validate Pets
-        if (!userId && (!customerName || !customerPhone)) {
-            return res.status(400).json({ code: 400, message: "Vui lòng cung cấp thông tin liên hệ" });
-        }
-
-        if (userId && (!petIds || petIds.length === 0)) {
+        if (numPets === 0) {
             return res.status(400).json({ code: 400, message: "Vui lòng chọn thú cưng" });
         }
 
-        let pets: any[] = [];
-        if (userId && petIds.length > 0) {
-            pets = await Pet.find({ _id: { $in: petIds }, deleted: false });
-            if (pets.length !== petIds.length) {
-                return res.status(400).json({
-                    code: 400,
-                    message: "Một hoặc nhiều thú cưng không tồn tại"
-                });
-            }
+        // 2. Validate Pets
+        const pets = await Pet.find({ _id: { $in: petIds }, userId, deleted: false });
+        if (pets.length !== numPets) {
+            return res.status(400).json({ code: 400, message: "Một hoặc nhiều thú cưng không hợp lệ" });
         }
 
-        // 3. Calculate Price
+        // 3. Automated Staff Assignment (Parallel First)
+        let finalEndDate = new Date(start.getTime() + baseDuration * 60000);
+        let bestStaffList = await findBestStaffForBooking(start, start, finalEndDate, serviceId as string, numPets);
+
+        // If not enough staff for parallel, try sequential
+        if (bestStaffList.length < numPets) {
+            const sequentialDuration = baseDuration * numPets;
+            finalEndDate = new Date(start.getTime() + sequentialDuration * 60000);
+            bestStaffList = await findBestStaffForBooking(start, start, finalEndDate, serviceId as string, 1);
+        }
+
+        if (bestStaffList.length === 0) {
+            return res.status(400).json({
+                code: 400,
+                message: "Rất tiếc, khung giờ này hiện tại không còn đủ nhân viên rảnh cho tất cả thú cưng của bạn. Vui lòng chọn khung giờ khác!"
+            });
+        }
+
+        // 4. Calculate Price
         let totalPrice = 0;
         if (service.pricingType === "fixed") {
-            totalPrice = (service.basePrice || 0) * (petIds.length || 1);
+            totalPrice = (service.basePrice || 0) * numPets;
         } else if (service.pricingType === "by-weight") {
             for (const pet of pets) {
                 const petWeight = pet.weight || 0;
                 const priceItem = service.priceList?.find((item: any) => {
                     const label = item.label;
                     if (!label) return false;
-
-                    // Support "< 5kg", "<5", etc.
-                    if (label.includes('<')) {
-                        const maxWeight = parseFloat(label.replace(/[^\d.]/g, ''));
-                        return petWeight < maxWeight;
-                    }
-                    // Support "> 10kg", ">10", etc.
-                    if (label.includes('>')) {
-                        const minWeight = parseFloat(label.replace(/[^\d.]/g, ''));
-                        return petWeight > minWeight;
-                    }
-                    // Support "5-10kg", "5 - 10", etc.
+                    if (label.includes('<')) return petWeight < parseFloat(label.replace(/[^\d.]/g, ''));
+                    if (label.includes('>')) return petWeight > parseFloat(label.replace(/[^\d.]/g, ''));
                     if (label.includes('-')) {
-                        const numbers = label.match(/\d+\.?\d*/g);
-                        if (numbers && numbers.length >= 2) {
-                            const [min, max] = numbers.map((v: string) => parseFloat(v));
-                            return petWeight >= min && petWeight <= max;
-                        }
+                        const nums = label.match(/\d+\.?\d*/g);
+                        return nums && petWeight >= parseFloat(nums[0]) && petWeight <= parseFloat(nums[1]);
                     }
-                    // Default fallback for single numeric labels
-                    const singleNum = parseFloat(label.replace(/[^\d.]/g, ''));
-                    if (!isNaN(singleNum)) {
-                        return petWeight <= singleNum;
-                    }
-                    return false;
+                    return petWeight <= parseFloat(label.replace(/[^\d.]/g, ''));
                 });
-                if (!service) break;
                 totalPrice += priceItem ? (priceItem as any).value : (service.basePrice || 0);
             }
         }
 
-        // 4. Create Booking
+        // 5. Create Booking
         const bookingCode = `BK${Date.now()}`;
         const newBooking = new Booking({
             code: bookingCode,
             userId,
             serviceId,
-            customerName,
-            customerPhone,
-            customerEmail,
-            petIds: Array.isArray(petIds) ? petIds.filter((id: string) => id != null && id !== "") : [],
+            staffId: bestStaffList[0]._id,
+            staffIds: bestStaffList.map(s => s._id) as any,
+            petStaffMap: autoAssignPetsToStaff(petIds, bestStaffList.map(s => s._id)) as any,
+            petIds,
             start,
-            end,
+            end: finalEndDate,
             notes,
             subTotal: totalPrice,
             total: totalPrice,
-            bookingStatus: "pending",
+            bookingStatus: "confirmed",
             paymentStatus: "unpaid"
         });
 
         await newBooking.save();
+        const populatedBooking = await Booking.findById(newBooking._id).populate("userId");
 
         res.status(201).json({
             code: 201,
             message: "Đặt lịch thành công",
-            data: newBooking
+            data: populatedBooking
         });
     } catch (error) {
         res.status(500).json({
@@ -369,12 +389,11 @@ export const exportBookingPdf = async (req: Request, res: Response) => {
 
         const booking = await Booking.findOne({
             code: bookingCode,
-            customerPhone: phone,
             deleted: false,
-        }).populate("serviceId").populate("petIds");
+        }).populate("serviceId").populate("petIds").populate("userId");
 
         if (!booking) {
-            return res.status(404).json({ message: "Booking not found" });
+            return res.status(404).json({ message: "Lịch đặt không tồn tại" });
         }
 
         const html = `
@@ -407,8 +426,8 @@ export const exportBookingPdf = async (req: Request, res: Response) => {
   </div>
   <div class="info-section">
     <div class="info-title">THÔNG TIN KHÁCH HÀNG</div>
-    <p><strong>Khách hàng:</strong> ${booking.customerName}</p>
-    <p><strong>Điện thoại:</strong> ${booking.customerPhone}</p>
+    <p><strong>Khách hàng:</strong> ${(booking.userId as any)?.fullName || "N/A"}</p>
+    <p><strong>Điện thoại:</strong> ${(booking.userId as any)?.phone || "N/A"}</p>
   </div>
   <div class="info-section">
     <div class="info-title">CHI TIẾT DỊCH VỤ</div>

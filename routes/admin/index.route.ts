@@ -16,6 +16,7 @@ import shiftRoutes from "./shift.route"
 import workScheduleRoutes from "./work-schedule.route"
 import attendanceRoutes from "./attendance.route"
 import departmentRoutes from "./department.route"
+import attendanceConfigRoutes from "./attendance-config.route"
 import authRoutes from "./auth.route"
 import bookingConfigRoutes from "./booking-config.route"
 
@@ -45,5 +46,6 @@ router.use('/shifts', authMiddleware.verifyToken, shiftRoutes);
 router.use('/schedules', authMiddleware.verifyToken, workScheduleRoutes);
 router.use('/attendance', authMiddleware.verifyToken, attendanceRoutes);
 router.use('/departments', authMiddleware.verifyToken, departmentRoutes);
+router.use('/attendance-configs', authMiddleware.verifyToken, attendanceConfigRoutes);
 
 export default router;

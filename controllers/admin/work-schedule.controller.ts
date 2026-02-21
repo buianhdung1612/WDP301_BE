@@ -1,5 +1,6 @@
 import { Request, Response } from "express";
 import WorkSchedule from "../../models/work-schedule.model";
+import AttendanceConfig from "../../models/attendance-config.model";
 import dayjs from "dayjs";
 
 // [GET] /api/v1/admin/schedules
@@ -236,82 +237,98 @@ export const bulkCreate = async (req: Request, res: Response) => {
             });
         }
 
-        const start = dayjs(startDate);
-        const end = dayjs(endDate);
-        const created: any[] = [];
-        const updated: any[] = [];
-        const errors: any[] = [];
+        const start = dayjs(startDate).startOf('day');
+        const end = dayjs(endDate).startOf('day');
+
+        // 1. Pre-fetch all existing schedules in the range for these staff
+        const existingSchedules = await WorkSchedule.find({
+            staffId: { $in: staffIds },
+            date: {
+                $gte: start.toDate(),
+                $lte: end.toDate()
+            }
+        });
+
+        // Map for quick lookup: "staffId:YYYY-MM-DD"
+        const existingMap = new Map();
+        existingSchedules.forEach(s => {
+            const key = `${s.staffId.toString()}:${dayjs(s.date).format('YYYY-MM-DD')}`;
+            existingMap.set(key, s);
+        });
+
+        const bulkOps: any[] = [];
+        let createdCount = 0;
+        let updatedCount = 0;
+        let skipCount = 0;
 
         // Loop through each day
         let currentDate = start;
         while (currentDate.isBefore(end) || currentDate.isSame(end, 'day')) {
-            // Loop through each staff
+            const dateStr = currentDate.format('YYYY-MM-DD');
+            const dateObj = currentDate.toDate();
+
             for (const staffId of staffIds) {
-                try {
-                    // Check existing
-                    const existing = await WorkSchedule.findOne({
-                        staffId,
-                        date: {
-                            $gte: currentDate.startOf('day').toDate(),
-                            $lte: currentDate.endOf('day').toDate()
-                        }
-                    });
+                const key = `${staffId}:${dateStr}`;
+                const existing = existingMap.get(key);
 
-                    if (existing) {
-                        if (overwrite) {
-                            existing.shiftId = shiftId;
-                            existing.departmentId = departmentId;
-                            existing.status = "scheduled";
-                            await existing.save();
-                            updated.push(existing);
-                            continue;
-                        } else {
-                            errors.push({
-                                staffId,
-                                date: currentDate.format('YYYY-MM-DD'),
-                                reason: "Đã có lịch"
-                            });
-                            continue;
-                        }
+                if (existing) {
+                    if (overwrite) {
+                        bulkOps.push({
+                            updateOne: {
+                                filter: { _id: existing._id },
+                                update: {
+                                    $set: {
+                                        shiftId,
+                                        departmentId,
+                                        status: "scheduled",
+                                        createdBy
+                                    }
+                                }
+                            }
+                        });
+                        updatedCount++;
+                    } else {
+                        skipCount++;
                     }
-
-                    const schedule = new WorkSchedule({
-                        staffId,
-                        shiftId,
-                        departmentId,
-                        date: currentDate.toDate(),
-                        status: "scheduled",
-                        createdBy
+                } else {
+                    bulkOps.push({
+                        insertOne: {
+                            document: {
+                                staffId,
+                                shiftId,
+                                departmentId,
+                                date: dateObj,
+                                status: "scheduled",
+                                createdBy
+                            }
+                        }
                     });
-
-                    await schedule.save();
-                    created.push(schedule);
-                } catch (err) {
-                    errors.push({
-                        staffId,
-                        date: currentDate.format('YYYY-MM-DD'),
-                        reason: "Lỗi tạo lịch"
-                    });
+                    createdCount++;
                 }
             }
-
             currentDate = currentDate.add(1, 'day');
         }
 
+        if (bulkOps.length > 0) {
+            await WorkSchedule.bulkWrite(bulkOps);
+        }
+
         let message = "Phân ca thành công";
-        if (updated.length > 0) {
-            message = `Đã cập nhật ${updated.length} và tạo mới ${created.length} lịch thành công`;
-        } else if (created.length === 0 && errors.length > 0) {
-            message = "Nhân viên đã có lịch trong thời gian này";
+        if (updatedCount > 0) {
+            message = `Đã tạo mới ${createdCount} và cập nhật ${updatedCount} lịch làm việc thành công.`;
+        } else if (createdCount > 0) {
+            message = `Đã tạo mới ${createdCount} lịch làm việc thành công.`;
+        } else if (skipCount > 0) {
+            message = `Nhân viên đã có lịch cho toàn bộ các ngày được chọn.`;
         }
 
         res.status(201).json({
             code: 201,
             message,
             data: {
-                created: created.length,
-                updated: updated.length,
-                errors
+                created: createdCount,
+                updated: updatedCount,
+                skipped: skipCount
             }
         });
     } catch (error) {
@@ -402,12 +419,25 @@ export const update = async (req: Request, res: Response) => {
 // [POST] /api/v1/admin/schedules/:id/check-in
 export const checkIn = async (req: Request, res: Response) => {
     try {
-        const schedule = await WorkSchedule.findById(req.params.id);
+        const schedule = await WorkSchedule.findById(req.params.id)
+            .populate("shiftId", "startTime endTime");
 
         if (!schedule) {
             return res.status(404).json({
                 code: 404,
                 message: "Không tìm thấy lịch làm việc"
+            });
+        }
+
+        const currentAdminId = res.locals.accountAdmin._id.toString();
+        const permissions = res.locals.permissions || [];
+        const isOwner = schedule.staffId.toString() === currentAdminId;
+        const canEditAll = permissions.includes("attendance_edit");
+
+        if (!isOwner && !canEditAll) {
+            return res.status(403).json({
+                code: 403,
+                message: "Bạn không có quyền check-in cho người khác!"
             });
         }
 
@@ -418,8 +448,41 @@ export const checkIn = async (req: Request, res: Response) => {
             });
         }
 
+        // Lấy cấu hình chấm công
+        const config = await AttendanceConfig.findOne() || await AttendanceConfig.create({});
+        const earlyLimit = config.checkInEarlyLimit;
+
+        const now = dayjs();
+        const shiftStartStr = (schedule.shiftId as any)?.startTime; // "08:00"
+
+        // Tạo thời điểm bắt đầu ca (date + startTime)
+        const shiftStartDate = dayjs(schedule.date).format('YYYY-MM-DD');
+        const shiftStartTime = dayjs(`${shiftStartDate}T${shiftStartStr}`);
+
+        // Nếu không có quyền attendance_edit (tức là staff tự check-in), kiểm tra thời gian
+        if (!canEditAll) {
+            // 1. Kiểm tra giờ hoạt động của hệ thống
+            const systemStartTime = dayjs(`${shiftStartDate}T${config.workDayStartTime}`);
+            const systemEndTime = dayjs(`${shiftStartDate}T${config.workDayEndTime}`);
+
+            if (now.isBefore(systemStartTime) || now.isAfter(systemEndTime)) {
+                return res.status(400).json({
+                    code: 400,
+                    message: `Hệ thống chỉ cho phép check-in trong khoảng ${config.workDayStartTime} - ${config.workDayEndTime}`
+                });
+            }
+
+            // 2. Kiểm tra giờ check-in sớm của ca
+            if (now.isBefore(shiftStartTime.subtract(earlyLimit, 'minute'))) {
+                return res.status(400).json({
+                    code: 400,
+                    message: `Chưa đến giờ check-in! Bạn chỉ được phép check-in sớm tối đa ${earlyLimit} phút.`
+                });
+            }
+        }
+
         schedule.status = 'checked-in';
-        schedule.checkInTime = new Date();
+        schedule.checkInTime = now.toDate();
         await schedule.save();
 
         res.json({
@@ -428,9 +491,10 @@ export const checkIn = async (req: Request, res: Response) => {
             data: schedule
         });
     } catch (error) {
+        console.error("Check-in error:", error);
         res.status(500).json({
             code: 500,
-            message: "Lỗi khi check-in"
+            message: "Lỗi khi thực hiện check-in"
         });
     }
 };
@@ -448,6 +512,18 @@ export const checkOut = async (req: Request, res: Response) => {
             });
         }
 
+        const currentAdminId = res.locals.accountAdmin._id.toString();
+        const permissions = res.locals.permissions || [];
+        const isOwner = schedule.staffId.toString() === currentAdminId;
+        const canEditAll = permissions.includes("attendance_edit");
+
+        if (!isOwner && !canEditAll) {
+            return res.status(403).json({
+                code: 403,
+                message: "Bạn không có quyền check-out cho người khác!"
+            });
+        }
+
         if (schedule.status !== 'checked-in') {
             return res.status(400).json({
                 code: 400,
@@ -455,13 +531,14 @@ export const checkOut = async (req: Request, res: Response) => {
             });
         }
 
+        const now = dayjs();
         schedule.status = 'checked-out';
-        schedule.checkOutTime = new Date();
+        schedule.checkOutTime = now.toDate();
 
-        // Calculate actual work hours
+        // Tính toán số giờ làm việc thực tế
         if (schedule.checkInTime && schedule.checkOutTime) {
             const diff = schedule.checkOutTime.getTime() - schedule.checkInTime.getTime();
-            schedule.actualWorkHours = Math.round(diff / (1000 * 60 * 60) * 100) / 100; // Round to 2 decimals
+            schedule.actualWorkHours = Math.round(diff / (1000 * 60 * 60) * 100) / 100;
         }
 
         await schedule.save();
@@ -472,9 +549,10 @@ export const checkOut = async (req: Request, res: Response) => {
             data: schedule
         });
     } catch (error) {
+        console.error("Check-out error:", error);
         res.status(500).json({
             code: 500,
-            message: "Lỗi khi check-out"
+            message: "Lỗi khi thực hiện check-out"
         });
     }
 };

@@ -86,6 +86,7 @@ export const permissionList = [
     { id: "schedule_delete", name: "Xóa lịch làm việc" },
     { id: "attendance_view", name: "Theo dõi chấm công" },
     { id: "attendance_edit", name: "Xác nhận công/lương" },
+    { id: "attendance_checkin", name: "Tự chấm công (Check-in/out)" },
 
     // Hệ thống
     { id: "calendar_view", name: "Xem giao diện Calendar" },

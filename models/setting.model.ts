@@ -21,7 +21,7 @@ const schema = new mongoose.Schema(
                 ref: 'Service'
             },
             color: String
-        }]
+        }],
     },
     {
         timestamps: true,

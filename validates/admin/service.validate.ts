@@ -19,7 +19,15 @@ export const createServiceSchema = Joi.object({
         "any.required": "Thời gian thực hiện là bắt buộc",
         "number.positive": "Thời gian thực hiện phải là số dương"
     }),
-    petType: Joi.array().items(Joi.string().valid("dog", "cat")).required().messages({
+    minDuration: Joi.number().min(0).required().messages({
+        "any.required": "Thời lượng tối thiểu là bắt buộc",
+        "number.min": "Thời lượng tối thiểu không được âm"
+    }),
+    maxDuration: Joi.number().min(Joi.ref('duration')).required().messages({
+        "any.required": "Thời lượng tối đa là bắt buộc",
+        "number.min": "Thời lượng tối đa phải lớn hơn hoặc bằng thời lượng dự kiến"
+    }),
+    petTypes: Joi.array().items(Joi.string().valid("DOG", "CAT")).required().messages({
         "any.required": "Loại pet là bắt buộc",
         "array.includesRequiredUnknowns": "Loại pet không hợp lệ"
     }),
@@ -41,6 +49,11 @@ export const createServiceSchema = Joi.object({
         ).required(),
         otherwise: Joi.array().optional()
     })
+}).custom((value, helpers) => {
+    if (value.duration < value.minDuration) {
+        return helpers.message({ custom: "Thời lượng dự kiến phải lớn hơn hoặc bằng thời lượng tối thiểu" } as any);
+    }
+    return value;
 });
 
 export const updateServiceSchema = Joi.object({
@@ -49,9 +62,27 @@ export const updateServiceSchema = Joi.object({
     slug: Joi.string().optional(),
     description: Joi.string().optional(),
     duration: Joi.number().positive().optional(),
-    petType: Joi.array().items(Joi.string().valid("dog", "cat")).optional(),
+    minDuration: Joi.number().min(0).optional(),
+    maxDuration: Joi.number().min(0).optional(),
+    petTypes: Joi.array().items(Joi.string().valid("DOG", "CAT")).optional(),
     pricingType: Joi.string().valid("fixed", "by-weight", "by-cage", "by-distance").optional(),
     basePrice: Joi.number().positive().optional(),
     priceList: Joi.array().optional(),
     status: Joi.string().valid("active", "inactive").optional()
+}).custom((value, helpers) => {
+    // Chỉ validate nếu có truyền các trường duration
+    const duration = value.duration;
+    const minDuration = value.minDuration;
+    const maxDuration = value.maxDuration;
+
+    if (maxDuration !== undefined && duration !== undefined && maxDuration < duration) {
+        return helpers.message({ custom: "Thời lượng tối đa phải lớn hơn hoặc bằng thời lượng dự kiến" } as any);
+    }
+    if (duration !== undefined && minDuration !== undefined && duration < minDuration) {
+        return helpers.message({ custom: "Thời lượng dự kiến phải lớn hơn hoặc bằng thời lượng tối thiểu" } as any);
+    }
+    if (maxDuration !== undefined && minDuration !== undefined && maxDuration < minDuration) {
+        return helpers.message({ custom: "Thời lượng tối đa phải lớn hơn hoặc bằng thời lượng tối thiểu" } as any);
+    }
+    return value;
 });

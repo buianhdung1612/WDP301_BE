@@ -6,10 +6,12 @@ import Pet from "../../models/pet.model";
 import AccountAdmin from "../../models/account-admin.model";
 import Role from "../../models/role.model";
 import WorkSchedule from "../../models/work-schedule.model";
-import Setting from "../../models/setting.model";
 import BookingConfig from "../../models/booking-config.model";
+import BookingReview from "../../models/booking-review.model";
 import dayjs from "dayjs";
 import puppeteer from "puppeteer";
+import { autoUpdateBookingStatuses } from "../../helpers/booking-job.helper";
+import { findBestStaffForBooking, autoAssignPetsToStaff } from "../../helpers/booking-assignment.helper";
 
 // [POST] /api/v1/admin/booking/bookings/create
 export const createBooking = async (req: Request, res: Response) => {
@@ -27,7 +29,9 @@ export const createBooking = async (req: Request, res: Response) => {
             paymentStatus,
             subTotal,
             total,
-            discount
+            discount,
+            staffIds,
+            petStaffMap
         } = req.body;
 
         // Validate required fields
@@ -48,31 +52,56 @@ export const createBooking = async (req: Request, res: Response) => {
             return res.status(400).json({ code: 400, message: "Thời gian bắt đầu không thể ở quá khứ" });
         }
 
-        // 2. Validate minutes step (15 mins)
+        // 2. Validate minutes step (Temporarily disabled)
+        /*
         if (startDate.getMinutes() % 15 !== 0 || endDate.getMinutes() % 15 !== 0) {
             return res.status(400).json({ code: 400, message: "Thời gian phải là bội số của 15 phút (00, 15, 30, 45)" });
         }
+        */
 
-        // 3. Validate working blocks (8h-12h, 13h-17h, 17h-19h)
-        const startTotalMinutes = startDate.getHours() * 60 + startDate.getMinutes();
-        const endTotalMinutes = endDate.getHours() * 60 + endDate.getMinutes();
+        // 3. Validate working blocks (Temporarily disabled)
+        /*
+        const targetDate = dayjs(startDate).startOf('day');
+        const schedules = await WorkSchedule.find({
+            date: {
+                $gte: targetDate.toDate(),
+                $lte: targetDate.endOf('day').toDate()
+            },
+            status: { $in: ["scheduled", "checked-in"] }
+        }).populate("shiftId");
 
-        const workingBlocks = [
+        const dynamicBlocks = schedules.map(s => {
+            if (s.shiftId) {
+                const [sH, sM] = (s.shiftId as any).startTime.split(':').map(Number);
+                const [eH, eM] = (s.shiftId as any).endTime.split(':').map(Number);
+                return { start: sH * 60 + sM, end: eH * 60 + eM, label: `${(s.shiftId as any).startTime}-${(s.shiftId as any).endTime}` };
+            }
+            return null;
+        }).filter(Boolean) as { start: number, end: number, label: string }[];
+
+        const uniqueShiftLabels = Array.from(new Set(dynamicBlocks.map(b => b.label))).sort();
+
+        let workingBlocks = dynamicBlocks.length > 0 ? dynamicBlocks : [
             { start: 8 * 60, end: 12 * 60 },
             { start: 13 * 60, end: 17 * 60 },
-            { start: 17 * 60, end: 19 * 60 }
+            { start: 17 * 60, end: 23 * 60 }
         ];
+
+        const startTotalMinutes = startDate.getHours() * 60 + startDate.getMinutes();
+        const endTotalMinutes = endDate.getHours() * 60 + endDate.getMinutes();
 
         const isValidBlock = workingBlocks.some(block =>
             startTotalMinutes >= block.start && endTotalMinutes <= block.end
         );
 
         if (!isValidBlock) {
+            const shiftInfo = uniqueShiftLabels.length > 0 ? uniqueShiftLabels.join(", ") : "08:00-12:00, 13:00-17:00, 17:00-23:00";
             return res.status(400).json({
                 code: 400,
-                message: "Thời gian đặt lịch phải nằm trong các ca làm việc (08:00-12:00, 13:00-17:00, 17:00-19:00) và không được vượt quá thời gian kết thúc ca."
+                message: `Thời gian đặt lịch phải nằm trong các ca làm việc (${shiftInfo}) và không được vượt quá thời gian kết thúc ca.`
             });
         }
+        */
 
         // Verify service exists
         const service = await Service.findById(serviceId);
@@ -89,79 +118,60 @@ export const createBooking = async (req: Request, res: Response) => {
         // Generate booking code if not provided
         const bookingCode = `BK${Date.now()}`;
 
-        // Validate Staff availability
-        if (staffId) {
-            const startDate = new Date(start);
-            const endDate = new Date(end);
+        // 5. Automated Staff Assignment (if no staffId selected)
+        let finalStaffIds: string[] = [];
+        let finalStaffId: string | null = staffId || null;
+        let finalDuration = service.duration || 30;
+        const numPets = Array.isArray(petIds) ? petIds.filter((id: string) => id != null && id !== "").length : 1;
 
-            // 1. Check if staff exists
-            const staff = await AccountAdmin.findById(staffId);
-            if (!staff || staff.deleted) {
-                return res.status(400).json({ code: 400, message: "Nhân viên không tồn tại" });
-            }
+        if (!staffId) {
+            // "Parallel First" Strategy
+            const bestStaffList = await findBestStaffForBooking(
+                startDate,
+                startDate,
+                endDate,
+                serviceId as string,
+                numPets
+            );
 
-            // 2. Check if staff has a shift for this time
-            const schedule = await WorkSchedule.findOne({
-                staffId,
-                date: {
-                    $gte: dayjs(startDate).startOf('day').toDate(),
-                    $lte: dayjs(startDate).endOf('day').toDate()
+            if (bestStaffList.length > 0) {
+                finalStaffIds = bestStaffList.map(s => s._id.toString());
+                finalStaffId = finalStaffIds[0]; // Set staffId for backward compatibility
+
+                // If we got enough staff for all pets -> Parallel (base duration)
+                // If not enough -> Sequential (multiple duration)
+                if (finalStaffIds.length < numPets) {
+                    finalDuration = (service.duration || 30) * numPets;
                 }
-            }).populate("shiftId");
-
-            if (!schedule || !(schedule.shiftId as any)) {
-                return res.status(400).json({ code: 400, message: "Nhân viên không có lịch làm việc trong ngày này" });
-            }
-
-            const shift = schedule.shiftId as any;
-            const [sH, sM] = shift.startTime.split(':').map(Number);
-            const [eH, eM] = shift.endTime.split(':').map(Number);
-            const shiftStart = sH * 60 + sM;
-            const shiftEnd = eH * 60 + eM;
-            const requestedStart = startDate.getHours() * 60 + startDate.getMinutes();
-            const requestedEnd = endDate.getHours() * 60 + endDate.getMinutes();
-
-            if (requestedStart < shiftStart || requestedEnd > shiftEnd) {
+            } else {
                 return res.status(400).json({
                     code: 400,
-                    message: `Thời gian đặt ( ${dayjs(startDate).format('HH:mm')} - ${dayjs(endDate).format('HH:mm')} ) nằm ngoài ca làm việc của nhân viên ( ${shift.startTime} - ${shift.endTime} )`
+                    message: "Không tìm thấy nhân viên phù hợp cho khung giờ này."
                 });
             }
-
-            // 3. Check for overlapping bookings
-            const overlappingBooking = await Booking.findOne({
-                staffId,
-                bookingStatus: { $nin: ["cancelled", "completed"] },
-                deleted: false,
-                $or: [
-                    { start: { $lt: endDate }, end: { $gt: startDate } }
-                ]
-            });
-
-            if (overlappingBooking) {
-                return res.status(400).json({ code: 400, message: "Nhân viên đã có lịch đặt khác trong khung giờ này" });
-            }
+        } else {
+            // Manual staff selection -> Sequential (base * pets)
+            finalDuration = (service.duration || 30) * numPets;
+            finalStaffIds = [staffId];
         }
 
-        // 4. Check for customer overlapping bookings (Same customer, overlapping time, shared pets)
-        if (userId && petIds && petIds.length > 0) {
-            const startDate = new Date(start);
-            const endDate = new Date(end);
+        // Adjust final end time based on calculated duration
+        const finalEndDate = new Date(startDate.getTime() + finalDuration * 60000);
 
+        // 6. Check for customer overlapping bookings (Same customer, overlapping time, shared pets)
+        if (userId && petIds && petIds.length > 0) {
             const customerOverlap = await Booking.findOne({
                 userId,
                 bookingStatus: { $nin: ["cancelled", "completed"] },
                 deleted: false,
-                petIds: { $in: petIds }, // Check if any of the pets are already booked
-                $or: [
-                    { start: { $lt: endDate }, end: { $gt: startDate } }
-                ]
+                petIds: { $in: petIds },
+                $or: [{ start: { $lt: finalEndDate }, end: { $gt: startDate } }]
             });
 
             if (customerOverlap) {
                 return res.status(400).json({
                     code: 400,
-                    message: "Thú cưng này đã có lịch đặt khác trong khung giờ này. Vui lòng kiểm tra lại!"
+                    message: "Thú cưng này đã có lịch đặt khác trong khung giờ này."
                 });
             }
         }
@@ -170,27 +180,35 @@ export const createBooking = async (req: Request, res: Response) => {
         const newBooking = new Booking({
             code: bookingCode,
             serviceId,
-            staffId: staffId || null,
+            staffId: (Array.isArray(staffIds) && staffIds.length > 0) ? staffIds[0] : finalStaffId,
+            staffIds: (Array.isArray(staffIds) && staffIds.length > 0) ? staffIds : finalStaffIds,
+            petStaffMap: (petStaffMap && petStaffMap.length > 0)
+                ? petStaffMap
+                : autoAssignPetsToStaff(
+                    Array.isArray(petIds) ? petIds.filter((id: string) => id != null && id !== "") : [],
+                    (Array.isArray(staffIds) && staffIds.length > 0) ? staffIds : finalStaffIds
+                ),
             userId: userId || null,
             petIds: Array.isArray(petIds) ? petIds.filter((id: string) => id != null && id !== "") : [],
             notes: notes || "",
-            start: start ? new Date(start) : null,
-            end: end ? new Date(end) : null,
-            bookingStatus: bookingStatus || "pending",
+            start: startDate,
+            end: finalEndDate,
+            bookingStatus: bookingStatus || (finalStaffId ? "confirmed" : "pending"),
             paymentMethod: paymentMethod || "money",
             paymentStatus: paymentStatus || "unpaid",
             subTotal: subTotal || (service as any).basePrice || 0,
-            total: total || (service as any).basePrice || 0,
+            total: total || (service as any).basePrice * numPets || 0,
             discount: discount || 0,
             deleted: false
         });
 
         await newBooking.save();
+        const populatedBooking = await Booking.findById(newBooking._id).populate("userId");
 
         res.status(201).json({
             code: 201,
             message: "Tạo lịch đặt thành công",
-            data: newBooking
+            data: populatedBooking
         });
     } catch (error) {
         console.error("Error creating booking:", error);
@@ -294,6 +312,7 @@ export const assignStaff = async (req: Request, res: Response) => {
         }
 
         booking.staffId = staffId;
+        booking.staffIds = [staffId];
         await booking.save();
 
         res.json({
@@ -313,41 +332,6 @@ export const assignStaff = async (req: Request, res: Response) => {
     }
 };
 
-// Helper function to auto-update booking statuses for live calculation accuracy
-const autoUpdateBookingStatuses = async () => {
-    const now = new Date();
-
-    // Lấy cài đặt thời gian từ BookingConfig, mặc định 15p và 60p
-    const config = await BookingConfig.findOne();
-    const gracePeriodMinutes = config?.bookingGracePeriod ?? 15;
-    const cancelPeriodMinutes = config?.bookingCancelPeriod ?? 60;
-    const autoCancelEnabled = config?.autoCancelEnabled ?? false;
-
-    const gracePeriod = gracePeriodMinutes * 60000;
-    const cancelPeriod = cancelPeriodMinutes * 60000;
-
-    // 1. Chuyển sang delayed nếu quá giờ hẹn gracePeriod mà chưa bắt đầu
-    await Booking.updateMany(
-        {
-            bookingStatus: { $in: ["pending", "confirmed"] },
-            start: { $lt: new Date(now.getTime() - gracePeriod) },
-            deleted: false
-        },
-        { $set: { bookingStatus: "delayed" } }
-    );
-
-    // 2. Tự động hủy nếu trễ quá cancelPeriod phút (No-show)
-    if (autoCancelEnabled) {
-        await Booking.updateMany(
-            {
-                bookingStatus: "delayed",
-                start: { $lt: new Date(now.getTime() - cancelPeriod) },
-                deleted: false
-            },
-            { $set: { bookingStatus: "cancelled", cancelledReason: "Khách không đến (Tự động)" } }
-        );
-    }
-};
 
 // [GET] /api/v1/admin/bookings
 export const listBookings = async (req: Request, res: Response) => {
@@ -365,7 +349,10 @@ export const listBookings = async (req: Request, res: Response) => {
         }
 
         if (req.query.staffId) {
-            filter.staffId = req.query.staffId;
+            filter.$or = [
+                { staffId: req.query.staffId },
+                { staffIds: req.query.staffId }
+            ];
         }
 
         // Filter by appointment date (start field)
@@ -374,6 +361,11 @@ export const listBookings = async (req: Request, res: Response) => {
             filter.start = {
                 $gte: date.startOf('day').toDate(),
                 $lte: date.endOf('day').toDate()
+            };
+        } else if (req.query.startTime && req.query.endTime) {
+            filter.start = {
+                $gte: new Date(req.query.startTime as string),
+                $lte: new Date(req.query.endTime as string)
             };
         }
 
@@ -389,6 +381,7 @@ export const listBookings = async (req: Request, res: Response) => {
             .populate("serviceId", "name basePrice duration")
             .populate("userId", "fullName phone email")
             .populate("staffId", "fullName")
+            .populate("staffIds", "fullName")
             .sort({ createdAt: -1 });
 
         if (!noLimit) {
@@ -418,6 +411,73 @@ export const listBookings = async (req: Request, res: Response) => {
     }
 };
 
+// [POST] /api/v1/admin/bookings/auto-assign
+export const autoAssignBookings = async (req: Request, res: Response) => {
+    try {
+        const { date } = req.body;
+        const targetDate = date ? dayjs(date) : dayjs();
+
+        const pendingBookings = await Booking.find({
+            bookingStatus: "pending",
+            staffId: null,
+            deleted: false,
+            start: {
+                $gte: targetDate.startOf('day').toDate(),
+                $lte: targetDate.endOf('day').toDate()
+            }
+        }).populate("serviceId");
+
+        if (pendingBookings.length === 0) {
+            return res.json({
+                code: 200,
+                message: "Không có đơn hàng nào cần phân công trong ngày này",
+                data: []
+            });
+        }
+
+        const results = [];
+
+        for (const booking of pendingBookings) {
+            const serviceId = (booking.serviceId as any)?._id?.toString();
+
+            if (!serviceId || !booking.start || !booking.end) {
+                continue;
+            }
+
+            const bestStaffList = await findBestStaffForBooking(
+                booking.start as any,
+                booking.start as any,
+                booking.end as any,
+                serviceId as string,
+                booking.petIds?.length || 1
+            );
+
+            if (bestStaffList.length > 0) {
+                booking.staffIds = bestStaffList.map(s => s._id);
+                booking.staffId = booking.staffIds[0];
+                booking.bookingStatus = "confirmed";
+                await booking.save();
+
+                results.push({
+                    bookingId: booking._id,
+                    code: booking.code,
+                    staffNames: bestStaffList.map(s => s.fullName).join(", ")
+                });
+            }
+        }
+
+        res.json({
+            code: 200,
+            message: `Tự động phân công thành công ${results.length} đơn hàng`,
+            data: results
+        });
+
+    } catch (error) {
+        console.error("Auto Assign Error:", error);
+        res.status(500).json({ code: 500, message: "Lỗi khi tự động phân công" });
+    }
+};
+
 // [GET] /api/v1/admin/bookings/staff-tasks
 export const listStaffTasks = async (req: Request, res: Response) => {
     try {
@@ -428,7 +488,13 @@ export const listStaffTasks = async (req: Request, res: Response) => {
         const skip = (page - 1) * limit;
         const noLimit = req.query.noLimit === 'true';
 
-        let filter: any = { deleted: false, staffId: staffId };
+        let filter: any = {
+            deleted: false,
+            $or: [
+                { staffId: staffId },
+                { staffIds: staffId }
+            ]
+        };
 
         if (req.query.status) {
             filter.bookingStatus = req.query.status;
@@ -446,6 +512,7 @@ export const listStaffTasks = async (req: Request, res: Response) => {
             .populate("serviceId", "name basePrice duration")
             .populate("userId", "fullName phone avatar")
             .populate("petIds", "name breed weight")
+            .populate("petStaffMap.petId", "name avatar breed")
             .sort({ start: 1 });
 
         if (!noLimit) {
@@ -486,6 +553,7 @@ export const getStaffBookingDetail = async (req: Request, res: Response) => {
             .populate("serviceId", "name basePrice duration")
             .populate("userId", "fullName phone email avatar")
             .populate("staffId", "fullName email")
+            .populate("staffIds", "fullName email avatar")
             .populate("petIds");
 
         if (!booking) {
@@ -515,6 +583,7 @@ export const getBooking = async (req: Request, res: Response) => {
             .populate("serviceId", "name basePrice duration")
             .populate("userId", "fullName phone email avatar")
             .populate("staffId", "fullName email")
+            .populate("staffIds", "fullName email avatar")
             .populate("petIds");
 
         if (!booking || booking.deleted) {
@@ -600,6 +669,7 @@ export const cancelBooking = async (req: Request, res: Response) => {
 // [PATCH] /api/v1/admin/bookings/:id/start
 export const startInProgress = async (req: Request, res: Response) => {
     try {
+        const { petId } = req.body;
         const booking = await Booking.findById(req.params.id).populate("serviceId");
 
         if (!booking || booking.deleted) {
@@ -607,9 +677,13 @@ export const startInProgress = async (req: Request, res: Response) => {
         }
 
         // 1. Kiểm tra trạng thái hợp lệ
-        if (booking.bookingStatus === "in-progress") {
-            return res.status(400).json({ code: 400, message: "Dịch vụ đã đang được thực hiện." });
+        if (booking.bookingStatus === "pending") {
+            return res.status(400).json({
+                code: 400,
+                message: "Đơn hàng đang chờ xác nhận, không thể bắt đầu thực hiện dịch vụ."
+            });
         }
+
         if (["completed", "cancelled"].includes(booking.bookingStatus)) {
             return res.status(400).json({
                 code: 400,
@@ -631,19 +705,39 @@ export const startInProgress = async (req: Request, res: Response) => {
             });
         }
 
-        const actualStart = new Date();
-        const duration = (booking.serviceId as any)?.duration || 60;
-        const expectedFinish = new Date(actualStart.getTime() + duration * 60000);
+        // 3. Cập nhật trạng thái từng thú cưng
+        if (petId) {
+            const petMapping = booking.petStaffMap.find((m: any) => m.petId.toString() === petId.toString());
+            if (petMapping) {
+                petMapping.status = "in-progress";
+                petMapping.startedAt = new Date();
+            }
+        } else {
+            // Quy trình cũ: Chuyển tất cả sang in-progress
+            booking.petStaffMap.forEach((m: any) => {
+                if (m.status === "pending") {
+                    m.status = "in-progress";
+                    m.startedAt = new Date();
+                }
+            });
+        }
 
-        booking.bookingStatus = "in-progress";
-        booking.actualStart = actualStart;
-        booking.expectedFinish = expectedFinish;
+        // Cập nhật trạng thái tổng đơn nếu chưa in-progress
+        if (booking.bookingStatus !== "in-progress") {
+            const actualStart = new Date();
+            const duration = (booking.serviceId as any)?.duration || 60;
+            const expectedFinish = new Date(actualStart.getTime() + duration * 60000);
+
+            booking.bookingStatus = "in-progress";
+            booking.actualStart = actualStart;
+            booking.expectedFinish = expectedFinish;
+        }
 
         await booking.save();
 
         res.json({
             code: 200,
-            message: "Đã bắt đầu thực hiện dịch vụ thành công",
+            message: "Đã bắt đầu thực hiện dịch vụ",
             data: booking
         });
     } catch (error) {
@@ -710,31 +804,56 @@ export const updateBooking = async (req: Request, res: Response) => {
                 return res.status(400).json({ code: 400, message: "Thời gian bắt đầu không thể ở quá khứ" });
             }
 
-            // 2. 15-min intervals
+            // 2. 15-min intervals (Temporarily disabled)
+            /*
             if (checkStart.getMinutes() % 15 !== 0 || checkEnd.getMinutes() % 15 !== 0) {
                 return res.status(400).json({ code: 400, message: "Thời gian phải là bội số của 15 phút (00, 15, 30, 45)" });
             }
+            */
 
-            // 3. Working blocks
-            const startTotalMinutes = checkStart.getHours() * 60 + checkStart.getMinutes();
-            const endTotalMinutes = checkEnd.getHours() * 60 + checkEnd.getMinutes();
+            // 3. Working blocks (Temporarily disabled)
+            /*
+            const targetDate = dayjs(checkStart).startOf('day');
+            const schedules = await WorkSchedule.find({
+                date: {
+                    $gte: targetDate.toDate(),
+                    $lte: targetDate.endOf('day').toDate()
+                },
+                status: { $in: ["scheduled", "checked-in"] }
+            }).populate("shiftId");
 
-            const workingBlocks = [
+            const dynamicBlocks = schedules.map(s => {
+                if (s.shiftId) {
+                    const [sH, sM] = (s.shiftId as any).startTime.split(':').map(Number);
+                    const [eH, eM] = (s.shiftId as any).endTime.split(':').map(Number);
+                    return { start: sH * 60 + sM, end: eH * 60 + eM, label: `${(s.shiftId as any).startTime}-${(s.shiftId as any).endTime}` };
+                }
+                return null;
+            }).filter(Boolean) as { start: number, end: number, label: string }[];
+
+            const uniqueShiftLabels = Array.from(new Set(dynamicBlocks.map(b => b.label))).sort();
+
+            let workingBlocks = dynamicBlocks.length > 0 ? dynamicBlocks : [
                 { start: 8 * 60, end: 12 * 60 },
                 { start: 13 * 60, end: 17 * 60 },
-                { start: 17 * 60, end: 19 * 60 }
+                { start: 17 * 60, end: 23 * 60 }
             ];
+
+            const startTotalMinutes = checkStart.getHours() * 60 + checkStart.getMinutes();
+            const endTotalMinutes = checkEnd.getHours() * 60 + checkEnd.getMinutes();
 
             const isValidBlock = workingBlocks.some(block =>
                 startTotalMinutes >= block.start && endTotalMinutes <= block.end
             );
 
             if (!isValidBlock) {
+                const shiftInfo = uniqueShiftLabels.length > 0 ? uniqueShiftLabels.join(", ") : "08:00-12:00, 13:00-17:00, 17:00-23:00";
                 return res.status(400).json({
                     code: 400,
-                    message: "Thời gian đặt lịch phải nằm trong các ca làm việc (08:00-12:00, 13:00-17:00, 17:00-19:00) và không được vượt quá thời gian kết thúc ca."
+                    message: `Thời gian đặt lịch phải nằm trong các ca làm việc (${shiftInfo}) và không được vượt quá thời gian kết thúc ca.`
                 });
             }
+            */
         }
 
         // Validate overlapping if time or pets or user changes
@@ -765,7 +884,7 @@ export const updateBooking = async (req: Request, res: Response) => {
 
         const allowedUpdates = [
             "serviceId", "userId", "petIds", "notes",
-            "start", "end", "staffId", "discount",
+            "start", "end", "staffId", "staffIds", "petStaffMap", "discount",
             "paymentMethod", "paymentStatus"
         ];
 
@@ -774,6 +893,22 @@ export const updateBooking = async (req: Request, res: Response) => {
                 (booking as any)[update] = req.body[update];
             }
         });
+
+        // Sync staffId if staffIds updated
+        if (req.body.staffIds && Array.isArray(req.body.staffIds) && req.body.staffIds.length > 0) {
+            booking.staffId = req.body.staffIds[0];
+        } else if (req.body.staffId && (!req.body.staffIds || req.body.staffIds.length === 0)) {
+            (booking as any).staffIds = [req.body.staffId];
+        }
+
+        // Auto-fix petStaffMap if pets or staff changed but petStaffMap wasn't provided
+        const petsChanged = req.body.petIds !== undefined;
+        const staffChanged = req.body.staffIds !== undefined || req.body.staffId !== undefined;
+        const mapProvided = req.body.petStaffMap !== undefined && req.body.petStaffMap.length > 0;
+
+        if ((petsChanged || staffChanged) && !mapProvided) {
+            (booking as any).petStaffMap = autoAssignPetsToStaff(booking.petIds, booking.staffIds);
+        }
 
         await booking.save();
 
@@ -840,7 +975,7 @@ export const getAvailableSlots = async (req: Request, res: Response) => {
 
             // Logic đơn giản: Chia ngày thành các mốc 30p từ 08:00 đến 20:00 (hoặc theo ca làm)
             const workStart = (schedule.shiftId as any)?.startTime || "08:00";
-            const workEnd = (schedule.shiftId as any)?.endTime || "20:00";
+            const workEnd = (schedule.shiftId as any)?.endTime || "23:00";
 
             let current = new Date(queryDate);
             const [startH, startM] = workStart.split(":").map(Number);
@@ -895,8 +1030,8 @@ export const getAvailableSlots = async (req: Request, res: Response) => {
 
 // [PATCH] /api/v1/admin/bookings/:id/complete
 export const completeBooking = async (req: Request, res: Response) => {
-    // ... existing completeBooking content ...
     try {
+        const { petId } = req.body;
         const booking = await Booking.findById(req.params.id);
 
         if (!booking || booking.deleted) {
@@ -906,16 +1041,87 @@ export const completeBooking = async (req: Request, res: Response) => {
             });
         }
 
-        booking.bookingStatus = "completed";
-        booking.completedAt = new Date();
+        // 1. Cập nhật trạng thái từng thú cưng
+        if (petId) {
+            const petMapping = booking.petStaffMap.find((m: any) => m.petId.toString() === petId.toString());
+            if (petMapping) {
+                // FETCH SERVICE FOR VALIDATION
+                const service: any = await Service.findById(booking.serviceId);
+                if (!service) {
+                    return res.status(404).json({ code: 404, message: "Dịch vụ không tồn tại" });
+                }
+
+                // Check minDuration
+                const now = new Date();
+                const startedAt = petMapping.startedAt ? new Date(petMapping.startedAt) : null;
+                const timeElapsed = startedAt ? Math.floor((now.getTime() - startedAt.getTime()) / 60000) : 0;
+
+                if (startedAt && service.minDuration > 0 && timeElapsed < service.minDuration) {
+                    return res.status(400).json({
+                        code: 400,
+                        message: `Hoàn thành quá sớm! Dịch vụ này yêu cầu tối thiểu ${service.minDuration} phút (hiện tại: ${timeElapsed} phút).`
+                    });
+                }
+
+                // Calculate Surcharge if maxDuration exceeded
+                if (startedAt && service.maxDuration > 0 && timeElapsed > service.maxDuration) {
+                    let surcharge = 0;
+                    let notes = "";
+                    if (service.surchargeType === 'fixed') {
+                        surcharge = service.surchargeValue;
+                        notes = `Phụ thu quá giờ (Cố định): ${surcharge.toLocaleString()}đ`;
+                    } else if (service.surchargeType === 'per-minute') {
+                        const overtime = timeElapsed - service.maxDuration;
+                        surcharge = overtime * service.surchargeValue;
+                        notes = `Phụ thu quá giờ (${overtime} phút x ${service.surchargeValue.toLocaleString()}đ/phút): ${surcharge.toLocaleString()}đ`;
+                    }
+
+                    if (surcharge > 0) {
+                        petMapping.surchargeAmount = surcharge;
+                        petMapping.surchargeNotes = notes;
+                    }
+                }
+
+                petMapping.status = "completed";
+                petMapping.completedAt = now;
+
+                // Recalculate Booking Total if there are surcharges
+                const totalSurcharge = booking.petStaffMap.reduce((sum: number, m: any) => sum + (m.surchargeAmount || 0), 0);
+                // We assume 'total' was set at creation. We add the latest surcharges.
+                // Note: If we want to be safe, we'd need subtraction of old surcharges if this was an update, 
+                // but since it's transitions from in-progress to completed, it's usually the first time.
+                // However, to be robust:
+                // Let's store the initial total if we haven't done it yet, or just recalculate total based on subTotal
+                if (booking.subTotal) {
+                    booking.total = (booking.subTotal - (booking.discount || 0)) + totalSurcharge;
+                }
+            }
+        } else {
+            // Quy trình cũ: Hoàn thành tất cả (có thể bỏ qua validation nếu làm hàng loạt, 
+            // hoặc áp dụng cho từng con - ở đây tôi giữ logic đơn giản cho bulk)
+            booking.petStaffMap.forEach((m: any) => {
+                m.status = "completed";
+                if (!m.completedAt) m.completedAt = new Date();
+            });
+        }
+
+        // 2. Kiểm tra xem tất cả thú cưng đã xong chưa
+        const allCompleted = booking.petStaffMap.every((m: any) => m.status === "completed");
+
+        if (allCompleted) {
+            booking.bookingStatus = "completed";
+            booking.completedAt = new Date();
+        }
+
         await booking.save();
 
         res.json({
             code: 200,
-            message: "Hoàn thành lịch đặt thành công",
+            message: allCompleted ? "Hoàn thành lịch đặt thành công" : "Đã cập nhật trạng thái thú cưng",
             data: booking
         });
     } catch (error) {
+        console.error("Error completing booking:", error);
         res.status(500).json({
             code: 500,
             message: "Lỗi khi hoàn thành lịch đặt"
@@ -980,8 +1186,8 @@ export const getRecommendedStaff = async (req: Request, res: Response) => {
             );
 
             const isOverlapping = staffBookings.some(b => {
-                const bStart = b.start;
-                const bEnd = b.end;
+                const bStart = b.actualStart || b.start;
+                const bEnd = b.completedAt || b.expectedFinish || b.end;
                 if (!bStart || !bEnd) return false;
                 return (startDate < bEnd && endDate > bStart);
             });
@@ -989,8 +1195,10 @@ export const getRecommendedStaff = async (req: Request, res: Response) => {
             // 2.3 Tính khối lượng công việc (số ca đã nhận trong ngày)
             const workloadCount = staffBookings.length;
             const totalMinutes = staffBookings.reduce((sum, b) => {
-                if (!b.start || !b.end) return sum;
-                const diff = (b.end.getTime() - b.start.getTime()) / 60000;
+                const bStart = b.actualStart || b.start;
+                const bEnd = b.completedAt || b.expectedFinish || b.end;
+                if (!bStart || !bEnd) return sum;
+                const diff = (bEnd.getTime() - bStart.getTime()) / 60000;
                 return sum + diff;
             }, 0);
 
@@ -1005,10 +1213,16 @@ export const getRecommendedStaff = async (req: Request, res: Response) => {
                 notInShift: !isInShift,
                 workloadCount,
                 totalMinutes,
-                staffBookings: staffBookings.map(b => ({
-                    code: b.code,
-                    time: `${b.start ? dayjs(b.start).format("HH:mm") : "??"} - ${b.end ? dayjs(b.end).format("HH:mm") : "??"}`
-                }))
+                staffBookings: staffBookings.map(b => {
+                    const bStart = b.actualStart || b.start;
+                    const bEnd = b.completedAt || b.expectedFinish || b.end;
+                    return {
+                        code: b.code,
+                        time: `${bStart ? dayjs(bStart).format("HH:mm") : "??"} - ${bEnd ? dayjs(bEnd).format("HH:mm") : "??"}`,
+                        isActual: !!b.actualStart,
+                        isCompleted: b.bookingStatus === 'completed'
+                    }
+                })
             });
         }
 
@@ -1140,12 +1354,57 @@ export const exportDailyStaffSchedule = async (req: Request, res: Response) => {
         });
         await browser.close();
         console.log("PDF generated successfully");
-
         res.setHeader('Content-Type', 'application/pdf');
         res.setHeader('Content-Disposition', `attachment; filename=staff_schedule_${selectedDate.format("YYYY-MM-DD")}.pdf`);
         res.send(pdfBuffer);
     } catch (error) {
-        console.error("Export Staff Schedule Error:", error);
-        res.status(500).json({ code: 500, message: "Lỗi xuất file phân công" });
+        console.error("Error exporting schedule:", error);
+        res.status(500).json({ code: 500, message: "Lỗi khi xuất file PDF" });
+    }
+};
+
+// [POST] /api/v1/admin/bookings/suggest-assignment
+export const suggestSmartAssignment = async (req: Request, res: Response) => {
+    try {
+        const { date, startTime, endTime, serviceId, petIds, staffIds } = req.body;
+        console.log("SMART ASSIGN REQUEST:", { date, startTime, endTime, serviceId, petIds, staffIds });
+
+        if (!date || !startTime || !endTime || !serviceId || !petIds) {
+            return res.status(400).json({ code: 400, message: "Thiếu thông tin để gợi ý phân công" });
+        }
+
+        const startDateTime = new Date(startTime);
+        const endDateTime = new Date(endTime);
+        const bookingDate = new Date(date);
+
+        const bestStaff = await findBestStaffForBooking(
+            bookingDate,
+            startDateTime,
+            endDateTime,
+            serviceId,
+            petIds.length,
+            undefined,
+            staffIds
+        );
+
+        console.log(`SMART ASSIGN RESULT: Found ${bestStaff.length} suitable staff members`);
+
+        if (!bestStaff || bestStaff.length === 0) {
+            return res.status(404).json({ code: 404, message: "Không tìm thấy nhân viên phù hợp vào khung giờ này" });
+        }
+
+        const petStaffMap = autoAssignPetsToStaff(petIds, bestStaff.map(s => s._id));
+
+        res.json({
+            code: 200,
+            message: "Gợi ý phân công thành công",
+            data: {
+                staffIds: bestStaff.map(s => s._id),
+                petStaffMap
+            }
+        });
+    } catch (error) {
+        console.error("Error suggesting assignment:", error);
+        res.status(500).json({ code: 500, message: "Lỗi khi gợi ý phân công" });
     }
 };

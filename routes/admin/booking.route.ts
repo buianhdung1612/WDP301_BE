@@ -20,5 +20,7 @@ router.patch("/bookings/:id/reschedule", checkPermission("booking_edit"), bookin
 router.patch("/bookings/:id/update", checkPermission("booking_edit"), bookingController.updateBooking);
 router.patch("/bookings/:id/assign-staff", checkPermission("booking_assign"), bookingController.assignStaff);
 router.get("/bookings/:id/recommend-staff", checkPermission("booking_assign"), bookingController.getRecommendedStaff);
+router.post("/bookings/suggest-assignment", checkPermission("booking_create"), bookingController.suggestSmartAssignment);
+router.post("/bookings/auto-assign", checkPermission("booking_assign"), bookingController.autoAssignBookings);
 
 export default router;

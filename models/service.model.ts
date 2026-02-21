@@ -40,7 +40,24 @@ const schema = new mongoose.Schema(
             type: Boolean,
             default: false
         },
-        deletedAt: Date
+        deletedAt: Date,
+        minDuration: {
+            type: Number,
+            default: 0
+        },
+        maxDuration: {
+            type: Number,
+            default: 0
+        },
+        surchargeType: {
+            type: String,
+            enum: ["none", "fixed", "per-minute"],
+            default: "none"
+        },
+        surchargeValue: {
+            type: Number,
+            default: 0
+        }
     },
     {
         timestamps: true,

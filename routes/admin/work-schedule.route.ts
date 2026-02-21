@@ -11,8 +11,8 @@ router.post("/", checkPermission("schedule_create"), controller.create);
 router.post("/bulk", checkPermission("schedule_create"), controller.bulkCreate);
 router.post("/bulk-delete", checkPermission("schedule_delete"), controller.bulkRemove);
 router.patch("/:id", checkPermission("schedule_edit"), controller.update);
-router.post("/:id/check-in", checkPermission("attendance_edit"), controller.checkIn);
-router.post("/:id/check-out", checkPermission("attendance_edit"), controller.checkOut);
+router.post("/:id/check-in", checkPermission("attendance_checkin"), controller.checkIn);
+router.post("/:id/check-out", checkPermission("attendance_checkin"), controller.checkOut);
 router.delete("/:id", checkPermission("schedule_delete"), controller.remove);
 
 export default router;
