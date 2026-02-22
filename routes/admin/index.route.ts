@@ -20,6 +20,8 @@ import attendanceConfigRoutes from "./attendance-config.route"
 import authRoutes from "./auth.route"
 import bookingConfigRoutes from "./booking-config.route"
 
+import orderRoutes from "./order.route"
+
 import * as authMiddleware from "../../middlewares/admin/auth.middleware";
 
 const router = Router();
@@ -32,6 +34,7 @@ router.use('/article', authMiddleware.verifyToken, articleRoutes);
 router.use('/coupon', authMiddleware.verifyToken, couponRoutes);
 router.use('/brand', authMiddleware.verifyToken, brandRoutes);
 router.use('/product', authMiddleware.verifyToken, productRoutes);
+router.use('/order', authMiddleware.verifyToken, orderRoutes);
 router.use('/service', authMiddleware.verifyToken, serviceRoutes);
 router.use('/role', authMiddleware.verifyToken, roleRoutes);
 router.use('/account-admin', authMiddleware.verifyToken, accountAdminRoutes);

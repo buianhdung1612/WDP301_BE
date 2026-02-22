@@ -382,6 +382,8 @@ export const listBookings = async (req: Request, res: Response) => {
             .populate("userId", "fullName phone email")
             .populate("staffId", "fullName")
             .populate("staffIds", "fullName")
+            .populate("petStaffMap.staffId", "fullName")
+            .populate("petStaffMap.petId", "name avatar breed image")
             .sort({ createdAt: -1 });
 
         if (!noLimit) {
