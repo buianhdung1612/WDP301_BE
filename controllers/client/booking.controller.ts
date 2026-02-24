@@ -5,6 +5,7 @@ import WorkSchedule from "../../models/work-schedule.model";
 import Service from "../../models/service.model";
 import Pet from "../../models/pet.model";
 import Role from "../../models/role.model";
+import BookingConfig from "../../models/booking-config.model";
 import dayjs from "dayjs";
 import puppeteer from 'puppeteer';
 import moment from "moment";
@@ -18,8 +19,9 @@ const isOverlap = (start1: Date, end1: Date, start2: Date, end2: Date) => {
 // [GET] /api/v1/client/time-slots
 export const getAvailableTimeSlots = async (req: Request, res: Response) => {
     try {
-        const { serviceId, date, count: petCount } = req.query; // date format: YYYY-MM-DD
+        const { serviceId, date, count: petCount, petIds } = req.query; // date format: YYYY-MM-DD
         const count = parseInt(petCount as string) || 1;
+        const requestedPetIds = Array.isArray(petIds) ? petIds : (petIds ? (petIds as string).split(",") : []);
 
         if (!date) {
             return res.status(400).json({ code: 400, message: "Vui lòng chọn ngày" });
@@ -67,9 +69,8 @@ export const getAvailableTimeSlots = async (req: Request, res: Response) => {
                 startTime: (s.shiftId as any).startTime,
                 endTime: (s.shiftId as any).endTime,
                 bookings: bookings.filter(b => {
-                    const bStaffId = b.staffId?.toString();
                     const bStaffIds = b.staffIds?.map((id: any) => id.toString()) || [];
-                    return bStaffId === staffStrId || bStaffIds.includes(staffStrId);
+                    return bStaffIds.includes(staffStrId);
                 })
             });
         }
@@ -113,7 +114,7 @@ export const getAvailableTimeSlots = async (req: Request, res: Response) => {
                 // Check for Parallel (base duration)
                 if (current.getTime() >= shiftStart && parallelEnd.getTime() <= shiftEnd) {
                     totalStaffOnShift++;
-                    const isBusyParallel = config.bookings.some((b: any) => isOverlap(current, parallelEnd, b.start, b.end));
+                    const isBusyParallel = config.bookings.some((b: any) => isOverlap(current, parallelEnd, b.start as any as Date, b.end as any as Date));
                     if (!isBusyParallel) {
                         parallelFreeCount++;
                     }
@@ -121,25 +122,36 @@ export const getAvailableTimeSlots = async (req: Request, res: Response) => {
 
                 // Check for Sequential (longer duration)
                 if (current.getTime() >= shiftStart && sequentialEnd.getTime() <= shiftEnd) {
-                    const isBusySequential = config.bookings.some((b: any) => isOverlap(current, sequentialEnd, b.start, b.end));
+                    const isBusySequential = config.bookings.some((b: any) => isOverlap(current, sequentialEnd, b.start as any as Date, b.end as any as Date));
                     if (!isBusySequential) {
                         sequentialPossible = true;
                     }
                 }
             });
 
-            const isAvailable = (parallelFreeCount >= count) || sequentialPossible;
+            // CRITICAL: Check if specific pets are already busy in this slot
+            let petIsBusy = false;
+            if (requestedPetIds.length > 0) {
+                const maxEnd = parallelFreeCount >= count ? parallelEnd : sequentialEnd;
+                petIsBusy = bookings.some(b => {
+                    const hasCommonPet = b.petIds.some((pid: any) => requestedPetIds.includes(pid.toString()));
+                    if (!hasCommonPet) return false;
+                    return isOverlap(current, maxEnd, b.start as any as Date, b.end as any as Date);
+                });
+            }
+
+            const isAvailable = !petIsBusy && ((parallelFreeCount >= count) || sequentialPossible);
 
             availableSlots.push({
                 time: timeStr,
                 freeStaff: parallelFreeCount,
                 availableSlots: parallelFreeCount,
-                status: totalStaffOnShift === 0 ? "closed" : (isAvailable ? "available" : "full"),
+                status: totalStaffOnShift === 0 ? "closed" : (isAvailable ? "available" : (petIsBusy ? "pet_busy" : "full")),
                 totalStaff: totalStaffOnShift,
                 mode: parallelFreeCount >= count ? "parallel" : "sequential"
             });
 
-            current = new Date(current.getTime() + 15 * 60000);
+            current = new Date(current.getTime() + 5 * 60000);
         }
 
         res.json({
@@ -244,6 +256,10 @@ export const createBooking = async (req: Request, res: Response) => {
             return res.status(401).json({ code: 401, message: "Vui lòng đăng nhập" });
         }
 
+        // 0. Fetch Booking Config
+        const config = await BookingConfig.findOne({});
+        const autoConfirm = config?.autoConfirmEnabled ?? false;
+
         // 1. Validate Service
         const service = await Service.findById(serviceId);
         if (!service || service.deleted || service.status === "inactive") {
@@ -282,6 +298,22 @@ export const createBooking = async (req: Request, res: Response) => {
             });
         }
 
+        // 3.5 Check for pet overlapping bookings (Same customer, overlapping time, shared pets)
+        const petOverlap = await Booking.findOne({
+            userId,
+            bookingStatus: { $nin: ["cancelled", "completed"] },
+            deleted: false,
+            petIds: { $in: petIds },
+            $or: [{ start: { $lt: finalEndDate }, end: { $gt: start } }]
+        });
+
+        if (petOverlap) {
+            return res.status(400).json({
+                code: 400,
+                message: "Một hoặc nhiều thú cưng của bạn đã có lịch đặt khác trùng với khung giờ này. Vui lòng kiểm tra lại!"
+            });
+        }
+
         // 4. Calculate Price
         let totalPrice = 0;
         if (service.pricingType === "fixed") {
@@ -310,7 +342,6 @@ export const createBooking = async (req: Request, res: Response) => {
             code: bookingCode,
             userId,
             serviceId,
-            staffId: bestStaffList[0]._id,
             staffIds: bestStaffList.map(s => s._id) as any,
             petStaffMap: autoAssignPetsToStaff(petIds, bestStaffList.map(s => s._id)) as any,
             petIds,
@@ -319,7 +350,7 @@ export const createBooking = async (req: Request, res: Response) => {
             notes,
             subTotal: totalPrice,
             total: totalPrice,
-            bookingStatus: "confirmed",
+            bookingStatus: autoConfirm ? "confirmed" : "pending",
             paymentStatus: "unpaid"
         });
 

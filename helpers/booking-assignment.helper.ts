@@ -108,9 +108,8 @@ export const findBestStaffForBooking = async (
 
         // C. Kiểm tra trùng lịch
         const isOverlapping = assignedBookings.some(b => {
-            const bStaffId = b.staffId?.toString();
             const bStaffIds = b.staffIds?.map((id: any) => id.toString()) || [];
-            if (bStaffId !== staff._id.toString() && !bStaffIds.includes(staff._id.toString())) return false;
+            if (!bStaffIds.includes(staff._id.toString())) return false;
 
             const bStart = dayjs(b.actualStart || b.start);
             const bEnd = dayjs(b.completedAt || b.expectedFinish || b.end);
@@ -128,7 +127,7 @@ export const findBestStaffForBooking = async (
 
         // 1. History (completed tasks)
         const historyCount = await Booking.countDocuments({
-            $or: [{ staffId: staff._id }, { staffIds: staff._id }],
+            staffIds: staff._id,
             serviceId: serviceId,
             bookingStatus: "completed",
             deleted: false
@@ -144,9 +143,8 @@ export const findBestStaffForBooking = async (
 
         // 3. Workload penalty
         const todayCount = assignedBookings.filter(b => {
-            const bStaffId = b.staffId?.toString();
             const bStaffIds = b.staffIds?.map((id: any) => id.toString()) || [];
-            return bStaffId === staff._id.toString() || bStaffIds.includes(staff._id.toString());
+            return bStaffIds.includes(staff._id.toString());
         }).length;
         score -= todayCount * 10;
 

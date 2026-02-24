@@ -9,11 +9,15 @@ export const listServices = async (req: Request, res: Response) => {
         const limit = parseInt(req.query.limit as string) || 10;
         const skip = (page - 1) * limit;
         const categoryId = req.query.categoryId as string;
-        const petType = req.query.petType as string;
+        const petTypes = req.query.petTypes as string;
 
         let filter: any = { deleted: false, status: "active" };
         if (categoryId) filter.categoryId = categoryId;
-        if (petType) filter.petType = petType;
+
+        if (petTypes && petTypes !== "ALL") {
+            // Tìm các dịch vụ mà mảng petTypes chứa giá trị gửi lên (DOG hoặc CAT)
+            filter.petTypes = { $in: [petTypes] };
+        }
 
         const services = await Service.find(filter)
             .populate("categoryId")
@@ -42,12 +46,41 @@ export const listServices = async (req: Request, res: Response) => {
     }
 };
 
-// [GET] /api/v1/client/services/:id
+// [GET] /api/v1/client/services/detail/:id
 export const getService = async (req: Request, res: Response) => {
     try {
         const service = await Service.findById(req.params.id);
 
         if (!service || service.deleted || service.status === "inactive") {
+            return res.status(404).json({
+                code: 404,
+                message: "Dịch vụ không tồn tại"
+            });
+        }
+
+        res.json({
+            code: 200,
+            message: "Chi tiết dịch vụ",
+            data: service
+        });
+    } catch (error) {
+        res.status(500).json({
+            code: 500,
+            message: "Lỗi khi lấy chi tiết dịch vụ"
+        });
+    }
+};
+
+// [GET] /api/v1/client/services/slug/:slug
+export const getServiceBySlug = async (req: Request, res: Response) => {
+    try {
+        const service = await Service.findOne({
+            slug: req.params.slug,
+            deleted: false,
+            status: "active"
+        }).populate("categoryId");
+
+        if (!service) {
             return res.status(404).json({
                 code: 404,
                 message: "Dịch vụ không tồn tại"

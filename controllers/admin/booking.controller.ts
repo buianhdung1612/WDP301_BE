@@ -43,6 +43,10 @@ export const createBooking = async (req: Request, res: Response) => {
             return res.status(400).json({ code: 400, message: "Vui lòng chọn thời gian bắt đầu và kết thúc" });
         }
 
+        // 0. Fetch Booking Config
+        const config = await BookingConfig.findOne({});
+        const autoConfirm = config?.autoConfirmEnabled ?? false;
+
         const startDate = new Date(start);
         const endDate = new Date(end);
         const now = new Date();
@@ -118,14 +122,17 @@ export const createBooking = async (req: Request, res: Response) => {
         // Generate booking code if not provided
         const bookingCode = `BK${Date.now()}`;
 
-        // 5. Automated Staff Assignment (if no staffId selected)
+        // 5. Staff Assignment Logic
         let finalStaffIds: string[] = [];
-        let finalStaffId: string | null = staffId || null;
+        const providedStaffIds = (Array.isArray(staffIds) && staffIds.length > 0)
+            ? staffIds
+            : (staffId ? [staffId] : []);
+
         let finalDuration = service.duration || 30;
         const numPets = Array.isArray(petIds) ? petIds.filter((id: string) => id != null && id !== "").length : 1;
 
-        if (!staffId) {
-            // "Parallel First" Strategy
+        if (providedStaffIds.length === 0) {
+            // "Parallel First" Strategy - Auto assign
             const bestStaffList = await findBestStaffForBooking(
                 startDate,
                 startDate,
@@ -136,12 +143,10 @@ export const createBooking = async (req: Request, res: Response) => {
 
             if (bestStaffList.length > 0) {
                 finalStaffIds = bestStaffList.map(s => s._id.toString());
-                finalStaffId = finalStaffIds[0]; // Set staffId for backward compatibility
 
-                // If we got enough staff for all pets -> Parallel (base duration)
-                // If not enough -> Sequential (multiple duration)
+                // If not enough staff for all pets -> Adjust duration
                 if (finalStaffIds.length < numPets) {
-                    finalDuration = (service.duration || 30) * numPets;
+                    finalDuration = (service.duration || 30) * Math.ceil(numPets / finalStaffIds.length);
                 }
             } else {
                 return res.status(400).json({
@@ -150,9 +155,9 @@ export const createBooking = async (req: Request, res: Response) => {
                 });
             }
         } else {
-            // Manual staff selection -> Sequential (base * pets)
-            finalDuration = (service.duration || 30) * numPets;
-            finalStaffIds = [staffId];
+            // Manual staff selection -> Parallel logic
+            finalStaffIds = providedStaffIds;
+            finalDuration = (service.duration || 30) * Math.ceil(numPets / finalStaffIds.length);
         }
 
         // Adjust final end time based on calculated duration
@@ -180,7 +185,6 @@ export const createBooking = async (req: Request, res: Response) => {
         const newBooking = new Booking({
             code: bookingCode,
             serviceId,
-            staffId: (Array.isArray(staffIds) && staffIds.length > 0) ? staffIds[0] : finalStaffId,
             staffIds: (Array.isArray(staffIds) && staffIds.length > 0) ? staffIds : finalStaffIds,
             petStaffMap: (petStaffMap && petStaffMap.length > 0)
                 ? petStaffMap
@@ -193,7 +197,7 @@ export const createBooking = async (req: Request, res: Response) => {
             notes: notes || "",
             start: startDate,
             end: finalEndDate,
-            bookingStatus: bookingStatus || (finalStaffId ? "confirmed" : "pending"),
+            bookingStatus: bookingStatus || (autoConfirm ? "confirmed" : "pending"),
             paymentMethod: paymentMethod || "money",
             paymentStatus: paymentStatus || "unpaid",
             subTotal: subTotal || (service as any).basePrice || 0,
@@ -223,7 +227,13 @@ export const createBooking = async (req: Request, res: Response) => {
 // [PATCH] /api/v1/admin/bookings/:id/assign-staff
 export const assignStaff = async (req: Request, res: Response) => {
     try {
-        const { staffId } = req.body;
+        const { staffIds, staffId } = req.body;
+        const finalStaffIds = staffIds || (staffId ? [staffId] : []);
+
+        if (finalStaffIds.length === 0) {
+            return res.status(400).json({ code: 400, message: "Vui lòng chọn nhân viên" });
+        }
+
         const booking = await Booking.findById(req.params.id);
 
         if (!booking || booking.deleted) {
@@ -234,17 +244,17 @@ export const assignStaff = async (req: Request, res: Response) => {
         }
 
         // 1. Kiểm tra nhân viên tồn tại
-        const staff = await AccountAdmin.findOne({ _id: staffId, deleted: false });
-        if (!staff) {
+        const allStaff = await AccountAdmin.find({ _id: { $in: finalStaffIds }, deleted: false });
+        if (allStaff.length !== finalStaffIds.length) {
             return res.status(400).json({
                 code: 400,
-                message: "Nhân viên không tồn tại"
+                message: "Một số nhân viên không tồn tại"
             });
         }
 
         // 2. Kiểm tra xem nhân viên có thuộc Role "Nhân viên thực hiện dịch vụ" (isStaff: true) không
         const roles = await Role.find({
-            _id: { $in: staff.roles },
+            _id: { $in: Array.from(new Set(allStaff.flatMap(s => s.roles))) },
             isStaff: true,
             status: "active",
             deleted: false
@@ -262,41 +272,43 @@ export const assignStaff = async (req: Request, res: Response) => {
             const startDate = booking.start;
             const endDate = booking.end;
 
-            // 3.1 Kiểm tra ca trực
-            const schedule = await WorkSchedule.findOne({
-                staffId: staffId,
-                date: {
-                    $gte: dayjs(startDate).startOf('day').toDate(),
-                    $lte: dayjs(startDate).endOf('day').toDate()
+            // 3.1 Kiểm tra ca trực cho từng nhân viên
+            for (const sId of finalStaffIds) {
+                const schedule = await WorkSchedule.findOne({
+                    staffId: sId,
+                    date: {
+                        $gte: dayjs(startDate).startOf('day').toDate(),
+                        $lte: dayjs(startDate).endOf('day').toDate()
+                    }
+                }).populate("shiftId");
+
+                if (!schedule || !(schedule.shiftId as any)) {
+                    return res.status(400).json({
+                        code: 400,
+                        message: `Nhân viên ${sId} không có lịch làm việc trong ngày này`
+                    });
                 }
-            }).populate("shiftId");
 
-            if (!schedule || !(schedule.shiftId as any)) {
-                return res.status(400).json({
-                    code: 400,
-                    message: "Nhân viên không có lịch làm việc trong ngày này"
-                });
-            }
+                const shift = schedule.shiftId as any;
+                const [sH, sM] = shift.startTime.split(':').map(Number);
+                const [eH, eM] = shift.endTime.split(':').map(Number);
+                const shiftStart = sH * 60 + sM;
+                const shiftEnd = eH * 60 + eM;
+                const reqStartMin = startDate.getHours() * 60 + startDate.getMinutes();
+                const reqEndMin = endDate.getHours() * 60 + endDate.getMinutes();
 
-            const shift = schedule.shiftId as any;
-            const [sH, sM] = shift.startTime.split(':').map(Number);
-            const [eH, eM] = shift.endTime.split(':').map(Number);
-            const shiftStart = sH * 60 + sM;
-            const shiftEnd = eH * 60 + eM;
-            const reqStartMin = startDate.getHours() * 60 + startDate.getMinutes();
-            const reqEndMin = endDate.getHours() * 60 + endDate.getMinutes();
-
-            if (reqStartMin < shiftStart || reqEndMin > shiftEnd) {
-                return res.status(400).json({
-                    code: 400,
-                    message: `Thời gian đặt lịch (${dayjs(startDate).format("HH:mm")} - ${dayjs(endDate).format("HH:mm")}) nằm ngoài ca làm việc của nhân viên (${shift.startTime} - ${shift.endTime})`
-                });
+                if (reqStartMin < shiftStart || reqEndMin > shiftEnd) {
+                    return res.status(400).json({
+                        code: 400,
+                        message: `Thời gian đặt lịch (${dayjs(startDate).format("HH:mm")} - ${dayjs(endDate).format("HH:mm")}) nằm ngoài ca làm việc của một số nhân viên`
+                    });
+                }
             }
 
             // 3.2 Kiểm tra trùng lịch
             const overlappingBooking = await Booking.findOne({
                 _id: { $ne: booking._id },
-                staffId: staffId,
+                staffIds: { $in: finalStaffIds },
                 bookingStatus: { $in: ["confirmed", "delayed", "in-progress"] },
                 deleted: false,
                 start: { $lt: endDate },
@@ -311,8 +323,7 @@ export const assignStaff = async (req: Request, res: Response) => {
             }
         }
 
-        booking.staffId = staffId;
-        booking.staffIds = [staffId];
+        booking.staffIds = finalStaffIds;
         await booking.save();
 
         res.json({
@@ -320,7 +331,7 @@ export const assignStaff = async (req: Request, res: Response) => {
             message: "Phân công nhân viên thành công",
             data: {
                 bookingId: booking._id,
-                staffName: staff.fullName,
+                staffName: allStaff.map(s => s.fullName).join(", "),
                 serviceIds: roles.flatMap(r => r.serviceIds || [])
             }
         });
@@ -349,10 +360,7 @@ export const listBookings = async (req: Request, res: Response) => {
         }
 
         if (req.query.staffId) {
-            filter.$or = [
-                { staffId: req.query.staffId },
-                { staffIds: req.query.staffId }
-            ];
+            filter.staffIds = req.query.staffId;
         }
 
         // Filter by appointment date (start field)
@@ -380,7 +388,6 @@ export const listBookings = async (req: Request, res: Response) => {
         let query = Booking.find(filter)
             .populate("serviceId", "name basePrice duration")
             .populate("userId", "fullName phone email")
-            .populate("staffId", "fullName")
             .populate("staffIds", "fullName")
             .populate("petStaffMap.staffId", "fullName")
             .populate("petStaffMap.petId", "name avatar breed image")
@@ -416,63 +423,60 @@ export const listBookings = async (req: Request, res: Response) => {
 // [POST] /api/v1/admin/bookings/auto-assign
 export const autoAssignBookings = async (req: Request, res: Response) => {
     try {
-        const { date } = req.body;
-        const targetDate = date ? dayjs(date) : dayjs();
+        const { bookingId } = req.body;
 
-        const pendingBookings = await Booking.find({
-            bookingStatus: "pending",
-            staffId: null,
-            deleted: false,
-            start: {
-                $gte: targetDate.startOf('day').toDate(),
-                $lte: targetDate.endOf('day').toDate()
-            }
+        const booking = await Booking.findOne({
+            _id: bookingId,
+            deleted: false
         }).populate("serviceId");
 
-        if (pendingBookings.length === 0) {
-            return res.json({
-                code: 200,
-                message: "Không có đơn hàng nào cần phân công trong ngày này",
-                data: []
+        if (!booking) {
+            return res.status(404).json({
+                code: 404,
+                message: "Không tìm thấy đơn hàng cần phân công"
             });
         }
 
-        const results = [];
+        const config = await BookingConfig.findOne({});
+        const autoConfirm = config?.autoConfirmEnabled ?? false;
 
-        for (const booking of pendingBookings) {
-            const serviceId = (booking.serviceId as any)?._id?.toString();
+        const serviceId = (booking.serviceId as any)?._id?.toString();
 
-            if (!serviceId || !booking.start || !booking.end) {
-                continue;
-            }
+        if (!serviceId || !booking.start || !booking.end) {
+            return res.status(400).json({
+                code: 400,
+                message: "Dữ liệu đơn hàng không hợp lệ để tự động phân công"
+            });
+        }
 
-            const bestStaffList = await findBestStaffForBooking(
-                booking.start as any,
-                booking.start as any,
-                booking.end as any,
-                serviceId as string,
-                booking.petIds?.length || 1
-            );
+        const bestStaffList = await findBestStaffForBooking(
+            booking.start as any,
+            booking.start as any,
+            booking.end as any,
+            serviceId as string,
+            booking.petIds?.length || 1
+        );
 
-            if (bestStaffList.length > 0) {
-                booking.staffIds = bestStaffList.map(s => s._id);
-                booking.staffId = booking.staffIds[0];
-                booking.bookingStatus = "confirmed";
-                await booking.save();
+        if (bestStaffList.length > 0) {
+            booking.staffIds = bestStaffList.map(s => s._id);
+            booking.bookingStatus = autoConfirm ? "confirmed" : "pending";
+            await booking.save();
 
-                results.push({
+            return res.json({
+                code: 200,
+                message: `Tự động phân công thành công nhân viên cho đơn hàng ${booking.code}`,
+                data: {
                     bookingId: booking._id,
                     code: booking.code,
                     staffNames: bestStaffList.map(s => s.fullName).join(", ")
-                });
-            }
+                }
+            });
+        } else {
+            return res.status(400).json({
+                code: 400,
+                message: "Không tìm thấy nhân viên rảnh phù hợp cho đơn hàng này tại thời điểm yêu cầu"
+            });
         }
-
-        res.json({
-            code: 200,
-            message: `Tự động phân công thành công ${results.length} đơn hàng`,
-            data: results
-        });
 
     } catch (error) {
         console.error("Auto Assign Error:", error);
@@ -493,7 +497,6 @@ export const listStaffTasks = async (req: Request, res: Response) => {
         let filter: any = {
             deleted: false,
             $or: [
-                { staffId: staffId },
                 { staffIds: staffId }
             ]
         };
@@ -549,12 +552,11 @@ export const getStaffBookingDetail = async (req: Request, res: Response) => {
         const staffId = res.locals.accountAdmin._id;
         const booking = await Booking.findOne({
             _id: req.params.id,
-            staffId: staffId,
+            staffIds: staffId,
             deleted: false
         })
             .populate("serviceId", "name basePrice duration")
             .populate("userId", "fullName phone email avatar")
-            .populate("staffId", "fullName email")
             .populate("staffIds", "fullName email avatar")
             .populate("petIds");
 
@@ -584,7 +586,6 @@ export const getBooking = async (req: Request, res: Response) => {
         const booking = await Booking.findById(req.params.id)
             .populate("serviceId", "name basePrice duration")
             .populate("userId", "fullName phone email avatar")
-            .populate("staffId", "fullName email")
             .populate("staffIds", "fullName email avatar")
             .populate("petIds");
 
@@ -751,7 +752,7 @@ export const startInProgress = async (req: Request, res: Response) => {
 // [PATCH] /api/v1/admin/bookings/:id/reschedule
 export const rescheduleBooking = async (req: Request, res: Response) => {
     try {
-        const { start, end, staffId } = req.body;
+        const { start, end, staffId, staffIds } = req.body;
         const booking = await Booking.findById(req.params.id);
 
         if (!booking || booking.deleted) {
@@ -761,7 +762,12 @@ export const rescheduleBooking = async (req: Request, res: Response) => {
         // Cập nhật thời gian mới và giải phóng slot cũ
         if (start) booking.start = new Date(start);
         if (end) booking.end = new Date(end);
-        if (staffId) booking.staffId = staffId;
+
+        if (staffIds && Array.isArray(staffIds) && staffIds.length > 0) {
+            booking.staffIds = staffIds;
+        } else if (staffId) {
+            booking.staffIds = [staffId];
+        }
 
         booking.bookingStatus = "confirmed";
 
@@ -886,7 +892,7 @@ export const updateBooking = async (req: Request, res: Response) => {
 
         const allowedUpdates = [
             "serviceId", "userId", "petIds", "notes",
-            "start", "end", "staffId", "staffIds", "petStaffMap", "discount",
+            "start", "end", "staffIds", "petStaffMap", "discount",
             "paymentMethod", "paymentStatus"
         ];
 
@@ -897,9 +903,7 @@ export const updateBooking = async (req: Request, res: Response) => {
         });
 
         // Sync staffId if staffIds updated
-        if (req.body.staffIds && Array.isArray(req.body.staffIds) && req.body.staffIds.length > 0) {
-            booking.staffId = req.body.staffIds[0];
-        } else if (req.body.staffId && (!req.body.staffIds || req.body.staffIds.length === 0)) {
+        if (req.body.staffId && (!req.body.staffIds || req.body.staffIds.length === 0)) {
             (booking as any).staffIds = [req.body.staffId];
         }
 
@@ -909,7 +913,7 @@ export const updateBooking = async (req: Request, res: Response) => {
         const mapProvided = req.body.petStaffMap !== undefined && req.body.petStaffMap.length > 0;
 
         if ((petsChanged || staffChanged) && !mapProvided) {
-            (booking as any).petStaffMap = autoAssignPetsToStaff(booking.petIds, booking.staffIds);
+            (booking as any).petStaffMap = autoAssignPetsToStaff(booking.petIds as any, booking.staffIds as any);
         }
 
         await booking.save();
@@ -956,7 +960,7 @@ export const getAvailableSlots = async (req: Request, res: Response) => {
 
         // 2. Lấy tất cả Booking của các nhân viên này trong ngày
         const bookings = await Booking.find({
-            staffId: { $in: staffIds },
+            staffIds: { $in: staffIds },
             bookingStatus: { $in: ["confirmed", "delayed", "in-progress"] },
             deleted: false,
             $or: [
@@ -970,7 +974,7 @@ export const getAvailableSlots = async (req: Request, res: Response) => {
 
         // 3. Tính toán ô trống cho từng nhân viên
         schedules.forEach(schedule => {
-            const staffBookings = bookings.filter(b => b.staffId?.toString() === schedule.staffId?._id.toString());
+            const staffBookings = bookings.filter(b => b.staffIds?.includes(schedule.staffId?._id));
 
             // Giả định ca làm việc từ schedule.startTime đến schedule.endTime (ví dụ "08:00" đến "17:00")
             // Ở đây tôi dùng service duration để kiểm tra xem có đủ chỗ không
@@ -1183,7 +1187,7 @@ export const getRecommendedStaff = async (req: Request, res: Response) => {
 
             // 2.2 Kiểm tra trùng lịch (bận hay rảnh)
             const staffBookings = allBookingsToday.filter(b =>
-                b.staffId?.toString() === staff._id.toString() &&
+                b.staffIds?.includes(staff._id) &&
                 b._id.toString() !== booking._id.toString()
             );
 
@@ -1263,7 +1267,7 @@ export const exportDailyStaffSchedule = async (req: Request, res: Response) => {
             },
             bookingStatus: { $in: ["confirmed", "delayed", "in-progress", "completed"] }
         })
-            .populate("staffId", "fullName")
+            .populate("staffIds", "fullName")
             .populate("serviceId", "name")
             .populate("petIds", "name")
             .sort({ start: 1 });
@@ -1273,7 +1277,7 @@ export const exportDailyStaffSchedule = async (req: Request, res: Response) => {
         // Group by staff
         const staffGroups: any = {};
         bookings.forEach((b: any) => {
-            const staffName = b.staffId?.fullName || "Chưa phân công";
+            const staffName = b.staffIds?.[0]?.fullName || "Chưa phân công";
             if (!staffGroups[staffName]) staffGroups[staffName] = [];
             staffGroups[staffName].push(b);
         });

@@ -7,6 +7,7 @@ const router = Router();
 
 // ================= SERVICES =================
 router.get("/services", serviceController.listServices);
+router.get("/services/slug/:slug", serviceController.getServiceBySlug); // Thêm route theo slug
 router.get("/services/:id", serviceController.getService);
 router.get("/service-categories", serviceController.getCategories);
 

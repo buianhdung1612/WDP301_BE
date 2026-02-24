@@ -14,7 +14,6 @@ const schema = new mongoose.Schema(
             type: Number,
             default: 30 // minutes
         },
-        // We can add more booking related configs here in the future
         autoCancelEnabled: {
             type: Boolean,
             default: false

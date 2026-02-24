@@ -8,6 +8,7 @@ import { orderRoutes } from "./order.route"
 import petRoutes from "./pet.route"
 import boardingBookingRoutes from "./boarding-booking.route"
 import cageRoutes from "./boarding-cages.route"
+import articleRoutes from "./article.route";
 
 const router = Router();
 
@@ -20,5 +21,6 @@ router.use('/order', orderRoutes);
 router.use('/pet', petRoutes);
 router.use('/boarding', boardingBookingRoutes);
 router.use('/cage', cageRoutes);
+router.use('/article', articleRoutes);
 
 export default router;

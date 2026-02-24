@@ -57,7 +57,8 @@ const schema = new mongoose.Schema(
         surchargeValue: {
             type: Number,
             default: 0
-        }
+        },
+        images: [String]
     },
     {
         timestamps: true,

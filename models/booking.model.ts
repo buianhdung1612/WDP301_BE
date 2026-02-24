@@ -15,10 +15,6 @@ const schema = new mongoose.Schema(
             type: mongoose.Schema.Types.ObjectId,
             ref: "Pet"
         }],
-        staffId: {
-            type: mongoose.Schema.Types.ObjectId,
-            ref: "AccountAdmin"
-        },
         staffIds: [{
             type: mongoose.Schema.Types.ObjectId,
             ref: "AccountAdmin"

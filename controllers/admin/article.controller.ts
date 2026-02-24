@@ -442,30 +442,52 @@ export const edit = async (req: Request, res: Response) => {
             req.body.slug = slug;
         }
         if (req.body.category) {
-            req.body.category = JSON.parse(req.body.category);
+            try {
+                if (typeof req.body.category === 'string') {
+                    req.body.category = JSON.parse(req.body.category);
+                }
+            } catch (e) {
+                console.error("Error parsing category:", e);
+                // Keep as is or handle if it's already an array
+            }
         }
 
-        req.body.search = convertToSlug(req.body.name).replace(/-/g, " ");
+        if (req.body.name) {
+            req.body.search = convertToSlug(req.body.name).replace(/-/g, " ");
+        }
 
         if (req.body.status === "published") {
             req.body.publishAt = new Date();
         }
 
-        await Blog.updateOne({
+        // Clean up fields that shouldn't be in the update payload
+        delete req.body._id;
+        delete req.body.id;
+        delete req.body.createdAt;
+        delete req.body.updatedAt;
+
+        const updateResult = await Blog.updateOne({
             _id: id,
             deleted: false
-        }, req.body)
+        }, req.body);
+
+        if (updateResult.matchedCount === 0) {
+            return res.status(404).json({
+                success: false,
+                message: "Không tìm thấy bài viết để cập nhật!"
+            });
+        }
 
         return res.status(200).json({
             success: true,
             message: "Cập nhật bài viết thành công!"
         });
     } catch (error) {
-        console.error(error);
+        console.error("Error in edit blog:", error);
 
         return res.status(500).json({
             success: false,
-            message: "Dữ liệu không hợp lệ!"
+            message: "Dữ liệu không hợp lệ hoặc lỗi hệ thống!"
         });
     }
 }
