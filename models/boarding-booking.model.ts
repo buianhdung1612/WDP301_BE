@@ -40,15 +40,17 @@ const schema = new mongoose.Schema(
             enum: ["unpaid", "paid", "refunded"],
             default: "unpaid"
         },
+        paymentMethod: String,
+        paymentGateway: String,
+        holdExpiresAt: Date,
 
         notes: String, // Ghi chú (dị ứng, thức ăn yêu thích, etc.)
-        feedingSchedule: String, // Lịch ăn (VD: 3 bữa/ngày)
         specialCare: String, // Chăm sóc đặc biệt
 
         // Trạng thái lưu trú - Đồng bộ cách đặt tên
         boardingStatus: {
             type: String,
-            enum: ["pending", "confirmed", "checked-in", "checked-out", "cancelled"],
+            enum: ["pending", "held", "confirmed", "checked-in", "checked-out", "cancelled"],
             default: "pending"
         },
 
