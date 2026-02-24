@@ -4,7 +4,10 @@ const schema = new mongoose.Schema(
     {
         name: String,
         slug: String,
-        category: [String],
+        category: [{
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "CategoryBlog"
+        }],
         avatar: String,
         description: String,
         content: String,
@@ -24,8 +27,14 @@ const schema = new mongoose.Schema(
             default: false
         },
         deletedAt: Date,
-        createdBy: String,
-        updatedBy: String
+        createdBy: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "AccountAdmin"
+        },
+        updatedBy: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "AccountAdmin"
+        }
     },
     {
         timestamps: true, // Tự động sinh ra trường createdAt và updatedAt

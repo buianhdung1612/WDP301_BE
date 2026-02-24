@@ -252,7 +252,11 @@ export const serviceDetail = async (req: Request, res: Response) => {
 // [POST] /api/v1/admin/services/create
 export const serviceCreate = async (req: Request, res: Response) => {
     try {
-        const { categoryId, name, description, duration, petTypes, pricingType, basePrice, priceList } = req.body;
+        const {
+            categoryId, name, description, duration, petTypes,
+            pricingType, basePrice, priceList, minDuration,
+            maxDuration, surchargeType, surchargeValue
+        } = req.body;
 
         const category = await ServiceCategory.findById(categoryId);
         if (!category) {
@@ -282,6 +286,10 @@ export const serviceCreate = async (req: Request, res: Response) => {
             pricingType,
             basePrice,
             priceList,
+            minDuration,
+            maxDuration,
+            surchargeType,
+            surchargeValue,
             status: "active"
         });
 
@@ -322,32 +330,47 @@ export const serviceEdit = async (req: Request, res: Response) => {
             }
         }
 
-        if (req.body.name && !req.body.slug) {
-            req.body.slug = convertToSlug(req.body.name);
+        const {
+            name, slug, categoryId, description, duration,
+            petTypes, pricingType, basePrice, priceList, minDuration,
+            maxDuration, surchargeType, surchargeValue, status
+        } = req.body;
+
+        const updateData: any = {
+            name, slug, categoryId, description, duration,
+            petTypes, pricingType, basePrice, priceList, minDuration,
+            maxDuration, surchargeType, surchargeValue, status
+        };
+
+        // Xóa các trường undefined để tránh ghi đè dữ liệu cũ bằng null/undefined nếu không truyền
+        Object.keys(updateData).forEach(key => updateData[key] === undefined && delete updateData[key]);
+
+        if (updateData.name && !updateData.slug) {
+            updateData.slug = convertToSlug(updateData.name);
         }
 
-        if (req.body.slug && req.body.slug !== service.slug) {
-            let slug = req.body.slug;
+        if (updateData.slug && updateData.slug !== service.slug) {
+            let slugVal = updateData.slug;
             let slugCheck = await Service.findOne({
-                slug,
+                slug: slugVal,
                 _id: { $ne: req.params.id },
                 deleted: false
             });
             let count = 1;
-            const originalSlug = slug;
+            const originalSlug = slugVal;
             while (slugCheck) {
-                slug = `${originalSlug}-${count}`;
+                slugVal = `${originalSlug}-${count}`;
                 slugCheck = await Service.findOne({
-                    slug,
+                    slug: slugVal,
                     _id: { $ne: req.params.id },
                     deleted: false
                 });
                 count++;
             }
-            req.body.slug = slug;
+            updateData.slug = slugVal;
         }
 
-        await Service.updateOne({ _id: req.params.id }, req.body);
+        await Service.updateOne({ _id: req.params.id }, updateData);
         const updatedService = await Service.findById(req.params.id);
 
         res.json({

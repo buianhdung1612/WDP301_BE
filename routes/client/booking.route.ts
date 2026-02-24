@@ -11,11 +11,12 @@ router.get("/services/:id", serviceController.getService);
 router.get("/service-categories", serviceController.getCategories);
 
 // ================= SERVICE BOOKINGS =================
+router.get("/time-slots", bookingController.getAvailableTimeSlots); // Thường ko cần auth để xem slot
 router.get("/bookings", requireAuth, bookingController.listMyBookings);
 router.get("/bookings/:id", requireAuth, bookingController.getMyBooking);
+router.post("/bookings", infoAuth, bookingController.createBooking); // infoAuth để hỗ trợ cả guest và user
 router.patch("/bookings/:id/cancel", requireAuth, bookingController.cancelMyBooking);
-router.post("/bookings", requireAuth, bookingController.createBooking);
-
+router.get("/export-pdf", bookingController.exportBookingPdf);
 
 
 export default router;

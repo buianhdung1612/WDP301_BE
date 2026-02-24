@@ -5,6 +5,7 @@ import dotenv from "dotenv";
 import adminRoutes from "./routes/admin/index.route";
 import clientRoutes from "./routes/client/index.route";
 import { connectDB } from './configs/database.config';
+import { autoUpdateBookingStatuses } from './helpers/booking-job.helper';
 
 // Load biến môi trường
 dotenv.config();

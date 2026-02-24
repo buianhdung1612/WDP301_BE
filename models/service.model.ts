@@ -27,6 +27,10 @@ const schema = new mongoose.Schema(
                 value: Number // Giá tương ứng
             }
         ],
+        commissionRate: {
+            type: Number,
+            default: 0
+        }, // % hoa hồng cho nhân viên thực hiện (0-100)
         status: {
             type: String,
             enum: ["active", "inactive"],
@@ -36,7 +40,24 @@ const schema = new mongoose.Schema(
             type: Boolean,
             default: false
         },
-        deletedAt: Date
+        deletedAt: Date,
+        minDuration: {
+            type: Number,
+            default: 0
+        },
+        maxDuration: {
+            type: Number,
+            default: 0
+        },
+        surchargeType: {
+            type: String,
+            enum: ["none", "fixed", "per-minute"],
+            default: "none"
+        },
+        surchargeValue: {
+            type: Number,
+            default: 0
+        }
     },
     {
         timestamps: true,

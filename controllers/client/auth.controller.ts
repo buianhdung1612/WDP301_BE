@@ -66,6 +66,7 @@ export const registerPost = async (req: Request, res: Response) => {
             message: "Đăng ký tài khoản thành công!",
             token: tokenUser,
             user: {
+                id: newAccount.id,
                 fullName: newAccount.fullName,
                 email: newAccount.email,
                 phone: newAccount.phone
@@ -135,6 +136,7 @@ export const loginPost = async (req: Request, res: Response) => {
             message: "Đăng nhập thành công!",
             token: tokenUser,
             user: {
+                id: existAccount.id,
                 fullName: existAccount.fullName,
                 email: existAccount.email,
                 phone: existAccount.phone,
@@ -186,8 +188,7 @@ export const forgotPasswordPost = async (req: Request, res: Response) => {
         const forgotPassword = new ForgotPassword(objectForgotPassword);
         await forgotPassword.save();
 
-        // Gửi OTP qua email (Ở đây chỉ console.log vì chưa có helper gửi mail)
-        console.log(`OTP reset password của email ${email} là: ${otp}`);
+        // Send OTP via email (currently saved to DB)
 
         res.json({
             success: true,

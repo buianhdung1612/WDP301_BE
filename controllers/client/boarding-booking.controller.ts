@@ -383,7 +383,7 @@ export const checkOutBoarding = async (req: Request, res: Response) => {
             return res.status(400).json({ message: "Booking is not checked-in" });
         }
 
-        booking.status = "checked-out";
+        booking.boardingStatus = "checked-out";
         booking.actualCheckOutDate = new Date();
         await booking.save({ session });
         await BoardingCage.findByIdAndUpdate(booking.cageId, { status: "available" }, { session });
