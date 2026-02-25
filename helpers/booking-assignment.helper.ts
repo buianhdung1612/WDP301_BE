@@ -51,7 +51,7 @@ export const findBestStaffForBooking = async (
     const assignedBookings = await Booking.find({
         _id: { $ne: excludeBookingId },
         deleted: false,
-        bookingStatus: { $in: ["confirmed", "delayed", "in-progress", "completed"] },
+        bookingStatus: { $in: ["pending", "confirmed", "delayed", "in-progress", "completed"] },
         start: {
             $gte: targetDate.startOf('day').toDate(),
             $lte: targetDate.endOf('day').toDate()

@@ -163,6 +163,23 @@ export const createBooking = async (req: Request, res: Response) => {
         // Adjust final end time based on calculated duration
         const finalEndDate = new Date(startDate.getTime() + finalDuration * 60000);
 
+        // 5.5 Check for staff overlapping bookings (Manually selected staff)
+        if (finalStaffIds.length > 0) {
+            const staffOverlap = await Booking.findOne({
+                staffIds: { $in: finalStaffIds },
+                bookingStatus: { $in: ["pending", "confirmed", "delayed", "in-progress"] },
+                deleted: false,
+                $or: [{ start: { $lt: finalEndDate }, end: { $gt: startDate } }]
+            });
+
+            if (staffOverlap) {
+                return res.status(400).json({
+                    code: 400,
+                    message: `Một hoặc nhiều nhân viên đã có lịch bận khác (${dayjs(staffOverlap.start).format("HH:mm")} - ${dayjs(staffOverlap.end).format("HH:mm")})`
+                });
+            }
+        }
+
         // 6. Check for customer overlapping bookings (Same customer, overlapping time, shared pets)
         if (userId && petIds && petIds.length > 0) {
             const customerOverlap = await Booking.findOne({
@@ -309,7 +326,7 @@ export const assignStaff = async (req: Request, res: Response) => {
             const overlappingBooking = await Booking.findOne({
                 _id: { $ne: booking._id },
                 staffIds: { $in: finalStaffIds },
-                bookingStatus: { $in: ["confirmed", "delayed", "in-progress"] },
+                bookingStatus: { $in: ["pending", "confirmed", "delayed", "in-progress"] },
                 deleted: false,
                 start: { $lt: endDate },
                 end: { $gt: startDate }
