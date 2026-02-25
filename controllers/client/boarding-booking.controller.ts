@@ -14,12 +14,12 @@ const releaseExpiredHolds = async () => {
     await BoardingBooking.updateMany(
         {
             deleted: false,
-            status: "held",
+            boardingStatus: "held",
             holdExpiresAt: { $lte: now }
         },
         {
             $set: {
-                status: "cancelled",
+                boardingStatus: "cancelled",
                 cancelledAt: now,
                 cancelledReason: "Het thoi gian giu phong",
                 cancelledBy: "system"
@@ -108,8 +108,8 @@ export const createBoardingBooking = async (req: Request, res: Response) => {
             cageId,
             deleted: false,
             $or: [
-                { status: { $in: ["confirmed", "checked-in"] } },
-                { status: "held", holdExpiresAt: { $gt: now } }
+                { boardingStatus: { $in: ["confirmed", "checked-in"] } },
+                { boardingStatus: "held", holdExpiresAt: { $gt: now } }
             ],
             checkInDate: { $lt: end },
             checkOutDate: { $gt: start }
@@ -127,7 +127,7 @@ export const createBoardingBooking = async (req: Request, res: Response) => {
         const holdExpiresAt = isPrepaid ? new Date(Date.now() + DEFAULT_HOLD_MINUTES * 60 * 1000) : undefined;
 
         const booking = await BoardingBooking.create({
-            boardingBookingCode: bookingCode,
+            code: bookingCode,
             userId,
             petIds,
             cageId,
@@ -137,18 +137,17 @@ export const createBoardingBooking = async (req: Request, res: Response) => {
             checkInDate: start,
             checkOutDate: end,
             numberOfDays: totalDays,
-            totalDays,
             pricePerDay,
-            basePrice,
-            discountAmount,
-            appliedCoupon,
-            totalPrice,
+            subTotal: basePrice,
+            discount: discountAmount,
+            coupon: appliedCoupon,
+            total: totalPrice,
             paymentMethod,
             paymentGateway,
             holdExpiresAt,
             notes,
             specialCare,
-            status: isPrepaid ? "held" : "confirmed"
+            boardingStatus: isPrepaid ? "held" : "confirmed"
         });
 
         return res.status(201).json({
@@ -181,11 +180,11 @@ export const initiateBoardingPayment = async (req: Request, res: Response) => {
         if (booking.paymentStatus === "paid") {
             return res.status(400).json({ message: "Booking da thanh toan" });
         }
-        if (booking.status !== "held") {
+        if (booking.boardingStatus !== "held") {
             return res.status(400).json({ message: "Booking khong o trang thai giu phong" });
         }
         if (booking.holdExpiresAt && booking.holdExpiresAt <= new Date()) {
-            booking.status = "cancelled";
+            booking.boardingStatus = "cancelled";
             booking.cancelledAt = new Date();
             booking.cancelledBy = "system";
             booking.cancelledReason = "Het thoi gian giu phong";
@@ -215,8 +214,8 @@ export const initiateBoardingPayment = async (req: Request, res: Response) => {
                 app_time: Date.now(),
                 item: JSON.stringify(items),
                 embed_data: JSON.stringify(embed_data),
-                amount: booking.totalPrice || 0,
-                description: `Thanh toan boarding ${booking.boardingBookingCode}`,
+                amount: booking.total || 0,
+                description: `Thanh toan boarding ${booking.code}`,
                 bank_code: "",
                 mac: "",
                 callback_url: `${process.env.BACKEND_URL}/api/v1/client/boarding/payment-zalopay-result`
@@ -254,7 +253,7 @@ export const initiateBoardingPayment = async (req: Request, res: Response) => {
         let vnpUrl = `${process.env.VNPAY_URL}`;
         const returnUrl = `${process.env.BACKEND_URL}/api/v1/client/boarding/payment-vnpay-result`;
         const orderId = `${booking._id}_${Date.now()}`;
-        const amount = booking.totalPrice || 0;
+        const amount = booking.total || 0;
 
         let vnpParams: any = {
             vnp_Version: "2.1.0",
@@ -263,7 +262,7 @@ export const initiateBoardingPayment = async (req: Request, res: Response) => {
             vnp_Locale: "vn",
             vnp_CurrCode: "VND",
             vnp_TxnRef: orderId,
-            vnp_OrderInfo: `Thanh toan boarding ${booking.boardingBookingCode}`,
+            vnp_OrderInfo: `Thanh toan boarding ${booking.code}`,
             vnp_OrderType: "other",
             vnp_Amount: amount * 100,
             vnp_ReturnUrl: returnUrl,
@@ -304,7 +303,7 @@ export const paymentBoardingZalopayResult = async (req: Request, res: Response) 
                 { _id: bookingId, deleted: false },
                 {
                     paymentStatus: "paid",
-                    status: "confirmed",
+                    boardingStatus: "confirmed",
                     holdExpiresAt: null
                 }
             );
@@ -338,7 +337,7 @@ export const paymentBoardingVNPayResult = async (req: Request, res: Response) =>
             { _id: bookingId, deleted: false },
             {
                 paymentStatus: "paid",
-                status: "confirmed",
+                boardingStatus: "confirmed",
                 holdExpiresAt: null
             }
         );
@@ -354,11 +353,11 @@ export const checkInBoarding = async (req: Request, res: Response) => {
         const { id } = req.params;
         const booking = await BoardingBooking.findById(id).session(session);
         if (!booking) return res.status(404).json({ message: "Booking not found" });
-        if (booking.status !== "confirmed") {
+        if (booking.boardingStatus !== "confirmed") {
             return res.status(400).json({ message: "Booking is not ready for check-in" });
         }
 
-        booking.status = "checked-in";
+        booking.boardingStatus = "checked-in";
         booking.actualCheckInDate = new Date();
         await booking.save({ session });
         await BoardingCage.findByIdAndUpdate(booking.cageId, { status: "occupied" }, { session });
@@ -379,7 +378,7 @@ export const checkOutBoarding = async (req: Request, res: Response) => {
         const { id } = req.params;
         const booking = await BoardingBooking.findById(id).session(session);
         if (!booking) return res.status(404).json({ message: "Booking not found" });
-        if (booking.status !== "checked-in") {
+        if (booking.boardingStatus !== "checked-in") {
             return res.status(400).json({ message: "Booking is not checked-in" });
         }
 
@@ -409,11 +408,11 @@ export const cancelBoardingBooking = async (req: Request, res: Response) => {
         if (!booking.userId || booking.userId.toString() !== userId) {
             return res.status(403).json({ message: "Forbidden" });
         }
-        if (booking.status === "checked-in" || booking.status === "checked-out") {
+        if (booking.boardingStatus === "checked-in" || booking.boardingStatus === "checked-out") {
             return res.status(400).json({ message: "Cannot cancel after check-in" });
         }
 
-        booking.status = "cancelled";
+        booking.boardingStatus = "cancelled";
         booking.cancelledAt = new Date();
         booking.cancelledReason = reason || "Khach hang huy";
         booking.cancelledBy = "customer";

@@ -8,12 +8,12 @@ const releaseExpiredHolds = async () => {
   await BoardingBooking.updateMany(
     {
       deleted: false,
-      status: "held",
+      boardingStatus: "held",
       holdExpiresAt: { $lte: now }
     },
     {
       $set: {
-        status: "cancelled",
+        boardingStatus: "cancelled",
         cancelledAt: now,
         cancelledReason: "Het thoi gian giu phong",
         cancelledBy: "system"
@@ -104,16 +104,16 @@ export const listAvailableCages = async (req: Request, res: Response): Promise<v
 
     const expiredBookings = await BoardingBooking.find({
       deleted: false,
-      status: { $in: ["confirmed", "checked-in"] },
+      boardingStatus: { $in: ["confirmed", "checked-in"] },
       checkOutDate: { $lt: now }
     });
 
     for (const booking of expiredBookings) {
-      if (booking.status === "checked-in") {
-        booking.status = "checked-out";
+      if (booking.boardingStatus === "checked-in") {
+        booking.boardingStatus = "checked-out";
         booking.actualCheckOutDate = now;
       } else {
-        booking.status = "cancelled";
+        booking.boardingStatus = "cancelled";
         booking.cancelledAt = now;
         booking.cancelledReason = "Het han dat";
         booking.cancelledBy = "system";
@@ -129,14 +129,14 @@ export const listAvailableCages = async (req: Request, res: Response): Promise<v
       checkInDate: { $lt: end },
       checkOutDate: { $gt: start },
       $or: [
-        { status: { $in: ["confirmed", "checked-in"] } },
-        { status: "held", holdExpiresAt: { $gt: now } }
+        { boardingStatus: { $in: ["confirmed", "checked-in"] } },
+        { boardingStatus: "held", holdExpiresAt: { $gt: now } }
       ]
     }).distinct("cageId");
 
     const excludeIds = busyCageIds
-      .filter((id: string) => mongoose.Types.ObjectId.isValid(id))
-      .map((id: string) => new mongoose.Types.ObjectId(id));
+      .filter((id: any) => id && mongoose.Types.ObjectId.isValid(id))
+      .map((id: any) => new mongoose.Types.ObjectId(id));
 
     const filter: any = {
       deleted: false,

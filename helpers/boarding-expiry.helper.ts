@@ -8,12 +8,12 @@ export const runBoardingExpiryJob = async () => {
     await BoardingBooking.updateMany(
         {
             deleted: false,
-            status: "held",
+            boardingStatus: "held",
             holdExpiresAt: { $lte: now }
         },
         {
             $set: {
-                status: "cancelled",
+                boardingStatus: "cancelled",
                 cancelledAt: now,
                 cancelledReason: "Het thoi gian giu phong",
                 cancelledBy: "system"
@@ -23,23 +23,23 @@ export const runBoardingExpiryJob = async () => {
 
     const expired = await BoardingBooking.find({
         deleted: false,
-        status: { $in: ["confirmed", "checked-in"] },
+        boardingStatus: { $in: ["confirmed", "checked-in"] },
         checkOutDate: { $lt: now }
-    }).select("_id cageId status");
+    }).select("_id cageId boardingStatus");
 
     if (expired.length === 0) return;
 
     const checkedInIds = expired
-        .filter((b) => b.status === "checked-in")
+        .filter((b) => (b as any).boardingStatus === "checked-in")
         .map((b) => b._id);
     const confirmedIds = expired
-        .filter((b) => b.status === "confirmed")
+        .filter((b) => (b as any).boardingStatus === "confirmed")
         .map((b) => b._id);
 
     if (checkedInIds.length > 0) {
         await BoardingBooking.updateMany(
             { _id: { $in: checkedInIds } },
-            { $set: { status: "checked-out", actualCheckOutDate: now } }
+            { $set: { boardingStatus: "checked-out", actualCheckOutDate: now } }
         );
     }
 
@@ -48,7 +48,7 @@ export const runBoardingExpiryJob = async () => {
             { _id: { $in: confirmedIds } },
             {
                 $set: {
-                    status: "cancelled",
+                    boardingStatus: "cancelled",
                     cancelledAt: now,
                     cancelledReason: "Hết hạn đặt",
                     cancelledBy: "system"
@@ -59,8 +59,8 @@ export const runBoardingExpiryJob = async () => {
 
     const cageObjectIds = expired
         .map((b) => b.cageId)
-        .filter((id): id is string => typeof id === "string" && mongoose.Types.ObjectId.isValid(id))
-        .map((id) => new mongoose.Types.ObjectId(id));
+        .filter((id) => id && mongoose.Types.ObjectId.isValid(id as any))
+        .map((id) => new mongoose.Types.ObjectId(id as any));
 
     if (cageObjectIds.length > 0) {
         await BoardingCage.updateMany(

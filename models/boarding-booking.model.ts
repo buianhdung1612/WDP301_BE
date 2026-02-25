@@ -20,6 +20,10 @@ const schema = new mongoose.Schema(
         checkOutDate: Date, // Ngày trả dự kiến
         numberOfDays: Number, // Số ngày lưu trú
 
+        fullName: String,
+        phone: String,
+        email: String,
+
         // Giá cả - Đồng bộ với Order
         pricePerDay: Number, // Giá mỗi ngày
         subTotal: Number, // Tạm tính (pricePerDay * numberOfDays)
@@ -32,7 +36,7 @@ const schema = new mongoose.Schema(
 
         paymentMethod: {
             type: String,
-            enum: ["money", "vnpay", "zalopay"],
+            enum: ["money", "vnpay", "zalopay", "pay_at_site"],
             default: "money"
         },
         paymentStatus: {
@@ -40,7 +44,6 @@ const schema = new mongoose.Schema(
             enum: ["unpaid", "paid", "refunded"],
             default: "unpaid"
         },
-        paymentMethod: String,
         paymentGateway: String,
         holdExpiresAt: Date,
 
