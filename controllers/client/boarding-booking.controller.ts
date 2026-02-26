@@ -1,6 +1,7 @@
 import axios from "axios";
 import hmacSHA256 from "crypto-js/hmac-sha256";
 import moment from "moment";
+import { getApiPayment } from "../../configs/setting.config";
 import { Request, Response } from "express";
 import mongoose from "mongoose";
 import BoardingBooking from "../../models/boarding-booking.model";
@@ -108,7 +109,7 @@ export const createBoardingBooking = async (req: Request, res: Response) => {
             cageId,
             deleted: false,
             $or: [
-                { boardingStatus: { $in: ["confirmed", "checked-in"] } },
+                { boardingStatus: { $in: ["pending", "confirmed", "checked-in"] } },
                 { boardingStatus: "held", holdExpiresAt: { $gt: now } }
             ],
             checkInDate: { $lt: end },
@@ -195,11 +196,13 @@ export const initiateBoardingPayment = async (req: Request, res: Response) => {
         booking.paymentGateway = gateway;
         await booking.save();
 
+        const paymentSettings = await getApiPayment();
+
         if (gateway === "zalopay") {
             const config = {
-                app_id: `${process.env.ZALOPAY_APPID}`,
-                key1: `${process.env.ZALOPAY_KEY1}`,
-                endpoint: `${process.env.ZALOPAY_DOMAIN}/v2/create`
+                app_id: `${paymentSettings.zaloAppId}`,
+                key1: `${paymentSettings.zaloKey1}`,
+                endpoint: `${paymentSettings.zaloDomain}/v2/create`
             };
 
             const embed_data = {
@@ -248,9 +251,9 @@ export const initiateBoardingPayment = async (req: Request, res: Response) => {
             req.connection.remoteAddress ||
             req.socket.remoteAddress ||
             "127.0.0.1";
-        const tmnCode = `${process.env.VNPAY_TMN_CODE}`;
-        const secretKey = `${process.env.VNPAY_HASH_SECRET}`;
-        let vnpUrl = `${process.env.VNPAY_URL}`;
+        const tmnCode = `${paymentSettings.vnpTmnCode}`;
+        const secretKey = `${paymentSettings.vnpHashSecret}`;
+        let vnpUrl = `${paymentSettings.vnpUrl}`;
         const returnUrl = `${process.env.BACKEND_URL}/api/v1/client/boarding/payment-vnpay-result`;
         const orderId = `${booking._id}_${Date.now()}`;
         const amount = booking.total || 0;
@@ -286,7 +289,8 @@ export const initiateBoardingPayment = async (req: Request, res: Response) => {
 };
 
 export const paymentBoardingZalopayResult = async (req: Request, res: Response) => {
-    const config = { key2: `${process.env.ZALOPAY_KEY2}` };
+    const paymentSettings = await getApiPayment();
+    const config = { key2: `${paymentSettings.zaloKey2}` };
     const result: any = {};
     try {
         const dataStr = req.body.data;
@@ -327,7 +331,8 @@ export const paymentBoardingVNPayResult = async (req: Request, res: Response) =>
     const querystring = require("qs");
     const signData = querystring.stringify(vnpParams, { encode: false });
     const crypto = require("crypto");
-    const hmac = crypto.createHmac("sha512", `${process.env.VNPAY_HASH_SECRET}`);
+    const paymentSettings = await getApiPayment();
+    const hmac = crypto.createHmac("sha512", `${paymentSettings.vnpHashSecret}`);
     const signed = hmac.update(Buffer.from(signData, "utf-8")).digest("hex");
 
     if (secureHash === signed) {

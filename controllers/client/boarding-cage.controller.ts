@@ -129,7 +129,7 @@ export const listAvailableCages = async (req: Request, res: Response): Promise<v
       checkInDate: { $lt: end },
       checkOutDate: { $gt: start },
       $or: [
-        { boardingStatus: { $in: ["confirmed", "checked-in"] } },
+        { boardingStatus: { $in: ["pending", "confirmed", "checked-in"] } },
         { boardingStatus: "held", holdExpiresAt: { $gt: now } }
       ]
     }).distinct("cageId");

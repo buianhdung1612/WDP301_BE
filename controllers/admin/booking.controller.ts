@@ -776,16 +776,53 @@ export const rescheduleBooking = async (req: Request, res: Response) => {
             return res.status(404).json({ code: 404, message: "Lịch đặt không tồn tại" });
         }
 
-        // Cập nhật thời gian mới và giải phóng slot cũ
-        if (start) booking.start = new Date(start);
-        if (end) booking.end = new Date(end);
+        const newStart = start ? new Date(start) : booking.start as Date;
+        const newEnd = end ? new Date(end) : booking.end as Date;
+        const finalStaffIds = (staffIds && Array.isArray(staffIds) && staffIds.length > 0)
+            ? staffIds
+            : (staffId ? [staffId] : (booking.staffIds as any[]));
 
-        if (staffIds && Array.isArray(staffIds) && staffIds.length > 0) {
-            booking.staffIds = staffIds;
-        } else if (staffId) {
-            booking.staffIds = [staffId];
+        // 1. Kiểm tra trùng lịch nhân viên
+        if (finalStaffIds.length > 0) {
+            const staffOverlap = await Booking.findOne({
+                _id: { $ne: booking._id },
+                staffIds: { $in: finalStaffIds },
+                bookingStatus: { $in: ["pending", "confirmed", "delayed", "in-progress", "completed"] },
+                deleted: false,
+                $or: [{ start: { $lt: newEnd }, end: { $gt: newStart } }]
+            });
+
+            if (staffOverlap) {
+                return res.status(400).json({
+                    code: 400,
+                    message: `Nhân viên đã có lịch bận khác (${dayjs(staffOverlap.start).format("HH:mm")} - ${dayjs(staffOverlap.end).format("HH:mm")})`
+                });
+            }
         }
 
+        // 2. Kiểm tra trùng lịch khách hàng (thú cưng)
+        if (booking.userId && booking.petIds && booking.petIds.length > 0) {
+            const customerOverlap = await Booking.findOne({
+                _id: { $ne: booking._id },
+                userId: booking.userId,
+                bookingStatus: { $in: ["pending", "confirmed", "delayed", "in-progress", "completed"] },
+                deleted: false,
+                petIds: { $in: booking.petIds },
+                $or: [{ start: { $lt: newEnd }, end: { $gt: newStart } }]
+            });
+
+            if (customerOverlap) {
+                return res.status(400).json({
+                    code: 400,
+                    message: "Thú cưng này đã có lịch đặt khác trong khung giờ này."
+                });
+            }
+        }
+
+        // Cập nhật thời gian mới
+        booking.start = newStart;
+        booking.end = newEnd;
+        booking.staffIds = finalStaffIds;
         booking.bookingStatus = "confirmed";
 
         await booking.save();
@@ -891,7 +928,7 @@ export const updateBooking = async (req: Request, res: Response) => {
             const customerOverlap = await Booking.findOne({
                 _id: { $ne: id },
                 userId: checkUserId,
-                bookingStatus: { $nin: ["cancelled", "completed"] },
+                bookingStatus: { $in: ["pending", "confirmed", "delayed", "in-progress", "completed"] },
                 deleted: false,
                 petIds: { $in: checkPetIds },
                 $or: [
@@ -903,6 +940,25 @@ export const updateBooking = async (req: Request, res: Response) => {
                 return res.status(400).json({
                     code: 400,
                     message: "Thú cưng này đã có lịch đặt khác trong khung giờ này. Vui lòng kiểm tra lại!"
+                });
+            }
+        }
+
+        // Staff overlap check
+        const checkStaffIds = req.body.staffIds || (req.body.staffId ? [req.body.staffId] : (booking.staffIds as any[]));
+        if (checkStaffIds && checkStaffIds.length > 0) {
+            const staffOverlap = await Booking.findOne({
+                _id: { $ne: id },
+                staffIds: { $in: checkStaffIds },
+                bookingStatus: { $in: ["pending", "confirmed", "delayed", "in-progress", "completed"] },
+                deleted: false,
+                $or: [{ start: { $lt: checkEnd }, end: { $gt: checkStart } }]
+            });
+
+            if (staffOverlap) {
+                return res.status(400).json({
+                    code: 400,
+                    message: `Nhân viên đã có lịch bận khác (${dayjs(staffOverlap.start).format("HH:mm")} - ${dayjs(staffOverlap.end).format("HH:mm")})`
                 });
             }
         }
@@ -978,7 +1034,7 @@ export const getAvailableSlots = async (req: Request, res: Response) => {
         // 2. Lấy tất cả Booking của các nhân viên này trong ngày
         const bookings = await Booking.find({
             staffIds: { $in: staffIds },
-            bookingStatus: { $in: ["confirmed", "delayed", "in-progress"] },
+            bookingStatus: { $in: ["pending", "confirmed", "delayed", "in-progress"] },
             deleted: false,
             $or: [
                 { start: { $gte: new Date(queryDate.setHours(0, 0, 0, 0)), $lt: new Date(queryDate.setHours(23, 59, 59, 999)) } },
@@ -1176,7 +1232,7 @@ export const getRecommendedStaff = async (req: Request, res: Response) => {
 
         // 2. Lấy tất cả các ca đặt lịch của các nhân viên đó trong ngày
         const allBookingsToday = await Booking.find({
-            bookingStatus: { $in: ["confirmed", "delayed", "in-progress", "completed"] },
+            bookingStatus: { $in: ["pending", "confirmed", "delayed", "in-progress", "completed"] },
             deleted: false,
             start: {
                 $gte: dayjs(startDate).startOf('day').toDate(),
@@ -1282,7 +1338,7 @@ export const exportDailyStaffSchedule = async (req: Request, res: Response) => {
                 $gte: selectedDate.startOf('day').toDate(),
                 $lte: selectedDate.endOf('day').toDate()
             },
-            bookingStatus: { $in: ["confirmed", "delayed", "in-progress", "completed"] }
+            bookingStatus: { $in: ["pending", "confirmed", "delayed", "in-progress", "completed"] }
         })
             .populate("staffIds", "fullName")
             .populate("serviceId", "name")

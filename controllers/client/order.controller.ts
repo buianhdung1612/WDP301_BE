@@ -10,6 +10,7 @@ import { getInfoAddress } from '../../helpers/location.helper';
 import hmacSHA256 from 'crypto-js/hmac-sha256';
 import moment from 'moment';
 import puppeteer from 'puppeteer';
+import { getApiPayment, getApiShipping } from '../../configs/setting.config';
 
 // [POST] /api/v1/client/order/create
 export const createPost = async (req: Request, res: Response) => {
@@ -231,9 +232,11 @@ export const createPost = async (req: Request, res: Response) => {
             }
         };
 
+        const shippingSettings = await getApiShipping();
+
         const goshipRes = await axios.post("https://sandbox.goship.io/api/v2/shipments", dataGoShip, {
             headers: {
-                Authorization: `Bearer ${process.env.GOSHIP_TOKEN}`,
+                Authorization: `Bearer ${shippingSettings?.tokenGoShip || ""}`,
                 "Content-Type": "application/json"
             }
         });
@@ -330,11 +333,13 @@ export const paymentZaloPay = async (req: Request, res: Response) => {
         return;
     }
 
+    const paymentSettings = await getApiPayment();
+
     const config = {
-        app_id: `${process.env.ZALOPAY_APPID}`,
-        key1: `${process.env.ZALOPAY_KEY1}`,
-        key2: `${process.env.ZALOPAY_KEY2}`,
-        endpoint: `${process.env.ZALOPAY_DOMAIN}/v2/create`
+        app_id: `${paymentSettings.zaloAppId}`,
+        key1: `${paymentSettings.zaloKey1}`,
+        key2: `${paymentSettings.zaloKey2}`,
+        endpoint: `${paymentSettings.zaloDomain}/v2/create`
     };
 
     const successPath = orderCode ? `/order/success?orderCode=${orderCode}&phone=${phone}` : `/booking/list`; // Admin might want to go back to list
@@ -367,8 +372,10 @@ export const paymentZaloPay = async (req: Request, res: Response) => {
 }
 
 export const paymentZalopayResult = async (req: Request, res: Response) => {
+    const paymentSettings = await getApiPayment();
+
     const config = {
-        key2: `${process.env.ZALOPAY_KEY2}`
+        key2: `${paymentSettings.zaloKey2}`
     };
 
     let result: any = {};
@@ -453,9 +460,11 @@ export const paymentVNPay = async (req: Request, res: Response) => {
         req.connection.remoteAddress ||
         req.socket.remoteAddress;
 
-    let tmnCode = `${process.env.VNPAY_TMN_CODE}`;
-    let secretKey = `${process.env.VNPAY_HASH_SECRET}`;
-    let vnpUrl = `${process.env.VNPAY_URL}`;
+    const paymentSettings = await getApiPayment();
+
+    let tmnCode = `${paymentSettings.vnpTmnCode}`;
+    let secretKey = `${paymentSettings.vnpHashSecret}`;
+    let vnpUrl = `${paymentSettings.vnpUrl}`;
     let returnUrl = `http://localhost:3000/api/v1/client/order/payment-vnpay-result`;
     let orderId = `${phone}-${code}-${Date.now()}`;
     let amount = target.total || 0;
@@ -503,7 +512,9 @@ export const paymentVNPayResult = async (req: Request, res: Response) => {
 
     vnp_Params = sortObject(vnp_Params);
 
-    let secretKey = `${process.env.VNPAY_HASH_SECRET}`;
+    const paymentSettings = await getApiPayment();
+
+    let secretKey = `${paymentSettings.vnpHashSecret}`;
 
     let querystring = require('qs');
     let signData = querystring.stringify(vnp_Params, { encode: false });
