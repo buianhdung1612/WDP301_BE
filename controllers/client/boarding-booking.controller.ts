@@ -38,6 +38,15 @@ const sortObject = (obj: Record<string, any>) => {
     return sorted;
 };
 
+const pickFirstQueryValue = (value: unknown): string | undefined => {
+    if (typeof value === "string") return value;
+    if (Array.isArray(value)) {
+        const first = value[0];
+        return typeof first === "string" ? first : undefined;
+    }
+    return undefined;
+};
+
 export const createBoardingBooking = async (req: Request, res: Response) => {
     try {
         const user = res.locals.accountUser;
@@ -71,6 +80,9 @@ export const createBoardingBooking = async (req: Request, res: Response) => {
         if (!petIds || petIds.length === 0) {
             return res.status(400).json({ message: "Vui long chon thu cung" });
         }
+        if (petIds.length !== 1) {
+            return res.status(400).json({ message: "Moi lich khach san chi ho tro 1 thu cung" });
+        }
 
         const start = new Date(checkInDate);
         const end = new Date(checkOutDate);
@@ -93,17 +105,37 @@ export const createBoardingBooking = async (req: Request, res: Response) => {
 
         const pets = await Pet.find({ _id: { $in: petIds }, userId, deleted: false });
         if (pets.length !== petIds.length) {
-            return res.status(400).json({ message: "Mot hoac nhieu thu cung khong hop le" });
+            return res.status(400).json({ message: "Một hoặc nhiều thú cưng không hợp lệ" });
         }
         if (cage.maxWeightCapacity) {
             const hasOverWeight = pets.some((pet) => (pet.weight || 0) > cage.maxWeightCapacity!);
             if (hasOverWeight) {
-                return res.status(400).json({ message: "Thu cung vuot qua trong luong cho phep" });
+                return res.status(400).json({ message: "Thú cưng vượt quá trọng lượng cho phép" });
             }
         }
 
         await releaseExpiredHolds();
         const now = new Date();
+
+        const petOverlap = await BoardingBooking.findOne({
+            deleted: false,
+            petIds: { $in: petIds },
+            $or: [
+                { boardingStatus: { $in: ["confirmed", "checked-in"] } },
+                { boardingStatus: "held", holdExpiresAt: { $gt: now } }
+            ],
+            checkInDate: { $lt: end },
+            checkOutDate: { $gt: start }
+        }).lean();
+        if (petOverlap) {
+            const conflictPet = pets.find((pet: any) =>
+                (petOverlap.petIds || []).some((id: any) => String(id) === String(pet._id))
+            );
+            const petName = conflictPet?.name || "Thú cưng đã chọn";
+            return res.status(400).json({
+                message: `${petName} đã đặt chuồng trong khoảng ngày này. Vui lòng chọn ngày khác hoặc xóa lịch đặt hiện tại.`
+            });
+        }
 
         const overlap = await BoardingBooking.findOne({
             cageId,
@@ -175,7 +207,7 @@ export const initiateBoardingPayment = async (req: Request, res: Response) => {
         }
 
         const booking = await BoardingBooking.findById(id);
-        if (!booking || booking.deleted || booking.userId !== userId) {
+        if (!booking || booking.deleted || String(booking.userId) !== userId) {
             return res.status(404).json({ message: "Booking not found" });
         }
         if (booking.paymentStatus === "paid") {
@@ -205,8 +237,13 @@ export const initiateBoardingPayment = async (req: Request, res: Response) => {
                 endpoint: `${paymentSettings.zaloDomain}/v2/create`
             };
 
+            const domainWebsite = String(process.env.DOMAIN_WEBSITE || "").replace(/\/+$/, "");
+            const frontendSuccessUrl = domainWebsite
+                ? `${domainWebsite}/hotels/success?bookingId=${booking._id}`
+                : `${process.env.BACKEND_URL}/api/v1/client/boarding/payment-zalopay-return?bookingId=${booking._id}`;
+
             const embed_data = {
-                redirecturl: `${process.env.DOMAIN_WEBSITE}/khach-san/${booking.cageId}`
+                redirecturl: frontendSuccessUrl
             };
             const items = [{}];
             const transID = Math.floor(Math.random() * 1000000);
@@ -293,8 +330,13 @@ export const paymentBoardingZalopayResult = async (req: Request, res: Response) 
     const config = { key2: `${paymentSettings.zaloKey2}` };
     const result: any = {};
     try {
-        const dataStr = req.body.data;
-        const reqMac = req.body.mac;
+        const dataStr = req.body?.data;
+        const reqMac = req.body?.mac;
+        if (!dataStr || !reqMac) {
+            result.return_code = 0;
+            result.return_message = "missing callback payload";
+            return res.json(result);
+        }
         const mac = hmacSHA256(dataStr, config.key2).toString();
 
         if (reqMac !== mac) {
@@ -303,14 +345,21 @@ export const paymentBoardingZalopayResult = async (req: Request, res: Response) 
         } else {
             const dataJson = JSON.parse(dataStr);
             const bookingId = dataJson.app_user;
-            await BoardingBooking.findOneAndUpdate(
-                { _id: bookingId, deleted: false },
-                {
-                    paymentStatus: "paid",
-                    boardingStatus: "confirmed",
-                    holdExpiresAt: null
-                }
-            );
+            const isPaymentSuccess =
+                Number(dataJson?.zp_trans_id || 0) > 0 ||
+                String(dataJson?.status || dataJson?.return_code || "").toLowerCase() === "1" ||
+                String(dataJson?.status || dataJson?.return_code || "").toLowerCase() === "success";
+
+            if (isPaymentSuccess) {
+                await BoardingBooking.findOneAndUpdate(
+                    { _id: bookingId, deleted: false, paymentStatus: { $ne: "paid" } },
+                    {
+                        paymentStatus: "paid",
+                        boardingStatus: "confirmed",
+                        holdExpiresAt: null
+                    }
+                );
+            }
             result.return_code = 1;
             result.return_message = "success";
         }
@@ -321,9 +370,42 @@ export const paymentBoardingZalopayResult = async (req: Request, res: Response) 
     return res.json(result);
 };
 
+export const paymentBoardingZalopayReturn = async (req: Request, res: Response) => {
+    try {
+        const bookingId = pickFirstQueryValue(req.query.bookingId);
+        const status = pickFirstQueryValue(req.query.status);
+        const returnCode = pickFirstQueryValue(req.query.returncode);
+        const resultCode = pickFirstQueryValue(req.query.resultcode);
+        const isPaymentSuccess =
+            status === "1" ||
+            returnCode === "1" ||
+            resultCode === "1" ||
+            String(status || "").toLowerCase() === "success" ||
+            String(returnCode || "").toLowerCase() === "success" ||
+            String(resultCode || "").toLowerCase() === "success";
+
+        if (bookingId && mongoose.Types.ObjectId.isValid(bookingId) && isPaymentSuccess) {
+            await BoardingBooking.findOneAndUpdate(
+                { _id: bookingId, deleted: false, paymentStatus: { $ne: "paid" } },
+                {
+                    paymentStatus: "paid",
+                    boardingStatus: "confirmed",
+                    holdExpiresAt: null
+                }
+            );
+            return res.redirect(`${process.env.DOMAIN_WEBSITE}/hotels/success?bookingId=${bookingId}&payment=success`);
+        }
+
+        const safeBookingId = bookingId && mongoose.Types.ObjectId.isValid(bookingId) ? bookingId : "";
+        return res.redirect(`${process.env.DOMAIN_WEBSITE}/hotels/success?bookingId=${safeBookingId}&payment=failed`);
+    } catch (error: any) {
+        return res.redirect(`${process.env.DOMAIN_WEBSITE}/hotels/success?payment=failed`);
+    }
+};
+
 export const paymentBoardingVNPayResult = async (req: Request, res: Response) => {
     let vnpParams = req.query as Record<string, any>;
-    const secureHash = vnpParams.vnp_SecureHash;
+    const secureHash = pickFirstQueryValue(vnpParams.vnp_SecureHash);
     delete vnpParams.vnp_SecureHash;
     delete vnpParams.vnp_SecureHashType;
     vnpParams = sortObject(vnpParams);
@@ -336,17 +418,25 @@ export const paymentBoardingVNPayResult = async (req: Request, res: Response) =>
     const signed = hmac.update(Buffer.from(signData, "utf-8")).digest("hex");
 
     if (secureHash === signed) {
-        const txnRef = String(vnpParams.vnp_TxnRef || "");
+        const txnRef = String(pickFirstQueryValue(vnpParams.vnp_TxnRef) || "");
+        const responseCode = String(pickFirstQueryValue(vnpParams.vnp_ResponseCode) || "");
+        const transactionStatus = String(pickFirstQueryValue(vnpParams.vnp_TransactionStatus) || "");
         const bookingId = txnRef.split("_")[0];
-        await BoardingBooking.findOneAndUpdate(
-            { _id: bookingId, deleted: false },
-            {
-                paymentStatus: "paid",
-                boardingStatus: "confirmed",
-                holdExpiresAt: null
-            }
-        );
-        return res.redirect(`${process.env.DOMAIN_WEBSITE}/khach-san`);
+        const isPaymentSuccess = responseCode === "00" && (!transactionStatus || transactionStatus === "00");
+
+        if (isPaymentSuccess) {
+            await BoardingBooking.findOneAndUpdate(
+                { _id: bookingId, deleted: false, paymentStatus: { $ne: "paid" } },
+                {
+                    paymentStatus: "paid",
+                    boardingStatus: "confirmed",
+                    holdExpiresAt: null
+                }
+            );
+            return res.redirect(`${process.env.DOMAIN_WEBSITE}/hotels/success?bookingId=${bookingId}&payment=success`);
+        }
+
+        return res.redirect(`${process.env.DOMAIN_WEBSITE}/hotels/success?bookingId=${bookingId}&payment=failed`);
     }
     return res.status(400).json({ message: "Invalid signature" });
 };
@@ -432,6 +522,7 @@ export const listMyBoardingBookings = async (req: Request, res: Response) => {
     try {
         const userId = res.locals.accountUser?._id?.toString();
         if (!userId) return res.status(401).json({ message: "Vui long dang nhap" });
+        await releaseExpiredHolds();
         const bookings = await BoardingBooking.find({ userId, deleted: false }).sort({ createdAt: -1 });
         return res.json(bookings);
     } catch (error: any) {
@@ -441,6 +532,7 @@ export const listMyBoardingBookings = async (req: Request, res: Response) => {
 
 export const getMyBoardingBookingDetail = async (req: Request, res: Response) => {
     try {
+        await releaseExpiredHolds();
         const userId = res.locals.accountUser?._id?.toString();
         const rawId = req.params.id;
         const id = Array.isArray(rawId) ? rawId[0] : rawId;
@@ -453,7 +545,9 @@ export const getMyBoardingBookingDetail = async (req: Request, res: Response) =>
             _id: id,
             userId,
             deleted: false
-        }).lean();
+        })
+            .populate("feedingSchedule.staffId", "fullName employeeCode")
+            .lean();
 
         if (!booking) return res.status(404).json({ message: "Booking not found" });
 

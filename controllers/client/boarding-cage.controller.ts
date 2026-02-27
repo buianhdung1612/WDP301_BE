@@ -22,6 +22,35 @@ const releaseExpiredHolds = async () => {
   );
 };
 
+const legacySizeMap: Record<string, string> = {
+  C: "S",
+  B: "M",
+  A: "L",
+  XL: "XL_XXL",
+  XXL: "XL_XXL",
+};
+
+const sizeQueryMap: Record<string, string[]> = {
+  S: ["S", "C"],
+  M: ["M", "B"],
+  L: ["L", "A"],
+  XL_XXL: ["XL_XXL", "XL", "XXL"],
+};
+
+const normalizeCageSize = (value: unknown): string | undefined => {
+  if (typeof value !== "string") return undefined;
+  const raw = value.trim().toUpperCase();
+  if (!raw) return undefined;
+  return legacySizeMap[raw] || raw;
+};
+
+const buildSizeFilter = (value: unknown) => {
+  const normalized = normalizeCageSize(value);
+  if (!normalized) return undefined;
+  const matched = sizeQueryMap[normalized] || [normalized];
+  return { $in: matched };
+};
+
 export const createBoardingCage = async (req: Request, res: Response): Promise<void> => {
   try {
     const cage = await BoardingCage.create(req.body);
@@ -39,13 +68,16 @@ export const getAllBoardingCages = async (req: Request, res: Response): Promise<
   try {
     const { status, type, size } = req.query;
 
-    const filter: { deleted: boolean; status?: string; type?: string; size?: string } = {
+    const filter: any = {
       deleted: false,
     };
 
     if (typeof status === "string") filter.status = status;
     if (typeof type === "string") filter.type = type;
-    if (typeof size === "string") filter.size = size;
+    if (typeof size === "string") {
+      const sizeFilter = buildSizeFilter(size);
+      if (sizeFilter) filter.size = sizeFilter;
+    }
 
     const cages = await BoardingCage.find(filter).sort({ createdAt: -1 });
     res.json(cages);
@@ -145,7 +177,10 @@ export const listAvailableCages = async (req: Request, res: Response): Promise<v
     };
 
     if (typeof type === "string") filter.type = type;
-    if (typeof size === "string") filter.size = size;
+    if (typeof size === "string") {
+      const sizeFilter = buildSizeFilter(size);
+      if (sizeFilter) filter.size = sizeFilter;
+    }
 
     const cages = await BoardingCage.find(filter);
 

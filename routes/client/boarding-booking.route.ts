@@ -9,6 +9,10 @@ router.post(
   boardingBookingController.paymentBoardingZalopayResult
 );
 router.get(
+  "/payment-zalopay-return",
+  boardingBookingController.paymentBoardingZalopayReturn
+);
+router.get(
   "/payment-vnpay-result",
   boardingBookingController.paymentBoardingVNPayResult
 );
