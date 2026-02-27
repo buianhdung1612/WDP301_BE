@@ -34,7 +34,16 @@ export const permissionList = [
     { id: "breed_create", name: "Tạo giống thú cưng" },
     { id: "breed_edit", name: "Sửa giống thú cưng" },
     { id: "breed_delete", name: "Xóa giống thú cưng" },
-
+    { id: "boarding_cage_view", name: "Xem danh sách chuồng" },
+    { id: "boarding_cage_create", name: "Tạo mới chuồng" },
+    { id: "boarding_cage_edit", name: "Chỉnh sửa chuồng" },
+    { id: "boarding_cage_delete", name: "Xóa chuồng" },
+    { id: "boarding_booking_view", name: "Xem danh sách đặt khách sạn" },
+    { id: "boarding_booking_create", name: "Tạo lịch khách sạn" },
+    { id: "boarding_booking_edit", name: "Cập nhật lịch khách sạn" },
+    { id: "boarding_booking_delete", name: "Hủy/Xóa lịch khách sạn" },
+    { id: "boarding_booking_checkin", name: "Xác nhận nhận chuồng (Check-in)" },
+    { id: "boarding_booking_checkout", name: "Xác nhận trả chuồng (Check-out)" },
     // Quản lý Bài viết
     { id: "blog_view", name: "Xem danh sách bài viết" },
     { id: "blog_create", name: "Tạo bài viết mới" },

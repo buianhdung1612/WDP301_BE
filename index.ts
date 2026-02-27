@@ -18,6 +18,7 @@ connectDB();
 
 // Cho phép gửi data lên dạng json
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
 
 // CORS

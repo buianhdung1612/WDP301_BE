@@ -10,7 +10,7 @@ const schema = new mongoose.Schema(
         },
         size: {
             type: String,
-            enum: ["M", "L", "XL", "C", "B", "A"],
+            enum: ["S", "M", "L", "XL_XXL", "C", "B", "A", "XL"],
             required: true
         },
         

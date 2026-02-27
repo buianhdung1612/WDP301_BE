@@ -1,43 +1,97 @@
-import mongoose from "mongoose";
+﻿import mongoose from "mongoose";
+
+const feedingScheduleSchema = new mongoose.Schema(
+    {
+        time: String,
+        food: String,
+        amount: String,
+        note: String,
+        staffId: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "AccountAdmin"
+        },
+        staffName: String,
+        status: {
+            type: String,
+            enum: ["pending", "done", "skipped"],
+            default: "pending"
+        },
+        doneAt: Date
+    },
+    { _id: true }
+);
+
+const exerciseScheduleSchema = new mongoose.Schema(
+    {
+        time: String,
+        activity: String,
+        durationMinutes: Number,
+        note: String,
+        status: {
+            type: String,
+            enum: ["pending", "done", "skipped"],
+            default: "pending"
+        },
+        doneAt: Date
+    },
+    { _id: true }
+);
+
+const shiftChecklistSchema = new mongoose.Schema(
+    {
+        shift: {
+            type: String,
+            enum: ["morning", "afternoon", "night"],
+            default: "morning"
+        },
+        title: String,
+        note: String,
+        checked: {
+            type: Boolean,
+            default: false
+        },
+        checkedAt: Date
+    },
+    { _id: true }
+);
 
 const schema = new mongoose.Schema(
     {
-        code: String, // Mã lịch lưu trú (VD: BRD20250123001) - Đồng bộ với Order
+        code: String,
         userId: {
             type: mongoose.Schema.Types.ObjectId,
             ref: "AccountUser"
-        }, // ID chủ thú cưng
+        },
         petIds: [{
             type: mongoose.Schema.Types.ObjectId,
             ref: "Pet"
-        }], // Danh sách ID thú cưng
+        }],
         cageId: {
             type: mongoose.Schema.Types.ObjectId,
             ref: "BoardingCage"
-        }, // ID chuồng/phòng
+        },
 
-        checkInDate: Date, // Ngày nhận dự kiến
-        checkOutDate: Date, // Ngày trả dự kiến
-        numberOfDays: Number, // Số ngày lưu trú
+        checkInDate: Date,
+        checkOutDate: Date,
+        numberOfDays: Number,
 
         fullName: String,
         phone: String,
         email: String,
 
-        // Giá cả - Đồng bộ với Order
-        pricePerDay: Number, // Giá mỗi ngày
-        subTotal: Number, // Tạm tính (pricePerDay * numberOfDays)
-        coupon: String, // Mã giảm giá
+        pricePerDay: Number,
+        subTotal: Number,
+        coupon: String,
         discount: {
             type: Number,
             default: 0
-        }, // Số tiền giảm
-        total: Number, // Tổng phải thanh toán thực tế
+        },
+        total: Number,
 
         paymentMethod: {
             type: String,
-            enum: ["money", "vnpay", "zalopay", "pay_at_site"],
-            default: "money"
+            enum: ["money", "vnpay", "zalopay", "pay_at_site", "prepaid"],
+            default: "pay_at_site"
         },
         paymentStatus: {
             type: String,
@@ -47,10 +101,14 @@ const schema = new mongoose.Schema(
         paymentGateway: String,
         holdExpiresAt: Date,
 
-        notes: String, // Ghi chú (dị ứng, thức ăn yêu thích, etc.)
-        specialCare: String, // Chăm sóc đặc biệt
+        notes: String,
+        specialCare: String,
 
-        // Trạng thái lưu trú - Đồng bộ cách đặt tên
+        // Boarding care management
+        feedingSchedule: [feedingScheduleSchema],
+        exerciseSchedule: [exerciseScheduleSchema],
+        shiftChecklist: [shiftChecklistSchema],
+
         boardingStatus: {
             type: String,
             enum: ["pending", "held", "confirmed", "checked-in", "checked-out", "cancelled"],
@@ -61,8 +119,8 @@ const schema = new mongoose.Schema(
         cancelledAt: Date,
         cancelledBy: String,
 
-        actualCheckInDate: Date, // Ngày nhận thực tế
-        actualCheckOutDate: Date, // Ngày trả thực tế
+        actualCheckInDate: Date,
+        actualCheckOutDate: Date,
 
         deleted: {
             type: Boolean,
