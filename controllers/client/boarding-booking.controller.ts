@@ -547,6 +547,7 @@ export const getMyBoardingBookingDetail = async (req: Request, res: Response) =>
             deleted: false
         })
             .populate("feedingSchedule.staffId", "fullName employeeCode")
+            .populate("exerciseSchedule.staffId", "fullName employeeCode")
             .lean();
 
         if (!booking) return res.status(404).json({ message: "Booking not found" });

@@ -27,6 +27,11 @@ const exerciseScheduleSchema = new mongoose.Schema(
         activity: String,
         durationMinutes: Number,
         note: String,
+        staffId: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "AccountAdmin"
+        },
+        staffName: String,
         status: {
             type: String,
             enum: ["pending", "done", "skipped"],

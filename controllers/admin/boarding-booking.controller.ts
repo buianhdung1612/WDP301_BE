@@ -6,6 +6,7 @@ import AccountAdmin from "../../models/account-admin.model";
 import AccountUser from "../../models/account-user.model";
 import Pet from "../../models/pet.model";
 import Role from "../../models/role.model";
+import WorkSchedule from "../../models/work-schedule.model";
 
 const pickParam = (value: unknown): string | undefined => {
     if (typeof value === "string") return value;
@@ -27,13 +28,6 @@ const normalizeTaskStatus = (value: unknown): "pending" | "done" | "skipped" => 
     if (status === "done") return "done";
     if (status === "skipped") return "skipped";
     return "pending";
-};
-
-const normalizeShift = (value: unknown): "morning" | "afternoon" | "night" => {
-    const shift = String(value || "").toLowerCase();
-    if (shift === "afternoon") return "afternoon";
-    if (shift === "night") return "night";
-    return "morning";
 };
 
 const normalizeObjectId = (value: unknown): mongoose.Types.ObjectId | null => {
@@ -75,31 +69,19 @@ const sanitizeExerciseSchedule = (items: any[]): any[] => {
             const doneAt = status === "done"
                 ? (item?.doneAt ? new Date(item.doneAt) : new Date())
                 : null;
+            const staffId = normalizeObjectId(item?.staffId);
             return {
                 time: normalizeTime(item?.time),
                 activity: String(item?.activity || "").trim(),
                 durationMinutes,
                 note: String(item?.note || "").trim(),
+                staffId,
+                staffName: String(item?.staffName || "").trim(),
                 status,
                 doneAt
             };
         })
-        .filter((item) => item.time || item.activity || item.durationMinutes || item.note);
-};
-
-const sanitizeShiftChecklist = (items: any[]): any[] => {
-    return items
-        .map((item) => {
-            const checked = Boolean(item?.checked);
-            return {
-                shift: normalizeShift(item?.shift),
-                title: String(item?.title || "").trim(),
-                note: String(item?.note || "").trim(),
-                checked,
-                checkedAt: checked ? (item?.checkedAt ? new Date(item.checkedAt) : new Date()) : null
-            };
-        })
-        .filter((item) => item.title);
+        .filter((item) => item.time || item.activity || item.durationMinutes || item.note || item.staffId);
 };
 
 const generateBoardingCode = () => {
@@ -111,6 +93,7 @@ const generateBoardingCode = () => {
 // [GET] /api/v1/admin/boarding-booking/hotel-staffs
 export const listBoardingHotelStaffs = async (_req: Request, res: Response) => {
     try {
+        const queryDate = pickParam(_req.query.date);
         const roles = await Role.find({
             deleted: false,
             status: "active",
@@ -125,11 +108,30 @@ export const listBoardingHotelStaffs = async (_req: Request, res: Response) => {
             return res.json({ code: 200, data: [] });
         }
 
-        const staffs = await AccountAdmin.find({
+        const staffFilter: any = {
             deleted: false,
             status: "active",
             roles: { $in: roleIds },
-        })
+        };
+
+        if (queryDate) {
+            const dateObj = new Date(queryDate);
+            if (!Number.isNaN(dateObj.getTime())) {
+                const startOfDay = new Date(dateObj);
+                startOfDay.setHours(0, 0, 0, 0);
+                const endOfDay = new Date(dateObj);
+                endOfDay.setHours(23, 59, 59, 999);
+
+                const scheduledStaffIds = await WorkSchedule.distinct("staffId", {
+                    date: { $gte: startOfDay, $lte: endOfDay },
+                    status: { $in: ["scheduled", "checked-in", "checked-out"] },
+                });
+
+                staffFilter._id = { $in: scheduledStaffIds };
+            }
+        }
+
+        const staffs = await AccountAdmin.find(staffFilter)
             .select("fullName phone email avatar employeeCode")
             .sort({ fullName: 1 })
             .lean();
@@ -316,7 +318,8 @@ export const getBoardingBookingDetail = async (req: Request, res: Response) => {
             .populate("userId", "fullName phone email avatar")
             .populate("petIds", "name type breed avatar weight")
             .populate("cageId", "cageCode type size dailyPrice status description avatar amenities")
-            .populate("feedingSchedule.staffId", "fullName phone employeeCode");
+            .populate("feedingSchedule.staffId", "fullName phone employeeCode")
+            .populate("exerciseSchedule.staffId", "fullName phone employeeCode");
 
         if (!booking) return res.status(404).json({ code: 404, message: "Khong tim thay don khach san" });
         return res.json({ code: 200, data: booking });
@@ -398,10 +401,10 @@ export const updateBoardingCareSchedule = async (req: Request, res: Response) =>
             return res.status(400).json({ code: 400, message: "ID khong hop le" });
         }
 
-        const { feedingSchedule, exerciseSchedule, shiftChecklist } = req.body as {
+        const { feedingSchedule, exerciseSchedule, careDate } = req.body as {
             feedingSchedule?: any[];
             exerciseSchedule?: any[];
-            shiftChecklist?: any[];
+            careDate?: string;
         };
 
         if (feedingSchedule !== undefined && !Array.isArray(feedingSchedule)) {
@@ -410,21 +413,60 @@ export const updateBoardingCareSchedule = async (req: Request, res: Response) =>
         if (exerciseSchedule !== undefined && !Array.isArray(exerciseSchedule)) {
             return res.status(400).json({ code: 400, message: "exerciseSchedule phai la mang" });
         }
-        if (shiftChecklist !== undefined && !Array.isArray(shiftChecklist)) {
-            return res.status(400).json({ code: 400, message: "shiftChecklist phai la mang" });
-        }
-
         const booking: any = await BoardingBooking.findOne({ _id: id, deleted: false });
         if (!booking) return res.status(404).json({ code: 404, message: "Khong tim thay don khach san" });
 
-        if (feedingSchedule !== undefined) {
-            booking.feedingSchedule = sanitizeFeedingSchedule(feedingSchedule).slice(0, 30);
+        const sanitizedFeeding = feedingSchedule !== undefined
+            ? sanitizeFeedingSchedule(feedingSchedule).slice(0, 30)
+            : undefined;
+        const sanitizedExercise = exerciseSchedule !== undefined
+            ? sanitizeExerciseSchedule(exerciseSchedule).slice(0, 30)
+            : undefined;
+
+        const staffIds = Array.from(new Set(
+            [
+                ...(sanitizedFeeding || []).map((item: any) => item?.staffId ? String(item.staffId) : ""),
+                ...(sanitizedExercise || []).map((item: any) => item?.staffId ? String(item.staffId) : ""),
+            ].filter(Boolean)
+        ));
+
+        if (staffIds.length > 0) {
+            const baseDateRaw = careDate || booking.checkInDate;
+            const baseDate = new Date(baseDateRaw);
+            if (!Number.isNaN(baseDate.getTime())) {
+                const startOfDay = new Date(baseDate);
+                startOfDay.setHours(0, 0, 0, 0);
+                const endOfDay = new Date(baseDate);
+                endOfDay.setHours(23, 59, 59, 999);
+
+                const schedules = await WorkSchedule.find({
+                    staffId: { $in: staffIds },
+                    date: { $gte: startOfDay, $lte: endOfDay },
+                    status: { $in: ["scheduled", "checked-in", "checked-out"] },
+                }).select("staffId").lean();
+
+                const availableSet = new Set(schedules.map((item: any) => String(item.staffId)));
+                const unavailableIds = staffIds.filter((staffId) => !availableSet.has(staffId));
+
+                if (unavailableIds.length > 0) {
+                    const unavailableStaffs = await AccountAdmin.find({
+                        _id: { $in: unavailableIds },
+                    }).select("fullName").lean();
+                    const staffNames = unavailableStaffs.map((item: any) => item.fullName).filter(Boolean);
+                    const dateText = `${String(startOfDay.getDate()).padStart(2, "0")}/${String(startOfDay.getMonth() + 1).padStart(2, "0")}/${startOfDay.getFullYear()}`;
+                    return res.status(400).json({
+                        code: 400,
+                        message: `${staffNames.join(", ") || "Nhân viên được chọn"} khong co lich lam viec ngay ${dateText}`,
+                    });
+                }
+            }
         }
-        if (exerciseSchedule !== undefined) {
-            booking.exerciseSchedule = sanitizeExerciseSchedule(exerciseSchedule).slice(0, 30);
+
+        if (sanitizedFeeding !== undefined) {
+            booking.feedingSchedule = sanitizedFeeding;
         }
-        if (shiftChecklist !== undefined) {
-            booking.shiftChecklist = sanitizeShiftChecklist(shiftChecklist).slice(0, 50);
+        if (sanitizedExercise !== undefined) {
+            booking.exerciseSchedule = sanitizedExercise;
         }
 
         await booking.save();
