@@ -57,7 +57,7 @@ export const createPost = async (req: Request, res: Response) => {
         // Mảng items
         dataFinal.items = [];
         for (const item of req.body.items) {
-            const productDetail = await Product.findOne({
+            const productDetail: any = await Product.findOne({
                 _id: item.productId,
                 deleted: false,
                 status: "active"
@@ -65,11 +65,11 @@ export const createPost = async (req: Request, res: Response) => {
 
             if (productDetail) {
                 let price = 0;
-                const variant = [];
+                const variantArr = [];
 
                 if (item.variant && item.variant.length > 0) {
                     // Tìm đúng biến thể khớp trong danh sách
-                    const variantMatched = (productDetail.variants || []).find((variantItem: any) => {
+                    const variantMatchedIndex = (productDetail.variants || []).findIndex((variantItem: any) => {
                         return (
                             variantItem.attributeValue.length === item.variant.length &&
                             variantItem.attributeValue.every((attr: any) => {
@@ -79,7 +79,25 @@ export const createPost = async (req: Request, res: Response) => {
                         );
                     });
 
-                    if (variantMatched) {
+                    if (variantMatchedIndex !== -1) {
+                        const variantMatched = productDetail.variants[variantMatchedIndex];
+
+                        // Kiểm tra stock biến thể
+                        if (variantMatched.stock < item.quantity) {
+                            return res.json({
+                                code: "error",
+                                message: `Sản phẩm "${productDetail.name}" (biến thể) không đủ số lượng tồn kho!`
+                            });
+                        }
+
+                        // Trừ stock biến thể
+                        const updatedVariants = [...productDetail.variants];
+                        updatedVariants[variantMatchedIndex].stock -= item.quantity;
+                        await Product.updateOne(
+                            { _id: item.productId },
+                            { variants: updatedVariants }
+                        );
+
                         price = variantMatched.priceNew || 0;
                         for (const v of item.variant) {
                             const attribute: any = await AttributeProduct
@@ -89,13 +107,35 @@ export const createPost = async (req: Request, res: Response) => {
                                 .select("name")
                                 .lean();
                             if (attribute) {
-                                variant.push(`${attribute.name}: ${v.label}`);
+                                variantArr.push(`${attribute.name}: ${v.label}`);
                             }
                         };
                     } else {
+                        // Nếu không tìm thấy biến thể khớp, dùng giá gốc và trừ stock gốc
+                        if ((productDetail.stock || 0) < item.quantity) {
+                            return res.json({
+                                code: "error",
+                                message: `Sản phẩm "${productDetail.name}" không đủ số lượng tồn kho!`
+                            });
+                        }
+                        await Product.updateOne(
+                            { _id: item.productId },
+                            { $inc: { stock: -item.quantity } }
+                        );
                         price = productDetail.priceNew || 0;
                     }
                 } else {
+                    // Không có biến thể
+                    if ((productDetail.stock || 0) < item.quantity) {
+                        return res.json({
+                            code: "error",
+                            message: `Sản phẩm "${productDetail.name}" không đủ số lượng tồn kho!`
+                        });
+                    }
+                    await Product.updateOne(
+                        { _id: item.productId },
+                        { $inc: { stock: -item.quantity } }
+                    );
                     price = productDetail.priceNew || 0;
                 }
 
@@ -103,7 +143,7 @@ export const createPost = async (req: Request, res: Response) => {
                     productId: item.productId,
                     quantity: item.quantity,
                     price: price,
-                    variant: variant.length > 0 ? variant : undefined,
+                    variant: variantArr.length > 0 ? variantArr : undefined,
                     image: productDetail.images?.[0] || "",
                     name: productDetail.name
                 };
