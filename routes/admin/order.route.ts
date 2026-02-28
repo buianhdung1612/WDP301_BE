@@ -6,6 +6,7 @@ const router = Router();
 
 router.get('/list', checkPermission("product_view"), orderController.list);
 router.get('/detail/:id', checkPermission("product_view"), orderController.detail);
+router.patch('/edit/:id', checkPermission("product_view"), orderController.editPatch);
 router.patch('/:id/status', checkPermission("product_view"), orderController.updateStatus);
 
 export default router;

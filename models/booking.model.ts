@@ -71,6 +71,7 @@ const schema = new mongoose.Schema(
         cancelledBy: String,
         completedAt: Date,
         search: String,
+        paymentExpireAt: Date,
         deleted: {
             type: Boolean,
             default: false

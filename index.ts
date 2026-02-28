@@ -6,6 +6,7 @@ import adminRoutes from "./routes/admin/index.route";
 import clientRoutes from "./routes/client/index.route";
 import { connectDB } from './configs/database.config';
 import { autoUpdateBookingStatuses } from './helpers/booking-job.helper';
+import { startCancellationTask } from './helpers/cancellation.task';
 
 // Load biến môi trường
 dotenv.config();
@@ -20,6 +21,8 @@ connectDB();
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
+
+
 
 // CORS
 app.use(cors({
@@ -36,6 +39,7 @@ app.use('/api/v1/admin', adminRoutes);
 app.use('/api/v1/client', clientRoutes);
 
 app.listen(port, () => {
+    startCancellationTask();
     console.log(`Website đang chạy trên cổng ${port}`);
     console.log(`Updated at ${new Date().toISOString()}`);
 })

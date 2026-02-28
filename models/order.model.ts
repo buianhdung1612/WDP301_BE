@@ -67,6 +67,7 @@ const schema = new mongoose.Schema(
             fee: Number,
             cod: Number
         },
+        paymentExpireAt: Date,
         deleted: {
             type: Boolean,
             default: false
