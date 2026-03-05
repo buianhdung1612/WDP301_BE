@@ -7,8 +7,10 @@ import mongoose from "mongoose";
 import BoardingBooking from "../../models/boarding-booking.model";
 import BoardingCage from "../../models/boarding-cage.model";
 import Pet from "../../models/pet.model";
+import { buildDefaultBoardingCareSchedule } from "../../utils/boarding-care-template.util";
 
 const DEFAULT_HOLD_MINUTES = Number(process.env.BOARDING_HOLD_MINUTES || 15);
+const MAX_ROOMS_PER_CAGE = Math.max(1, Number(process.env.BOARDING_CAGE_CAPACITY || 4));
 
 const releaseExpiredHolds = async () => {
     const now = new Date();
@@ -47,6 +49,13 @@ const pickFirstQueryValue = (value: unknown): string | undefined => {
     return undefined;
 };
 
+const getBookingQuantity = (booking: any): number => {
+    const quantity = Number(booking?.quantity || 0);
+    if (Number.isFinite(quantity) && quantity > 0) return Math.round(quantity);
+    if (Array.isArray(booking?.petIds) && booking.petIds.length > 0) return booking.petIds.length;
+    return 1;
+};
+
 export const createBoardingBooking = async (req: Request, res: Response) => {
     try {
         const user = res.locals.accountUser;
@@ -60,6 +69,7 @@ export const createBoardingBooking = async (req: Request, res: Response) => {
             checkInDate,
             checkOutDate,
             petIds = [],
+            quantity = 1,
             fullName,
             phone,
             email,
@@ -77,11 +87,21 @@ export const createBoardingBooking = async (req: Request, res: Response) => {
         if (!checkInDate || !checkOutDate) {
             return res.status(400).json({ message: "Missing check-in or check-out date" });
         }
+        const requestedQuantity = Number(quantity || 1);
+        if (!Number.isInteger(requestedQuantity) || requestedQuantity < 1 || requestedQuantity > MAX_ROOMS_PER_CAGE) {
+            return res.status(400).json({ message: `So phong phai tu 1 den ${MAX_ROOMS_PER_CAGE}` });
+        }
         if (!petIds || petIds.length === 0) {
             return res.status(400).json({ message: "Vui long chon thu cung" });
         }
-        if (petIds.length !== 1) {
-            return res.status(400).json({ message: "Moi lich khach san chi ho tro 1 thu cung" });
+        const normalizedPetIds = Array.isArray(petIds)
+            ? petIds.map((id: any) => String(id)).filter(Boolean)
+            : [];
+        if (normalizedPetIds.length !== requestedQuantity) {
+            return res.status(400).json({ message: "So thu cung phai bang so phong da chon" });
+        }
+        if (new Set(normalizedPetIds).size !== normalizedPetIds.length) {
+            return res.status(400).json({ message: "Moi phong phai gan 1 thu cung khac nhau" });
         }
 
         const start = new Date(checkInDate);
@@ -103,8 +123,8 @@ export const createBoardingBooking = async (req: Request, res: Response) => {
             return res.status(400).json({ message: "Invalid date range" });
         }
 
-        const pets = await Pet.find({ _id: { $in: petIds }, userId, deleted: false });
-        if (pets.length !== petIds.length) {
+        const pets = await Pet.find({ _id: { $in: normalizedPetIds }, userId, deleted: false });
+        if (pets.length !== normalizedPetIds.length) {
             return res.status(400).json({ message: "Một hoặc nhiều thú cưng không hợp lệ" });
         }
         if (cage.maxWeightCapacity) {
@@ -119,7 +139,7 @@ export const createBoardingBooking = async (req: Request, res: Response) => {
 
         const petOverlap = await BoardingBooking.findOne({
             deleted: false,
-            petIds: { $in: petIds },
+            petIds: { $in: normalizedPetIds },
             $or: [
                 { boardingStatus: { $in: ["confirmed", "checked-in"] } },
                 { boardingStatus: "held", holdExpiresAt: { $gt: now } }
@@ -137,7 +157,7 @@ export const createBoardingBooking = async (req: Request, res: Response) => {
             });
         }
 
-        const overlap = await BoardingBooking.findOne({
+        const overlapBookings = await BoardingBooking.find({
             cageId,
             deleted: false,
             $or: [
@@ -146,15 +166,22 @@ export const createBoardingBooking = async (req: Request, res: Response) => {
             ],
             checkInDate: { $lt: end },
             checkOutDate: { $gt: start }
-        });
-        if (overlap) {
-            return res.status(400).json({ message: "Cage is not available for selected dates" });
+        }).select("quantity petIds");
+        const bookedRooms = overlapBookings.reduce((sum, booking) => sum + getBookingQuantity(booking), 0);
+        const remainingRooms = Math.max(0, MAX_ROOMS_PER_CAGE - bookedRooms);
+        if (requestedQuantity > remainingRooms) {
+            return res.status(400).json({
+                message: remainingRooms > 0
+                    ? `Chi con ${remainingRooms}/${MAX_ROOMS_PER_CAGE} phong trong khoang ngay da chon`
+                    : "Chuong da het phong trong khoang ngay da chon"
+            });
         }
 
         const pricePerDay = cage.dailyPrice || 0;
-        const basePrice = pricePerDay * totalDays;
+        const basePrice = pricePerDay * totalDays * requestedQuantity;
         const totalPrice = Math.max(basePrice - discountAmount, 0);
         const bookingCode = `BRD${new Date().toISOString().replace(/\D/g, "").slice(0, 14)}`;
+        const defaultCareSchedule = buildDefaultBoardingCareSchedule(pets as any[]);
 
         const isPrepaid = paymentMethod === "prepaid";
         const holdExpiresAt = isPrepaid ? new Date(Date.now() + DEFAULT_HOLD_MINUTES * 60 * 1000) : undefined;
@@ -162,7 +189,8 @@ export const createBoardingBooking = async (req: Request, res: Response) => {
         const booking = await BoardingBooking.create({
             code: bookingCode,
             userId,
-            petIds,
+            petIds: normalizedPetIds,
+            quantity: requestedQuantity,
             cageId,
             fullName,
             phone,
@@ -180,6 +208,8 @@ export const createBoardingBooking = async (req: Request, res: Response) => {
             holdExpiresAt,
             notes,
             specialCare,
+            feedingSchedule: defaultCareSchedule.feedingSchedule,
+            exerciseSchedule: defaultCareSchedule.exerciseSchedule,
             boardingStatus: isPrepaid ? "held" : "confirmed"
         });
 

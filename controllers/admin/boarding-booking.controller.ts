@@ -7,6 +7,9 @@ import AccountUser from "../../models/account-user.model";
 import Pet from "../../models/pet.model";
 import Role from "../../models/role.model";
 import WorkSchedule from "../../models/work-schedule.model";
+import { buildDefaultBoardingCareSchedule } from "../../utils/boarding-care-template.util";
+
+const MAX_ROOMS_PER_CAGE = Math.max(1, Number(process.env.BOARDING_CAGE_CAPACITY || 4));
 
 const pickParam = (value: unknown): string | undefined => {
     if (typeof value === "string") return value;
@@ -36,6 +39,13 @@ const normalizeObjectId = (value: unknown): mongoose.Types.ObjectId | null => {
         : String(value || "").trim();
     if (!raw || !mongoose.Types.ObjectId.isValid(raw)) return null;
     return new mongoose.Types.ObjectId(raw);
+};
+
+const getBookingQuantity = (booking: any): number => {
+    const quantity = Number(booking?.quantity || 0);
+    if (Number.isFinite(quantity) && quantity > 0) return Math.round(quantity);
+    if (Array.isArray(booking?.petIds) && booking.petIds.length > 0) return booking.petIds.length;
+    return 1;
 };
 
 const sanitizeFeedingSchedule = (items: any[]): any[] => {
@@ -202,15 +212,17 @@ export const createBoardingBooking = async (req: Request, res: Response) => {
             return res.status(400).json({ code: 400, message: "Thu cung vuot qua tai trong chuong" });
         }
 
-        const overlap = await BoardingBooking.findOne({
+        const overlapBookings = await BoardingBooking.find({
             cageId,
             deleted: false,
             boardingStatus: { $in: ["held", "confirmed", "checked-in"] },
             checkInDate: { $lt: checkOut },
             checkOutDate: { $gt: checkIn }
-        }).lean();
-        if (overlap) {
-            return res.status(400).json({ code: 400, message: "Chuong da co lich trung thoi gian nay" });
+        }).select("quantity petIds").lean();
+        const bookedRooms = overlapBookings.reduce((sum, booking) => sum + getBookingQuantity(booking), 0);
+        const remainingRooms = Math.max(0, MAX_ROOMS_PER_CAGE - bookedRooms);
+        if (remainingRooms < 1) {
+            return res.status(400).json({ code: 400, message: "Chuong da het cho trong khoang thoi gian nay" });
         }
 
         const totalDays = Math.ceil((checkOut.getTime() - checkIn.getTime()) / (1000 * 60 * 60 * 24));
@@ -218,6 +230,7 @@ export const createBoardingBooking = async (req: Request, res: Response) => {
         const subTotal = totalDays * pricePerDay;
         const finalDiscount = Math.max(Number(discount || 0), 0);
         const total = Math.max(subTotal - finalDiscount, 0);
+        const defaultCareSchedule = buildDefaultBoardingCareSchedule([pet as any]);
 
         const allowBoardingStatus = ["pending", "held", "confirmed", "checked-in", "checked-out", "cancelled"];
         const allowPaymentStatus = ["unpaid", "paid", "refunded"];
@@ -246,6 +259,8 @@ export const createBoardingBooking = async (req: Request, res: Response) => {
             paymentStatus: nextPaymentStatus,
             notes: String(notes || "").trim(),
             specialCare: String(specialCare || "").trim(),
+            feedingSchedule: defaultCareSchedule.feedingSchedule,
+            exerciseSchedule: defaultCareSchedule.exerciseSchedule,
             boardingStatus: nextBoardingStatus,
             holdExpiresAt: nextBoardingStatus === "held" ? new Date(Date.now() + 15 * 60 * 1000) : null,
             actualCheckInDate: nextBoardingStatus === "checked-in" ? new Date() : null,

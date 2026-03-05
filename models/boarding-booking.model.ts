@@ -79,6 +79,12 @@ const schema = new mongoose.Schema(
         checkInDate: Date,
         checkOutDate: Date,
         numberOfDays: Number,
+        quantity: {
+            type: Number,
+            default: 1,
+            min: 1,
+            max: 4
+        },
 
         fullName: String,
         phone: String,

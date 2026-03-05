@@ -9,6 +9,15 @@ router.get(
   "/boarding-cages/available",
   boardingCageController.listAvailableCages
 );
+router.get(
+  "/boarding-cages/:id/reviews",
+  boardingCageController.listBoardingCageReviews
+);
+router.post(
+  "/boarding-cages/:id/reviews",
+  requireAuth,
+  boardingCageController.createBoardingCageReview
+);
 router.get("/boarding-cages/:id", boardingCageController.getBoardingCageDetail);
 router.get("/boarding-cages", requireAuth, boardingCageController.getAllBoardingCages);
 router.post("/boarding-cages", requireAuth, boardingCageController.createBoardingCage);
