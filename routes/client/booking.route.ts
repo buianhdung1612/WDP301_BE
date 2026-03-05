@@ -16,6 +16,7 @@ router.get("/time-slots", bookingController.getAvailableTimeSlots); // Thường
 router.get("/bookings", requireAuth, bookingController.listMyBookings);
 router.get("/bookings/:id", requireAuth, bookingController.getMyBooking);
 router.post("/bookings", infoAuth, bookingController.createBooking); // infoAuth để hỗ trợ cả guest và user
+router.patch("/bookings/:id", requireAuth, bookingController.updateBooking);
 router.patch("/bookings/:id/cancel", requireAuth, bookingController.cancelMyBooking);
 router.get("/export-pdf", bookingController.exportBookingPdf);
 

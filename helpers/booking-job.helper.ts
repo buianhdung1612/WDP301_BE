@@ -35,6 +35,38 @@ export const autoUpdateBookingStatuses = async () => {
                 { $set: { bookingStatus: "cancelled", cancelledReason: "Khách không đến (Tự động)" } }
             );
         }
+
+        // 3. Tự động hoàn thành nếu đang in-progress và quá maxDuration
+        const inProgressBookings = await Booking.find({
+            bookingStatus: "in-progress",
+            deleted: false
+        }).populate("serviceId");
+
+        for (const booking of inProgressBookings) {
+            const service = booking.serviceId as any;
+            const maxDuration = (service?.maxDuration && service.maxDuration > 0) ? service.maxDuration : (service?.duration || 60);
+            const actualStart = booking.actualStart ? new Date(booking.actualStart) : null;
+
+            if (actualStart) {
+                const deadline = new Date(actualStart.getTime() + maxDuration * 60000);
+                if (now > deadline) {
+                    await Booking.updateOne(
+                        { _id: booking._id },
+                        {
+                            $set: {
+                                bookingStatus: "completed",
+                                completedAt: now,
+                                "petStaffMap.$[elem].status": "completed",
+                                "petStaffMap.$[elem].completedAt": now
+                            }
+                        },
+                        {
+                            arrayFilters: [{ "elem.status": { $ne: "completed" } }]
+                        }
+                    );
+                }
+            }
+        }
     } catch (error) {
         console.error("Error in autoUpdateBookingStatuses job:", error);
     }

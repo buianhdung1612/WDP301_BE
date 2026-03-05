@@ -98,6 +98,7 @@ export const getAvailableTimeSlots = async (req: Request, res: Response) => {
             // Check Parallel Availability (N staff for base duration)
             let parallelFreeCount = 0;
             const parallelEnd = new Date(current.getTime() + baseDuration * 60000);
+            const slotStaffNames: string[] = [];
 
             // Check Sequential Availability (1 staff for N*base duration)
             let sequentialPossible = false;
@@ -105,7 +106,7 @@ export const getAvailableTimeSlots = async (req: Request, res: Response) => {
 
             let totalStaffOnShift = 0;
 
-            staffSchedules.forEach((config) => {
+            staffSchedules.forEach((config, sId) => {
                 const [sH, sM] = config.startTime.split(":").map(Number);
                 const [eH, eM] = config.endTime.split(":").map(Number);
                 const shiftStart = new Date(startOfDay).setHours(sH, sM, 0, 0);
@@ -117,6 +118,9 @@ export const getAvailableTimeSlots = async (req: Request, res: Response) => {
                     const isBusyParallel = config.bookings.some((b: any) => isOverlap(current, parallelEnd, b.start as any as Date, b.end as any as Date));
                     if (!isBusyParallel) {
                         parallelFreeCount++;
+                        // Lấy tên nhân viên đang rảnh
+                        const staffDoc = schedules.find(s => s.staffId._id.toString() === sId)?.staffId as any;
+                        if (staffDoc) slotStaffNames.push(staffDoc.fullName);
                     }
                 }
 
@@ -148,7 +152,8 @@ export const getAvailableTimeSlots = async (req: Request, res: Response) => {
                 availableSlots: parallelFreeCount,
                 status: totalStaffOnShift === 0 ? "closed" : (isAvailable ? "available" : (petIsBusy ? "pet_busy" : "full")),
                 totalStaff: totalStaffOnShift,
-                mode: parallelFreeCount >= count ? "parallel" : "sequential"
+                mode: parallelFreeCount >= count ? "parallel" : "sequential",
+                staffNames: slotStaffNames
             });
 
             current = new Date(current.getTime() + 5 * 60000);
@@ -341,6 +346,8 @@ export const createBooking = async (req: Request, res: Response) => {
         const newBooking = new Booking({
             code: bookingCode,
             userId,
+            customerName: user.fullName,
+            customerPhone: user.phone,
             serviceId,
             staffIds: bestStaffList.map(s => s._id) as any,
             petStaffMap: autoAssignPetsToStaff(petIds, bestStaffList.map(s => s._id)) as any,
@@ -409,6 +416,48 @@ export const cancelMyBooking = async (req: Request, res: Response) => {
         res.status(500).json({
             code: 500,
             message: "Lỗi khi hủy lịch đặt"
+        });
+    }
+};
+
+// [PATCH] /api/v1/client/bookings/:id
+export const updateBooking = async (req: Request, res: Response) => {
+    try {
+        const userId = res.locals.accountUser?._id;
+        const { notes } = req.body;
+
+        const booking = await Booking.findById(req.params.id);
+
+        if (!booking || booking.deleted) {
+            return res.status(404).json({
+                code: 404,
+                message: "Lịch đặt không tồn tại"
+            });
+        }
+
+        // Only allow if user is owner
+        if (userId && booking.userId?.toString() !== userId.toString()) {
+            return res.status(403).json({
+                code: 403,
+                message: "Bạn không có quyền cập nhật lịch đặt này"
+            });
+        }
+
+        if (notes !== undefined) {
+            booking.notes = notes;
+        }
+
+        await booking.save();
+
+        res.json({
+            code: 200,
+            message: "Cập nhật lịch đặt thành công",
+            data: booking
+        });
+    } catch (error) {
+        res.status(500).json({
+            code: 500,
+            message: "Lỗi khi cập nhật lịch đặt"
         });
     }
 };

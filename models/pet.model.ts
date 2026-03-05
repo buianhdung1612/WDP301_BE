@@ -20,7 +20,7 @@ const schema = new mongoose.Schema(
         avatar: String, // Ảnh thú cưng
         gender: {
             type: String,
-            enum: ["male", "female", "unknown"]
+            enum: ["male", "female"]
         },
         healthStatus: {
             type: String,

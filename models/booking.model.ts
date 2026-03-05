@@ -7,6 +7,8 @@ const schema = new mongoose.Schema(
             type: mongoose.Schema.Types.ObjectId,
             ref: "AccountUser"
         },
+        customerName: String,
+        customerPhone: String,
         serviceId: {
             type: mongoose.Schema.Types.ObjectId,
             ref: "Service"
@@ -28,12 +30,7 @@ const schema = new mongoose.Schema(
                 default: "pending"
             },
             startedAt: Date,
-            completedAt: Date,
-            surchargeAmount: {
-                type: Number,
-                default: 0
-            },
-            surchargeNotes: String
+            completedAt: Date
         }],
         start: Date, // Thời gian bắt đầu
         end: Date, // Thời gian kết thúc
