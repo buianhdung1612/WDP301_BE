@@ -2,6 +2,9 @@ import { Request, Response } from "express";
 import mongoose from "mongoose";
 import BoardingCage from "../../models/boarding-cage.model";
 import BoardingBooking from "../../models/boarding-booking.model";
+import BoardingCageReview from "../../models/boarding-cage-review.model";
+
+const MAX_ROOMS_PER_CAGE = Math.max(1, Number(process.env.BOARDING_CAGE_CAPACITY || 4));
 
 const releaseExpiredHolds = async () => {
   const now = new Date();
@@ -49,6 +52,13 @@ const buildSizeFilter = (value: unknown) => {
   if (!normalized) return undefined;
   const matched = sizeQueryMap[normalized] || [normalized];
   return { $in: matched };
+};
+
+const getBookingQuantity = (booking: any): number => {
+  const quantity = Number(booking?.quantity || 0);
+  if (Number.isFinite(quantity) && quantity > 0) return Math.round(quantity);
+  if (Array.isArray(booking?.petIds) && booking.petIds.length > 0) return booking.petIds.length;
+  return 1;
 };
 
 export const createBoardingCage = async (req: Request, res: Response): Promise<void> => {
@@ -156,7 +166,7 @@ export const listAvailableCages = async (req: Request, res: Response): Promise<v
       });
     }
 
-    const busyCageIds = await BoardingBooking.find({
+    const overlappingBookings = await BoardingBooking.find({
       deleted: false,
       checkInDate: { $lt: end },
       checkOutDate: { $gt: start },
@@ -164,16 +174,11 @@ export const listAvailableCages = async (req: Request, res: Response): Promise<v
         { boardingStatus: { $in: ["pending", "confirmed", "checked-in"] } },
         { boardingStatus: "held", holdExpiresAt: { $gt: now } }
       ]
-    }).distinct("cageId");
-
-    const excludeIds = busyCageIds
-      .filter((id: any) => id && mongoose.Types.ObjectId.isValid(id))
-      .map((id: any) => new mongoose.Types.ObjectId(id));
+    }).select("cageId quantity petIds");
 
     const filter: any = {
       deleted: false,
-      status: { $ne: "maintenance" },
-      _id: { $nin: excludeIds }
+      status: { $ne: "maintenance" }
     };
 
     if (typeof type === "string") filter.type = type;
@@ -184,7 +189,28 @@ export const listAvailableCages = async (req: Request, res: Response): Promise<v
 
     const cages = await BoardingCage.find(filter);
 
-    res.json(cages);
+    const bookedByCage = new Map<string, number>();
+    for (const booking of overlappingBookings) {
+      const cageId = String((booking as any)?.cageId || "");
+      if (!cageId || !mongoose.Types.ObjectId.isValid(cageId)) continue;
+      const nextQty = getBookingQuantity(booking);
+      bookedByCage.set(cageId, (bookedByCage.get(cageId) || 0) + nextQty);
+    }
+
+    const payload = cages.map((cage: any) => {
+      const cageId = String(cage?._id || "");
+      const bookedRooms = Math.max(0, Number(bookedByCage.get(cageId) || 0));
+      const remainingRooms = Math.max(0, MAX_ROOMS_PER_CAGE - bookedRooms);
+      return {
+        ...cage.toObject(),
+        totalRooms: MAX_ROOMS_PER_CAGE,
+        bookedRooms,
+        remainingRooms,
+        soldOut: remainingRooms <= 0
+      };
+    });
+
+    res.json(payload);
   } catch (error) {
     if (error instanceof Error) {
       res.status(500).json({ message: error.message });
@@ -235,6 +261,119 @@ export const deleteBoardingCage = async (req: Request, res: Response): Promise<v
       res.status(400).json({ message: error.message });
     } else {
       res.status(400).json({ message: "Delete failed" });
+    }
+  }
+};
+
+export const listBoardingCageReviews = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const rawId = req.params.id;
+    const id = Array.isArray(rawId) ? rawId[0] : rawId;
+    if (!id || !mongoose.Types.ObjectId.isValid(id)) {
+      res.status(400).json({ message: "Invalid cage id" });
+      return;
+    }
+
+    const cage = await BoardingCage.findOne({ _id: id, deleted: false }).select("_id");
+    if (!cage) {
+      res.status(404).json({ message: "Cage not found" });
+      return;
+    }
+
+    const reviews = await BoardingCageReview.find({
+      cageId: id,
+      deleted: false,
+      status: "approved"
+    })
+      .sort({ createdAt: -1 })
+      .select("fullName rating comment createdAt");
+
+    const total = reviews.length;
+    const averageRating =
+      total > 0
+        ? reviews.reduce((sum, item: any) => sum + Number(item.rating || 0), 0) / total
+        : 0;
+
+    res.json({
+      reviews,
+      total,
+      averageRating
+    });
+  } catch (error) {
+    if (error instanceof Error) {
+      res.status(500).json({ message: error.message });
+    } else {
+      res.status(500).json({ message: "Get boarding reviews failed" });
+    }
+  }
+};
+
+export const createBoardingCageReview = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const user = res.locals.accountUser;
+    const userId = user?._id?.toString();
+    const userFullName = String(user?.fullName || "").trim();
+    const rawId = req.params.id;
+    const id = Array.isArray(rawId) ? rawId[0] : rawId;
+    const { rating, comment, fullName } = req.body || {};
+
+    if (!userId) {
+      res.status(401).json({ message: "Vui long dang nhap" });
+      return;
+    }
+
+    if (!id || !mongoose.Types.ObjectId.isValid(id)) {
+      res.status(400).json({ message: "Invalid cage id" });
+      return;
+    }
+
+    const cage = await BoardingCage.findOne({ _id: id, deleted: false }).select("_id");
+    if (!cage) {
+      res.status(404).json({ message: "Cage not found" });
+      return;
+    }
+
+    const numericRating = Number(rating);
+    if (!Number.isFinite(numericRating) || numericRating < 1 || numericRating > 5) {
+      res.status(400).json({ message: "Rating must be from 1 to 5" });
+      return;
+    }
+
+    const cleanComment = String(comment || "").trim();
+    if (!cleanComment || cleanComment.length < 10) {
+      res.status(400).json({ message: "Noi dung danh gia toi thieu 10 ky tu" });
+      return;
+    }
+
+    const hasUsedThisCage = await BoardingBooking.exists({
+      deleted: false,
+      userId,
+      cageId: id,
+      boardingStatus: { $in: ["confirmed", "checked-in", "checked-out"] }
+    });
+    if (!hasUsedThisCage) {
+      res.status(400).json({ message: "Ban chi co the danh gia chuong da tung dat" });
+      return;
+    }
+
+    const review = await BoardingCageReview.create({
+      cageId: id,
+      userId,
+      fullName: String(fullName || userFullName || "Khach hang").trim(),
+      rating: Math.round(numericRating),
+      comment: cleanComment,
+      status: "approved"
+    });
+
+    res.status(201).json({
+      message: "Danh gia thanh cong",
+      data: review
+    });
+  } catch (error) {
+    if (error instanceof Error) {
+      res.status(500).json({ message: error.message });
+    } else {
+      res.status(500).json({ message: "Create boarding review failed" });
     }
   }
 };
