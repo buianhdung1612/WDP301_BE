@@ -17,6 +17,7 @@ const schema = new mongoose.Schema(
         maxWeightCapacity: Number, // Max weight (kg)
         dailyPrice: Number, // Daily price
         avatar: String, // Cage image
+        gallery: [String], // Additional cage images
         description: String, // Cage description
         amenities: [String], // Amenities (bed, toys, air conditioning, etc.)
         status: {
@@ -24,6 +25,7 @@ const schema = new mongoose.Schema(
             enum: ["available", "occupied", "maintenance"],
             default: "available"
         },
+        bookingLockUntil: Date,
         deleted: {
             type: Boolean,
             default: false

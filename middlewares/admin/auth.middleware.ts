@@ -1,7 +1,6 @@
 import { Request, Response, NextFunction } from "express";
 import jwt from "jsonwebtoken";
 import AccountAdmin from "../../models/account-admin.model";
-import Role from "../../models/role.model";
 import { permissionList } from "../../configs/variable.config";
 
 export const verifyToken = async (req: Request, res: Response, next: NextFunction) => {
@@ -11,13 +10,12 @@ export const verifyToken = async (req: Request, res: Response, next: NextFunctio
         if (!token) {
             return res.status(401).json({
                 code: 401,
-                message: "Vui lòng đăng nhập!"
+                message: "Vui long dang nhap!",
             });
         }
 
         const decoded: any = jwt.verify(token, `${process.env.JWT_SECRET}`);
 
-        // Handle Super Admin from .env
         if (decoded.id === process.env.SUPER_ADMIN_ID && decoded.email === process.env.SUPER_ADMIN_EMAIL) {
             const superAdmin = {
                 _id: process.env.SUPER_ADMIN_ID,
@@ -25,10 +23,10 @@ export const verifyToken = async (req: Request, res: Response, next: NextFunctio
                 email: process.env.SUPER_ADMIN_EMAIL,
                 avatar: "/admin/assets/images/users/avatar-1.jpg",
                 isSuperAdmin: true,
-                roles: []
+                roles: [],
             };
 
-            const permissions = permissionList.map(item => item.id);
+            const permissions = permissionList.map((item) => item.id);
 
             res.locals.accountAdmin = superAdmin;
             res.locals.permissions = permissions;
@@ -37,8 +35,8 @@ export const verifyToken = async (req: Request, res: Response, next: NextFunctio
                 id: superAdmin._id,
                 email: superAdmin.email,
                 fullName: superAdmin.fullName,
-                permissions: permissions,
-                isSuperAdmin: true
+                permissions,
+                isSuperAdmin: true,
             };
 
             return next();
@@ -47,17 +45,18 @@ export const verifyToken = async (req: Request, res: Response, next: NextFunctio
         const admin: any = await AccountAdmin.findOne({
             _id: decoded.id,
             deleted: false,
-            status: "active"
-        }).select("-password").populate("roles");
+            status: "active",
+        })
+            .select("-password")
+            .populate("roles");
 
         if (!admin) {
             return res.status(401).json({
                 code: 401,
-                message: "Tài khoản không tồn tại hoặc đã bị khóa!"
+                message: "Tai khoan khong ton tai hoac da bi khoa!",
             });
         }
 
-        // Extract and flatten permissions from all roles
         let permissions: string[] = [];
         if (admin.roles && admin.roles.length > 0) {
             admin.roles.forEach((role: any) => {
@@ -67,10 +66,8 @@ export const verifyToken = async (req: Request, res: Response, next: NextFunctio
             });
         }
 
-        // Remove duplicates
         permissions = [...new Set(permissions)];
 
-        // Store in res.locals and also in req for easy access
         res.locals.accountAdmin = admin;
         res.locals.permissions = permissions;
 
@@ -79,29 +76,33 @@ export const verifyToken = async (req: Request, res: Response, next: NextFunctio
             email: admin.email,
             fullName: admin.fullName,
             roles: admin.roles,
-            permissions: permissions
+            permissions,
         };
 
         next();
     } catch (error) {
         return res.status(401).json({
             code: 401,
-            message: "Phiên đăng nhập hết hạn!"
+            message: "Phien dang nhap het han!",
         });
     }
-}
+};
 
-export const checkPermission = (permission: string) => {
-    return async (req: Request, res: Response, next: NextFunction) => {
-        const permissions = res.locals.permissions || [];
+export const checkPermission = (...requiredPermissions: string[]) => {
+    return async (_req: Request, res: Response, next: NextFunction) => {
+        const permissions = Array.isArray(res.locals.permissions) ? res.locals.permissions : [];
+        const validRequiredPermissions = requiredPermissions.filter(Boolean);
 
-        if (permissions.includes(permission)) {
-            next();
-        } else {
-            res.status(403).json({
-                code: 403,
-                message: "Bạn không có quyền thực hiện hành động này!"
-            });
+        if (
+            validRequiredPermissions.length > 0 &&
+            validRequiredPermissions.some((permission) => permissions.includes(permission))
+        ) {
+            return next();
         }
-    }
-}
+
+        return res.status(403).json({
+            code: 403,
+            message: "Ban khong co quyen thuc hien hanh dong nay!",
+        });
+    };
+};

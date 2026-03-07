@@ -10,6 +10,7 @@ import WorkSchedule from "../../models/work-schedule.model";
 import { buildDefaultBoardingCareSchedule } from "../../utils/boarding-care-template.util";
 
 const MAX_ROOMS_PER_CAGE = Math.max(1, Number(process.env.BOARDING_CAGE_CAPACITY || 4));
+const BOOKING_LOCK_MS = Math.max(3000, Number(process.env.BOARDING_BOOKING_LOCK_MS || 8000));
 
 const pickParam = (value: unknown): string | undefined => {
     if (typeof value === "string") return value;
@@ -33,6 +34,17 @@ const normalizeTaskStatus = (value: unknown): "pending" | "done" | "skipped" => 
     return "pending";
 };
 
+const normalizeProofMedia = (items: unknown): Array<{ url: string; kind: "image" | "video" }> => {
+    if (!Array.isArray(items)) return [];
+    return items
+        .map((item: any) => {
+            const url = String(item?.url || item || "").trim();
+            const kind = String(item?.kind || "").toLowerCase() === "video" ? "video" : "image";
+            return { url, kind: kind as "image" | "video" };
+        })
+        .filter((item) => Boolean(item.url));
+};
+
 const normalizeObjectId = (value: unknown): mongoose.Types.ObjectId | null => {
     const raw = typeof value === "object" && value && "_id" in (value as any)
         ? String((value as any)._id || "").trim()
@@ -48,6 +60,88 @@ const getBookingQuantity = (booking: any): number => {
     return 1;
 };
 
+const acquireCageBookingLock = async (cageId: string) => {
+    const now = new Date();
+    const lockUntil = new Date(now.getTime() + BOOKING_LOCK_MS);
+    const cage = await BoardingCage.findOneAndUpdate(
+        {
+            _id: cageId,
+            deleted: false,
+            $or: [
+                { bookingLockUntil: { $exists: false } },
+                { bookingLockUntil: null },
+                { bookingLockUntil: { $lte: now } }
+            ]
+        },
+        { $set: { bookingLockUntil: lockUntil } },
+        { returnDocument: "after" as any }
+    );
+    return cage;
+};
+
+const releaseCageBookingLock = async (cageId: string) => {
+    await BoardingCage.updateOne(
+        { _id: cageId },
+        { $set: { bookingLockUntil: new Date(0) } }
+    );
+};
+
+const canAssignBoardingHotelStaff = (req: Request, res: Response) => {
+    const permissions = Array.isArray(res.locals.permissions) ? res.locals.permissions : [];
+    if (
+        permissions.includes("account_admin_view") ||
+        permissions.includes("account_admin_edit") ||
+        permissions.includes("role_permissions")
+    ) {
+        return true;
+    }
+
+    const roles = Array.isArray((req as any).user?.roles) ? (req as any).user.roles : [];
+    const hasNonStaffRole = roles.some((role: any) => role && typeof role === "object" && role.isStaff === false);
+    const hasStaffRole = roles.some((role: any) => role && typeof role === "object" && role.isStaff === true);
+
+    if (hasNonStaffRole) return true;
+    if (hasStaffRole) return false;
+
+    return false;
+};
+
+const restrictSubmittedAssignedStaff = (items: any[], existingItems: any[]) => {
+    const allowedStaffMap = new Map<string, string>();
+
+    (Array.isArray(existingItems) ? existingItems : []).forEach((item: any) => {
+        const staffId = item?.staffId ? String(item.staffId) : "";
+        const staffName = String(item?.staffName || "").trim();
+        if (staffId) {
+            allowedStaffMap.set(staffId, staffName);
+        }
+    });
+
+    return items.map((item: any) => {
+        const staffId = item?.staffId ? String(item.staffId) : "";
+        if (!staffId) {
+            return {
+                ...item,
+                staffId: null,
+                staffName: "",
+            };
+        }
+
+        if (allowedStaffMap.has(staffId)) {
+            return {
+                ...item,
+                staffName: allowedStaffMap.get(staffId) || item.staffName || "",
+            };
+        }
+
+        return {
+            ...item,
+            staffId: null,
+            staffName: "",
+        };
+    });
+};
+
 const sanitizeFeedingSchedule = (items: any[]): any[] => {
     return items
         .map((item) => {
@@ -56,18 +150,20 @@ const sanitizeFeedingSchedule = (items: any[]): any[] => {
                 ? (item?.doneAt ? new Date(item.doneAt) : new Date())
                 : null;
             const staffId = normalizeObjectId(item?.staffId);
+            const proofMedia = normalizeProofMedia(item?.proofMedia);
             return {
                 time: normalizeTime(item?.time),
                 food: String(item?.food || "").trim(),
                 amount: String(item?.amount || "").trim(),
                 note: String(item?.note || "").trim(),
+                proofMedia,
                 staffId,
                 staffName: String(item?.staffName || "").trim(),
                 status,
                 doneAt
             };
         })
-        .filter((item) => item.time || item.food || item.amount || item.note || item.staffId);
+        .filter((item) => item.time || item.food || item.amount || item.note || item.staffId || item.proofMedia.length > 0);
 };
 
 const sanitizeExerciseSchedule = (items: any[]): any[] => {
@@ -80,18 +176,40 @@ const sanitizeExerciseSchedule = (items: any[]): any[] => {
                 ? (item?.doneAt ? new Date(item.doneAt) : new Date())
                 : null;
             const staffId = normalizeObjectId(item?.staffId);
+            const proofMedia = normalizeProofMedia(item?.proofMedia);
             return {
                 time: normalizeTime(item?.time),
                 activity: String(item?.activity || "").trim(),
                 durationMinutes,
                 note: String(item?.note || "").trim(),
+                proofMedia,
                 staffId,
                 staffName: String(item?.staffName || "").trim(),
                 status,
                 doneAt
             };
         })
-        .filter((item) => item.time || item.activity || item.durationMinutes || item.note || item.staffId);
+        .filter((item) => item.time || item.activity || item.durationMinutes || item.note || item.staffId || item.proofMedia.length > 0);
+};
+
+const validateDoneScheduleEvidence = (
+    items: any[],
+    type: "feeding" | "exercise"
+): string | null => {
+    const label = type === "feeding" ? "Lịch ăn" : "Lịch vận động";
+    const titleField = type === "feeding" ? "food" : "activity";
+
+    for (let index = 0; index < items.length; index += 1) {
+        const item = items[index];
+        if (item?.status !== "done") continue;
+        const proofMedia = Array.isArray(item?.proofMedia) ? item.proofMedia : [];
+        if (proofMedia.length > 0) continue;
+
+        const title = String(item?.[titleField] || "").trim();
+        return `${label} dòng ${index + 1}${title ? ` (${title})` : ""} phải có ít nhất 1 ảnh hoặc video minh chứng trước khi chuyển sang "Đã hoàn thành"`;
+    }
+
+    return null;
 };
 
 const generateBoardingCode = () => {
@@ -103,6 +221,10 @@ const generateBoardingCode = () => {
 // [GET] /api/v1/admin/boarding-booking/hotel-staffs
 export const listBoardingHotelStaffs = async (_req: Request, res: Response) => {
     try {
+        if (!canAssignBoardingHotelStaff(_req, res)) {
+            return res.status(403).json({ code: 403, message: "Ban khong co quyen gan nhan vien khach san" });
+        }
+
         const queryDate = pickParam(_req.query.date);
         const roles = await Role.find({
             deleted: false,
@@ -154,6 +276,7 @@ export const listBoardingHotelStaffs = async (_req: Request, res: Response) => {
 
 // [POST] /api/v1/admin/boarding-booking/create
 export const createBoardingBooking = async (req: Request, res: Response) => {
+    let lockedCageId: string | null = null;
     try {
         const {
             userId,
@@ -201,7 +324,16 @@ export const createBoardingBooking = async (req: Request, res: Response) => {
             return res.status(400).json({ code: 400, message: "Thu cung khong thuoc khach hang da chon" });
         }
 
-        const cage = await BoardingCage.findOne({ _id: cageId, deleted: false });
+        const lockedCage = await acquireCageBookingLock(String(cageId));
+        if (!lockedCage) {
+            return res.status(409).json({
+                code: 409,
+                message: "Chuong dang duoc xu ly dat phong boi yeu cau khac, vui long thu lai sau vai giay"
+            });
+        }
+        lockedCageId = String(lockedCage._id);
+
+        const cage = lockedCage;
         if (!cage) {
             return res.status(404).json({ code: 404, message: "Khong tim thay chuong" });
         }
@@ -290,6 +422,14 @@ export const createBoardingBooking = async (req: Request, res: Response) => {
         });
     } catch (error: any) {
         return res.status(500).json({ code: 500, message: error.message || "Loi he thong" });
+    } finally {
+        if (lockedCageId) {
+            try {
+                await releaseCageBookingLock(lockedCageId);
+            } catch (_) {
+                // no-op
+            }
+        }
     }
 };
 
@@ -416,10 +556,11 @@ export const updateBoardingCareSchedule = async (req: Request, res: Response) =>
             return res.status(400).json({ code: 400, message: "ID khong hop le" });
         }
 
-        const { feedingSchedule, exerciseSchedule, careDate } = req.body as {
+        const { feedingSchedule, exerciseSchedule, careDate, resetTemplate } = req.body as {
             feedingSchedule?: any[];
             exerciseSchedule?: any[];
             careDate?: string;
+            resetTemplate?: boolean;
         };
 
         if (feedingSchedule !== undefined && !Array.isArray(feedingSchedule)) {
@@ -431,12 +572,60 @@ export const updateBoardingCareSchedule = async (req: Request, res: Response) =>
         const booking: any = await BoardingBooking.findOne({ _id: id, deleted: false });
         if (!booking) return res.status(404).json({ code: 404, message: "Khong tim thay don khach san" });
 
+        const canAssignHotelStaff = canAssignBoardingHotelStaff(req, res);
+
+        if (resetTemplate) {
+            const pets = await Pet.find({
+                _id: { $in: Array.isArray(booking.petIds) ? booking.petIds : [] },
+                deleted: false,
+            }).select("type weight name").lean();
+
+            const template = buildDefaultBoardingCareSchedule(pets as any[]);
+            booking.feedingSchedule = template.feedingSchedule;
+            booking.exerciseSchedule = template.exerciseSchedule;
+            await booking.save();
+
+            return res.json({
+                code: 200,
+                message: "Da tao lai lich mau theo loai thu cung",
+                data: booking
+            });
+        }
+
         const sanitizedFeeding = feedingSchedule !== undefined
-            ? sanitizeFeedingSchedule(feedingSchedule).slice(0, 30)
+            ? (
+                canAssignHotelStaff
+                    ? sanitizeFeedingSchedule(feedingSchedule)
+                    : restrictSubmittedAssignedStaff(
+                        sanitizeFeedingSchedule(feedingSchedule),
+                        Array.isArray(booking.feedingSchedule) ? booking.feedingSchedule : []
+                    )
+            ).slice(0, 30)
             : undefined;
         const sanitizedExercise = exerciseSchedule !== undefined
-            ? sanitizeExerciseSchedule(exerciseSchedule).slice(0, 30)
+            ? (
+                canAssignHotelStaff
+                    ? sanitizeExerciseSchedule(exerciseSchedule)
+                    : restrictSubmittedAssignedStaff(
+                        sanitizeExerciseSchedule(exerciseSchedule),
+                        Array.isArray(booking.exerciseSchedule) ? booking.exerciseSchedule : []
+                    )
+            ).slice(0, 30)
             : undefined;
+
+        const feedingEvidenceError = sanitizedFeeding !== undefined
+            ? validateDoneScheduleEvidence(sanitizedFeeding, "feeding")
+            : null;
+        if (feedingEvidenceError) {
+            return res.status(400).json({ code: 400, message: feedingEvidenceError });
+        }
+
+        const exerciseEvidenceError = sanitizedExercise !== undefined
+            ? validateDoneScheduleEvidence(sanitizedExercise, "exercise")
+            : null;
+        if (exerciseEvidenceError) {
+            return res.status(400).json({ code: 400, message: exerciseEvidenceError });
+        }
 
         const staffIds = Array.from(new Set(
             [
