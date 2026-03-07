@@ -44,11 +44,11 @@ const avgWeight = (pets: PetLite[]): number => {
 const getDogAmountHint = (dogs: PetLite[]): string => {
     const weight = avgWeight(dogs);
     if (!weight) {
-        return "Khau phan ngay tham khao: 2-3% trong luong co the";
+        return "Khẩu phần ngày tham khảo: 2-3% trọng lượng cơ thể";
     }
     const minGram = Math.round(weight * 20);
     const maxGram = Math.round(weight * 30);
-    return `Khau phan ngay tham khao ${minGram}-${maxGram}g (2-3% trong luong)`;
+    return `Khẩu phần ngày tham khảo ${minGram}-${maxGram}g (2-3% trọng lượng)`;
 };
 
 const buildDogFeedingTemplate = (dogs: PetLite[]): FeedingItem[] => {
@@ -56,9 +56,9 @@ const buildDogFeedingTemplate = (dogs: PetLite[]): FeedingItem[] => {
     return [
         {
             time: "06:30",
-            food: "Hat hoac pate",
-            amount: "40-50% khau phan ngay",
-            note: `${amountHint}. Sau an nghi 20-30 phut`,
+            food: "Hạt hoặc pate",
+            amount: "40-50% khẩu phần ngày",
+            note: `${amountHint}. Sau ăn nghỉ 20-30 phút`,
             status: "pending",
             staffId: null,
             staffName: "",
@@ -66,9 +66,9 @@ const buildDogFeedingTemplate = (dogs: PetLite[]): FeedingItem[] => {
         },
         {
             time: "12:00",
-            food: "Bua phu (snack/trai cay an toan)",
-            amount: "Nho",
-            note: "Khong bat buoc voi cho truong thanh",
+            food: "Bữa phụ (snack/trái cây an toàn)",
+            amount: "Nhỏ",
+            note: "Không bắt buộc với chó trưởng thành",
             status: "pending",
             staffId: null,
             staffName: "",
@@ -76,9 +76,9 @@ const buildDogFeedingTemplate = (dogs: PetLite[]): FeedingItem[] => {
         },
         {
             time: "17:30",
-            food: "Hat + thit luoc hoac pate",
-            amount: "50-60% khau phan ngay",
-            note: "Co the bo sung giong/khau vi theo huong dan chu nuoi",
+            food: "Hạt + thịt luộc hoặc pate",
+            amount: "50-60% khẩu phần ngày",
+            note: "Có thể điều chỉnh theo khẩu vị và hướng dẫn của chủ nuôi",
             status: "pending",
             staffId: null,
             staffName: "",
@@ -91,9 +91,9 @@ const buildDogExerciseTemplate = (): ExerciseItem[] => {
     return [
         {
             time: "07:15",
-            activity: "Di dao nhe + di ve sinh",
+            activity: "Đi dạo nhẹ + đi vệ sinh",
             durationMinutes: 25,
-            note: "Muc tieu: 15-30 phut",
+            note: "Mục tiêu: 15-30 phút",
             status: "pending",
             staffId: null,
             staffName: "",
@@ -101,9 +101,9 @@ const buildDogExerciseTemplate = (): ExerciseItem[] => {
         },
         {
             time: "19:00",
-            activity: "Van dong chinh (chay/nem bong/di dao)",
+            activity: "Vận động chính (chạy/ném bóng/đi dạo)",
             durationMinutes: 30,
-            note: "Muc tieu: 20-40 phut. Tong ngay tuy giong 30-90 phut",
+            note: "Mục tiêu: 20-40 phút. Tổng vận động/ngày tùy giống: 30-90 phút",
             status: "pending",
             staffId: null,
             staffName: "",
@@ -116,9 +116,9 @@ const buildCatFeedingTemplate = (): FeedingItem[] => {
     return [
         {
             time: "06:30",
-            food: "Hat hoac pate",
-            amount: "Khoang 30% khau phan ngay",
-            note: "Meo an it nhung nhieu bua",
+            food: "Hạt hoặc pate",
+            amount: "Khoảng 30% khẩu phần ngày",
+            note: "Mèo ăn ít nhưng nhiều bữa",
             status: "pending",
             staffId: null,
             staffName: "",
@@ -126,9 +126,9 @@ const buildCatFeedingTemplate = (): FeedingItem[] => {
         },
         {
             time: "12:30",
-            food: "Bua phu hat/pate",
-            amount: "Khoang 20% khau phan ngay",
-            note: "Theo doi kha nang an het khau phan",
+            food: "Bữa phụ hạt/pate",
+            amount: "Khoảng 20% khẩu phần ngày",
+            note: "Theo dõi khả năng ăn hết khẩu phần",
             status: "pending",
             staffId: null,
             staffName: "",
@@ -136,9 +136,9 @@ const buildCatFeedingTemplate = (): FeedingItem[] => {
         },
         {
             time: "17:30",
-            food: "Bua chinh",
-            amount: "Khoang 40-50% khau phan ngay",
-            note: "Meo truong thanh tham khao 40-60g hat/ngay hoac 2-3 goi pate",
+            food: "Bữa chính",
+            amount: "Khoảng 40-50% khẩu phần ngày",
+            note: "Mèo trưởng thành tham khảo 40-60g hạt/ngày hoặc 2-3 gói pate",
             status: "pending",
             staffId: null,
             staffName: "",
@@ -146,9 +146,9 @@ const buildCatFeedingTemplate = (): FeedingItem[] => {
         },
         {
             time: "21:00",
-            food: "Snack nhe",
-            amount: "Nho",
-            note: "Co the bo sung it hat/snack meo",
+            food: "Snack nhẹ",
+            amount: "Nhỏ",
+            note: "Có thể bổ sung ít hạt hoặc snack mèo",
             status: "pending",
             staffId: null,
             staffName: "",
@@ -161,9 +161,9 @@ const buildCatExerciseTemplate = (): ExerciseItem[] => {
     return [
         {
             time: "19:30",
-            activity: "Choi san moi gia lap (can cau/laser/bong)",
+            activity: "Chơi săn mồi giả lập (cần câu/laser/bóng)",
             durationMinutes: 20,
-            note: "Muc tieu 15-30 phut/ngay",
+            note: "Mục tiêu 15-30 phút/ngày",
             status: "pending",
             staffId: null,
             staffName: "",
@@ -175,7 +175,7 @@ const buildCatExerciseTemplate = (): ExerciseItem[] => {
 const appendHydrationNote = (feeding: FeedingItem[]): FeedingItem[] => {
     return feeding.map((item) => ({
         ...item,
-        note: `${item.note}. Nuoc sach 24h, thay nuoc it nhat 2 lan/ngay`,
+        note: `${item.note}. Luôn có nước sạch 24h, thay nước ít nhất 2 lần/ngày`,
     }));
 };
 

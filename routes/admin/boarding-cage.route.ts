@@ -4,7 +4,7 @@ import { checkPermission } from "../../middlewares/admin/auth.middleware";
 
 const router = Router();
 
-router.get("/", checkPermission("boarding_cage_view"), controller.listBoardingCages);
+router.get("/", checkPermission("boarding_cage_view", "boarding_booking_create"), controller.listBoardingCages);
 router.post("/create", checkPermission("boarding_cage_create"), controller.createBoardingCage);
 router.patch("/:id", checkPermission("boarding_cage_edit"), controller.updateBoardingCage);
 router.delete("/:id", checkPermission("boarding_cage_delete"), controller.deleteBoardingCage);

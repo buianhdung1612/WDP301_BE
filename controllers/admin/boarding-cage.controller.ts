@@ -54,6 +54,22 @@ const normalizeAmenities = (value: unknown): string[] => {
     return Array.from(new Set(normalized));
 };
 
+const extractHttpUrls = (text: string): string[] => {
+    const matches = String(text || "").match(/https?:\/\/\S+/gi) || [];
+    return matches
+        .map((item) => item.trim().replace(/[),;]+$/g, ""))
+        .filter((item) => /^https?:\/\//i.test(item));
+};
+
+const normalizeImageList = (value: unknown): string[] => {
+    const rawList = Array.isArray(value)
+        ? value.flatMap((item) => extractHttpUrls(String(item || "")))
+        : typeof value === "string"
+            ? extractHttpUrls(value)
+            : [];
+    return Array.from(new Set(rawList));
+};
+
 // [GET] /api/v1/admin/boarding-cage
 export const listBoardingCages = async (req: Request, res: Response) => {
     try {
@@ -83,7 +99,7 @@ export const listBoardingCages = async (req: Request, res: Response) => {
 // [POST] /api/v1/admin/boarding-cage/create
 export const createBoardingCage = async (req: Request, res: Response) => {
     try {
-        const { cageCode, type, size, maxWeightCapacity, dailyPrice, avatar, description, amenities, status } = req.body;
+        const { cageCode, type, size, maxWeightCapacity, dailyPrice, avatar, gallery, description, amenities, status } = req.body;
         const normalizedSize = normalizeCageSize(size);
         if (!cageCode || !normalizedSize) {
             return res.status(400).json({ code: 400, message: "Thiếu mã chuồng hoặc kích thước" });
@@ -101,6 +117,7 @@ export const createBoardingCage = async (req: Request, res: Response) => {
             maxWeightCapacity,
             dailyPrice,
             avatar,
+            gallery: normalizeImageList(gallery),
             description,
             amenities: normalizeAmenities(amenities),
             status
@@ -139,6 +156,9 @@ export const updateBoardingCage = async (req: Request, res: Response) => {
 
         if ((payload as any).amenities !== undefined) {
             (payload as any).amenities = normalizeAmenities((payload as any).amenities);
+        }
+        if ((payload as any).gallery !== undefined) {
+            (payload as any).gallery = normalizeImageList((payload as any).gallery);
         }
 
         const updated = await BoardingCage.findOneAndUpdate(

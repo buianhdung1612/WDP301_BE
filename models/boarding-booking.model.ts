@@ -1,4 +1,16 @@
-﻿import mongoose from "mongoose";
+import mongoose from "mongoose";
+
+const proofMediaSchema = new mongoose.Schema(
+    {
+        url: String,
+        kind: {
+            type: String,
+            enum: ["image", "video"],
+            default: "image"
+        }
+    },
+    { _id: false }
+);
 
 const feedingScheduleSchema = new mongoose.Schema(
     {
@@ -6,6 +18,7 @@ const feedingScheduleSchema = new mongoose.Schema(
         food: String,
         amount: String,
         note: String,
+        proofMedia: [proofMediaSchema],
         staffId: {
             type: mongoose.Schema.Types.ObjectId,
             ref: "AccountAdmin"
@@ -27,6 +40,7 @@ const exerciseScheduleSchema = new mongoose.Schema(
         activity: String,
         durationMinutes: Number,
         note: String,
+        proofMedia: [proofMediaSchema],
         staffId: {
             type: mongoose.Schema.Types.ObjectId,
             ref: "AccountAdmin"

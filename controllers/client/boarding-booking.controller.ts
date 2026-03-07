@@ -11,6 +11,7 @@ import { buildDefaultBoardingCareSchedule } from "../../utils/boarding-care-temp
 
 const DEFAULT_HOLD_MINUTES = Number(process.env.BOARDING_HOLD_MINUTES || 15);
 const MAX_ROOMS_PER_CAGE = Math.max(1, Number(process.env.BOARDING_CAGE_CAPACITY || 4));
+const BOOKING_LOCK_MS = Math.max(3000, Number(process.env.BOARDING_BOOKING_LOCK_MS || 8000));
 
 const releaseExpiredHolds = async () => {
     const now = new Date();
@@ -56,7 +57,34 @@ const getBookingQuantity = (booking: any): number => {
     return 1;
 };
 
+const acquireCageBookingLock = async (cageId: string) => {
+    const now = new Date();
+    const lockUntil = new Date(now.getTime() + BOOKING_LOCK_MS);
+    const cage = await BoardingCage.findOneAndUpdate(
+        {
+            _id: cageId,
+            deleted: false,
+            $or: [
+                { bookingLockUntil: { $exists: false } },
+                { bookingLockUntil: null },
+                { bookingLockUntil: { $lte: now } }
+            ]
+        },
+        { $set: { bookingLockUntil: lockUntil } },
+        { returnDocument: "after" as any }
+    );
+    return cage;
+};
+
+const releaseCageBookingLock = async (cageId: string) => {
+    await BoardingCage.updateOne(
+        { _id: cageId },
+        { $set: { bookingLockUntil: new Date(0) } }
+    );
+};
+
 export const createBoardingBooking = async (req: Request, res: Response) => {
+    let lockedCageId: string | null = null;
     try {
         const user = res.locals.accountUser;
         const userId = user?._id?.toString();
@@ -110,7 +138,15 @@ export const createBoardingBooking = async (req: Request, res: Response) => {
             return res.status(400).json({ message: "Invalid date format" });
         }
 
-        const cage = await BoardingCage.findOne({ _id: cageId, deleted: false });
+        const lockedCage = await acquireCageBookingLock(String(cageId));
+        if (!lockedCage) {
+            return res.status(409).json({
+                message: "Chuong dang duoc xu ly dat phong boi yeu cau khac, vui long thu lai sau vai giay"
+            });
+        }
+        lockedCageId = String(lockedCage._id);
+
+        const cage = lockedCage;
         if (!cage) {
             return res.status(404).json({ message: "Cage not found" });
         }
@@ -221,6 +257,14 @@ export const createBoardingBooking = async (req: Request, res: Response) => {
         });
     } catch (error: any) {
         return res.status(500).json({ message: error.message });
+    } finally {
+        if (lockedCageId) {
+            try {
+                await releaseCageBookingLock(lockedCageId);
+            } catch (_) {
+                // no-op
+            }
+        }
     }
 };
 
