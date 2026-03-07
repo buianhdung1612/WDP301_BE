@@ -201,14 +201,22 @@ export const getAvailableTimeSlots = async (req: Request, res: Response) => {
     }
 };
 
+
 // [GET] /api/v1/client/bookings
 export const listMyBookings = async (req: Request, res: Response) => {
     try {
-        const userId = res.locals.accountUser._id;
+        const userId = res.locals.accountUser?._id?.toString();
         const page = parseInt(req.query.page as string) || 1;
         const limit = parseInt(req.query.limit as string) || 10;
         const skip = (page - 1) * limit;
         const status = req.query.status as string;
+
+        if (!userId) {
+            return res.status(401).json({
+                code: 401,
+                message: "Vui lòng đăng nhập"
+            });
+        }
 
         let filter: any = { deleted: false, userId }; // Lọc theo user hiện tại và chưa xóa
         if (status) {
@@ -247,7 +255,15 @@ export const listMyBookings = async (req: Request, res: Response) => {
 // [GET] /api/v1/client/bookings/:id
 export const getMyBooking = async (req: Request, res: Response) => {
     try {
-        const userId = res.locals.accountUser._id;
+        const userId = res.locals.accountUser?._id?.toString();
+
+        if (!userId) {
+            return res.status(401).json({
+                code: 401,
+                message: "Vui lòng đăng nhập"
+            });
+        }
+
         const booking = await Booking.findById(req.params.id)
             .populate("serviceId")
             .populate("petIds");
@@ -275,9 +291,6 @@ export const getMyBooking = async (req: Request, res: Response) => {
 // [POST] /api/v1/client/bookings
 export const createBooking = async (req: Request, res: Response) => {
     try {
-        const user = res.locals.accountUser || null;
-        const userId = user ? user._id : null;
-
         const {
             serviceId,
             startTime,
@@ -285,9 +298,15 @@ export const createBooking = async (req: Request, res: Response) => {
             notes
         } = req.body;
 
+        const userId = res.locals.accountUser?._id?.toString();
+
         if (!userId) {
-            return res.status(401).json({ code: 401, message: "Vui lòng đăng nhập" });
+            return res.status(401).json({
+                code: 401,
+                message: "Vui lòng đăng nhập"
+            });
         }
+
 
         // 0. Lấy cấu hình đặt lịch
         const config = await BookingConfig.findOne({});
@@ -355,8 +374,12 @@ export const createBooking = async (req: Request, res: Response) => {
 
         // 4. Tính giá tiền
         let totalPrice = 0;
+        const petPrices: { [key: string]: number } = {};
+
         if (service.pricingType === "fixed") {
-            totalPrice = (service.basePrice || 0) * numPets;
+            const price = service.basePrice || 0;
+            totalPrice = price * numPets;
+            pets.forEach(p => petPrices[p._id.toString()] = price);
         } else if (service.pricingType === "by-weight") {
             for (const pet of pets) {
                 const petWeight = pet.weight || 0;
@@ -371,20 +394,28 @@ export const createBooking = async (req: Request, res: Response) => {
                     }
                     return petWeight <= parseFloat(label.replace(/[^\d.]/g, ''));
                 });
-                totalPrice += priceItem ? (priceItem as any).value : (service.basePrice || 0);
+                const price = priceItem ? (priceItem as any).value : (service.basePrice || 0);
+                totalPrice += price;
+                petPrices[pet._id.toString()] = price;
             }
         }
 
         // 5. Tạo lịch đặt
         const bookingCode = `BK${Date.now()}`;
+        const initialMap = autoAssignPetsToStaff(petIds, bestStaffList.map(s => s._id));
+        const petStaffMap = initialMap.map((item: any) => ({
+            ...item,
+            price: petPrices[item.petId.toString()] || 0
+        }));
+
         const newBooking = new Booking({
             code: bookingCode,
             userId,
-            customerName: user.fullName,
-            customerPhone: user.phone,
+            customerName: res.locals.accountUser?.fullName || "Khách hàng",
+            customerPhone: res.locals.accountUser?.phone || "",
             serviceId,
             staffIds: bestStaffList.map(s => s._id) as any,
-            petStaffMap: autoAssignPetsToStaff(petIds, bestStaffList.map(s => s._id)) as any,
+            petStaffMap,
             petIds,
             start,
             end: finalEndDate,
@@ -415,8 +446,15 @@ export const createBooking = async (req: Request, res: Response) => {
 // [PATCH] /api/v1/client/bookings/:id/cancel
 export const cancelMyBooking = async (req: Request, res: Response) => {
     try {
-        const userId = res.locals.accountUser._id;
+        const userId = res.locals.accountUser?._id?.toString();
         const { reason } = req.body;
+
+        if (!userId) {
+            return res.status(401).json({
+                code: 401,
+                message: "Vui lòng đăng nhập"
+            });
+        }
 
         const booking = await Booking.findById(req.params.id);
 
