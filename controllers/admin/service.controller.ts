@@ -254,8 +254,8 @@ export const serviceCreate = async (req: Request, res: Response) => {
     try {
         const {
             categoryId, name, description, duration, petTypes,
-            pricingType, basePrice, priceList, minDuration,
-            maxDuration, surchargeType, surchargeValue, images
+            pricingType, basePrice, priceList, images,
+            minDuration, maxDuration, procedure
         } = req.body;
 
         const category = await ServiceCategory.findById(categoryId);
@@ -286,11 +286,10 @@ export const serviceCreate = async (req: Request, res: Response) => {
             pricingType,
             basePrice,
             priceList,
+            images,
             minDuration,
             maxDuration,
-            surchargeType,
-            surchargeValue,
-            images,
+            procedure,
             status: "active"
         });
 
@@ -333,14 +332,14 @@ export const serviceEdit = async (req: Request, res: Response) => {
 
         const {
             name, slug, categoryId, description, duration,
-            petTypes, pricingType, basePrice, priceList, minDuration,
-            maxDuration, surchargeType, surchargeValue, status, images
+            petTypes, pricingType, basePrice, priceList, status, images,
+            minDuration, maxDuration, procedure
         } = req.body;
 
         const updateData: any = {
             name, slug, categoryId, description, duration,
-            petTypes, pricingType, basePrice, priceList, minDuration,
-            maxDuration, surchargeType, surchargeValue, status, images
+            petTypes, pricingType, basePrice, priceList, status, images,
+            minDuration, maxDuration, procedure
         };
 
         // Xóa các trường undefined để tránh ghi đè dữ liệu cũ bằng null/undefined nếu không truyền

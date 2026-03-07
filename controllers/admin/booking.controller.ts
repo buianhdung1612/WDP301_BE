@@ -729,23 +729,92 @@ export const startInProgress = async (req: Request, res: Response) => {
         if (petId) {
             const petMapping = booking.petStaffMap.find((m: any) => m.petId.toString() === petId.toString());
             if (petMapping) {
+                if (petMapping.status === "in-progress") {
+                    return res.status(400).json({ code: 400, message: "Dịch vụ cho bé này đang được thực hiện rồi." });
+                }
+
+                if (petMapping.status === "completed") {
+                    return res.status(400).json({ code: 400, message: "Dịch vụ cho bé này đã hoàn thành, không thể bắt đầu lại." });
+                }
+
+                // RÀO CẢN: Một nhân viên chỉ làm 1 pet tại 1 thời điểm
+                const staffId = petMapping.staffId;
+                if (staffId) {
+                    const isBusy = await Booking.findOne({
+                        "petStaffMap": {
+                            $elemMatch: {
+                                staffId: staffId,
+                                status: "in-progress"
+                            }
+                        },
+                        deleted: false
+                    });
+
+                    if (isBusy) {
+                        const busyStaff = await AccountAdmin.findById(staffId);
+                        return res.status(400).json({
+                            code: 400,
+                            message: `Nhân viên ${busyStaff?.fullName || "được chỉ định"} đang bận thực hiện dịch vụ cho một bé khác. Vui lòng hoàn tất dịch vụ hiện tại trước khi bắt đầu dịch vụ mới.`
+                        });
+                    }
+                }
+
                 petMapping.status = "in-progress";
                 petMapping.startedAt = new Date();
             }
         } else {
             // Quy trình cũ: Chuyển tất cả sang in-progress
-            booking.petStaffMap.forEach((m: any) => {
-                if (m.status === "pending") {
-                    m.status = "in-progress";
-                    m.startedAt = new Date();
+            // Cần kiểm tra xem có nhân viên nào bị trùng không
+            const pendingMappings = booking.petStaffMap.filter((m: any) => m.status === "pending");
+
+            for (const m of pendingMappings) {
+                if (m.staffId) {
+                    const isBusy = await Booking.findOne({
+                        "petStaffMap": {
+                            $elemMatch: {
+                                staffId: m.staffId,
+                                status: "in-progress"
+                            }
+                        },
+                        deleted: false
+                    });
+                    if (isBusy) {
+                        const staff = await AccountAdmin.findById(m.staffId);
+                        return res.status(400).json({
+                            code: 400,
+                            message: `Nhân viên ${staff?.fullName || ""} đang bận, không thể bắt đầu thực hiện đồng loạt cho tất cả các bé.`
+                        });
+                    }
                 }
+            }
+
+            // Kiểm tra trùng ngay nội bộ danh sách sắp bắt đầu (1 staff làm >1 bé trong cùng 1 hành động)
+            const staffIds = pendingMappings.map(m => m.staffId?.toString()).filter((id): id is string => !!id);
+            const staffCountMap: Record<string, number> = {};
+            staffIds.forEach(id => staffCountMap[id] = (staffCountMap[id] || 0) + 1);
+
+            for (const id in staffCountMap) {
+                if (staffCountMap[id] > 1) {
+                    const staff = await AccountAdmin.findById(id);
+                    return res.status(400).json({
+                        code: 400,
+                        message: `Nhân viên ${staff?.fullName || ""} được phân công thực hiện cho ${staffCountMap[id]} bé trong đơn này. Vui lòng bắt đầu thực hiện cho từng bé một thay vì bắt đầu tất cả.`
+                    });
+                }
+            }
+
+            pendingMappings.forEach((m: any) => {
+                m.status = "in-progress";
+                m.startedAt = new Date();
             });
         }
 
         // Cập nhật trạng thái tổng đơn nếu chưa in-progress
         if (booking.bookingStatus !== "in-progress") {
             const actualStart = new Date();
-            const duration = (booking.serviceId as any)?.duration || 60;
+            const service = booking.serviceId as any;
+            const duration = service?.duration || 60;
+
             const expectedFinish = new Date(actualStart.getTime() + duration * 60000);
 
             booking.bookingStatus = "in-progress";
@@ -1124,56 +1193,21 @@ export const completeBooking = async (req: Request, res: Response) => {
         if (petId) {
             const petMapping = booking.petStaffMap.find((m: any) => m.petId.toString() === petId.toString());
             if (petMapping) {
-                // FETCH SERVICE FOR VALIDATION
-                const service: any = await Service.findById(booking.serviceId);
-                if (!service) {
-                    return res.status(404).json({ code: 404, message: "Dịch vụ không tồn tại" });
-                }
-
-                // Check minDuration
+                // 2. Kiểm tra thời gian tối thiểu (minDuration)
+                const service = await Service.findById(booking.serviceId);
                 const now = new Date();
                 const startedAt = petMapping.startedAt ? new Date(petMapping.startedAt) : null;
-                const timeElapsed = startedAt ? Math.floor((now.getTime() - startedAt.getTime()) / 60000) : 0;
+                const timeElapsed = startedAt ? Math.round((now.getTime() - startedAt.getTime()) / 60000) : 0;
 
-                if (startedAt && service.minDuration > 0 && timeElapsed < service.minDuration) {
+                if (service && startedAt && (service as any).minDuration > 0 && timeElapsed < (service as any).minDuration) {
                     return res.status(400).json({
                         code: 400,
-                        message: `Hoàn thành quá sớm! Dịch vụ này yêu cầu tối thiểu ${service.minDuration} phút (hiện tại: ${timeElapsed} phút).`
+                        message: `Hoàn thành quá sớm! Dịch vụ này yêu cầu tối thiểu ${(service as any).minDuration} phút (hiện tại: ${timeElapsed} phút).`
                     });
-                }
-
-                // Calculate Surcharge if maxDuration exceeded
-                if (startedAt && service.maxDuration > 0 && timeElapsed > service.maxDuration) {
-                    let surcharge = 0;
-                    let notes = "";
-                    if (service.surchargeType === 'fixed') {
-                        surcharge = service.surchargeValue;
-                        notes = `Phụ thu quá giờ (Cố định): ${surcharge.toLocaleString()}đ`;
-                    } else if (service.surchargeType === 'per-minute') {
-                        const overtime = timeElapsed - service.maxDuration;
-                        surcharge = overtime * service.surchargeValue;
-                        notes = `Phụ thu quá giờ (${overtime} phút x ${service.surchargeValue.toLocaleString()}đ/phút): ${surcharge.toLocaleString()}đ`;
-                    }
-
-                    if (surcharge > 0) {
-                        petMapping.surchargeAmount = surcharge;
-                        petMapping.surchargeNotes = notes;
-                    }
                 }
 
                 petMapping.status = "completed";
                 petMapping.completedAt = now;
-
-                // Recalculate Booking Total if there are surcharges
-                const totalSurcharge = booking.petStaffMap.reduce((sum: number, m: any) => sum + (m.surchargeAmount || 0), 0);
-                // We assume 'total' was set at creation. We add the latest surcharges.
-                // Note: If we want to be safe, we'd need subtraction of old surcharges if this was an update, 
-                // but since it's transitions from in-progress to completed, it's usually the first time.
-                // However, to be robust:
-                // Let's store the initial total if we haven't done it yet, or just recalculate total based on subTotal
-                if (booking.subTotal) {
-                    booking.total = (booking.subTotal - (booking.discount || 0)) + totalSurcharge;
-                }
             }
         } else {
             // Quy trình cũ: Hoàn thành tất cả (có thể bỏ qua validation nếu làm hàng loạt, 

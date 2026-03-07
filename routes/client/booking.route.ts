@@ -1,7 +1,10 @@
 import { Router } from "express";
 import * as serviceController from "../../controllers/client/service.controller";
 import * as bookingController from "../../controllers/client/booking.controller";
-import { infoAuth, requireAuth } from "../../middlewares/client/auth.middleware";
+import * as petController from "../../controllers/client/pet.controller";
+import * as boardingCageController from "../../controllers/client/boarding-cage.controller";
+import * as boardingBookingController from "../../controllers/client/boarding-booking.controller";
+import * as authMiddleware from "../../middlewares/client/auth.middleware";
 
 const router = Router();
 
@@ -12,12 +15,39 @@ router.get("/services/:id", serviceController.getService);
 router.get("/service-categories", serviceController.getCategories);
 
 // ================= SERVICE BOOKINGS =================
-router.get("/time-slots", bookingController.getAvailableTimeSlots); // Thường ko cần auth để xem slot
-router.get("/bookings", requireAuth, bookingController.listMyBookings);
-router.get("/bookings/:id", requireAuth, bookingController.getMyBooking);
-router.post("/bookings", infoAuth, bookingController.createBooking); // infoAuth để hỗ trợ cả guest và user
-router.patch("/bookings/:id/cancel", requireAuth, bookingController.cancelMyBooking);
-router.get("/export-pdf", bookingController.exportBookingPdf);
+router.get("/bookings", authMiddleware.requireAuth, bookingController.listMyBookings);
+router.get("/bookings/:id", authMiddleware.requireAuth, bookingController.getMyBooking);
+router.post("/bookings", authMiddleware.requireAuth, bookingController.createBooking);
+router.patch("/bookings/:id/cancel", authMiddleware.requireAuth, bookingController.cancelMyBooking);
+
+// ================= BOARDING CAGES =================
+router.get("/boarding-cages", boardingCageController.getAllBoardingCages);
+router.post("/boarding-cages", boardingCageController.createBoardingCage);
+router.patch("/boarding-cages/:id", boardingCageController.updateCageStatus);
+router.delete("/boarding-cages/:id", boardingCageController.deleteBoardingCage);
+router.get(
+  "/boarding-cages/available",
+  boardingCageController.listAvailableCages
+);
+// ...
+// ================= BOARDING BOOKINGS (HOTEL PET) =================
+router.get(
+  "/boarding-bookings",
+  boardingBookingController.listMyBoardingBookings
+);
+
+
+router.post(
+  "/boarding-bookings",
+  boardingBookingController.createBoardingBooking
+);
+
+router.patch(
+  "/boarding-bookings/:id/cancel",
+  boardingBookingController.cancelBoardingBooking
+);
+
+// ================= PETS =================
 
 
 export default router;

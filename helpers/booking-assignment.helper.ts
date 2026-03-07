@@ -27,7 +27,7 @@ export const findBestStaffForBooking = async (
     const dEnd = dayjs(endTime);
     const targetDate = dayjs(bookingDate);
 
-    console.log(`--- Finding best staff for ${targetDate.format("YYYY-MM-DD")} ${dStart.format("HH:mm")}-${dEnd.format("HH:mm")} ---`);
+    console.log(`--- Đang tìm nhân viên phù hợp nhất cho ngày ${targetDate.format("YYYY-MM-DD")} từ ${dStart.format("HH:mm")} đến ${dEnd.format("HH:mm")} ---`);
 
     // 1. Lấy tất cả nhân viên có lịch làm việc trong ngày
     // Tạm thời nới lỏng status để test nếu cần, nhưng mặc định là scheduled/checked-in
@@ -45,7 +45,7 @@ export const findBestStaffForBooking = async (
 
     const schedules = await WorkSchedule.find(query).populate("staffId").populate("shiftId");
 
-    console.log(`FOUND ${schedules.length} schedules in DB`);
+    console.log(`ĐÃ TÌM THẤY ${schedules.length} lịch trực trong cơ sở dữ liệu`);
 
     // 2. Lấy tất cả bookings đã phân công trong ngày để tránh trùng lịch
     const assignedBookings = await Booking.find({
@@ -71,7 +71,7 @@ export const findBestStaffForBooking = async (
 
         // Bỏ qua kiểm tra status để linh hoạt hơn trong quá trình test/demo
         // if (staff.status !== "active") {
-        //     console.log(`  x ${staff.fullName}: inactive`);
+        //     console.log(`  x ${staff.fullName}: không hoạt động`);
         //     continue;
         // }
 
@@ -88,7 +88,7 @@ export const findBestStaffForBooking = async (
         );
 
         if (!canDoService) {
-            console.log(`  x ${staff.fullName}: cannot perform service ${serviceId}`);
+            console.log(`  x ${staff.fullName}: không thể thực hiện dịch vụ ${serviceId}`);
             continue;
         }
 
@@ -102,7 +102,7 @@ export const findBestStaffForBooking = async (
         const reqEndMin = dEnd.hour() * 60 + dEnd.minute();
 
         if (reqStartMin < shiftStartMin || reqEndMin > shiftEndMin) {
-            console.log(`  x ${staff.fullName}: time ${reqStartMin}-${reqEndMin} outside shift ${shiftStartMin}-${shiftEndMin}`);
+            console.log(`  x ${staff.fullName}: thời gian ${reqStartMin}-${reqEndMin} nằm ngoài ca trực ${shiftStartMin}-${shiftEndMin}`);
             continue;
         }
 
@@ -118,14 +118,14 @@ export const findBestStaffForBooking = async (
         });
 
         if (isOverlapping) {
-            console.log(`  x ${staff.fullName}: overlapping booking`);
+            console.log(`  x ${staff.fullName}: bị trùng lịch đặt khác`);
             continue;
         }
 
         // D. Tính điểm
         let score = 100;
 
-        // 1. History (completed tasks)
+        // 1. Lịch sử làm việc (số đơn đã hoàn thành)
         const historyCount = await Booking.countDocuments({
             staffIds: staff._id,
             serviceId: serviceId,
@@ -134,31 +134,31 @@ export const findBestStaffForBooking = async (
         });
         score += historyCount * 5;
 
-        // 2. Rating
+        // 2. Điểm đánh giá (Rating)
         const staffReviews = allReviews.filter(r => r.staffId?.toString() === staff._id.toString());
         if (staffReviews.length > 0) {
             const avgRating = staffReviews.reduce((sum, r) => sum + r.rating, 0) / staffReviews.length;
             score += avgRating * 2;
         }
 
-        // 3. Workload penalty
+        // 3. Phạt theo khối lượng công việc (càng nhiều đơn càng bị trừ điểm để cân bằng tải)
         const todayCount = assignedBookings.filter(b => {
             const bStaffIds = b.staffIds?.map((id: any) => id.toString()) || [];
             return bStaffIds.includes(staff._id.toString());
         }).length;
         score -= todayCount * 10;
 
-        console.log(`  v ${staff.fullName}: eligible (score ${score})`);
+        console.log(`  v ${staff.fullName}: đủ điều kiện (điểm số: ${score})`);
         availableStaffList.push({ staff, score });
     }
 
-    // Sort by score descending and return
+    // Sắp xếp theo điểm giảm dần và trả về kết quả
     const result = availableStaffList
         .sort((a, b) => b.score - a.score)
         .map(item => item.staff);
 
-    // If we have more pets than available staff, we still return the available staff
-    // The autoAssignPetsToStaff helper will handle round-robin assignment
+    // Nếu số lượng thú cưng nhiều hơn số nhân viên rảnh, chúng ta vẫn trả về danh sách nhân viên rảnh
+    // Hàm autoAssignPetsToStaff sẽ xử lý việc phân bổ xoay vòng (round-robin) sau đó.
     return result.slice(0, numPets);
 };
 

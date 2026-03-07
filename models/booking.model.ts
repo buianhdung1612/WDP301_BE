@@ -7,6 +7,8 @@ const schema = new mongoose.Schema(
             type: mongoose.Schema.Types.ObjectId,
             ref: "AccountUser"
         },
+        customerName: String,
+        customerPhone: String,
         serviceId: {
             type: mongoose.Schema.Types.ObjectId,
             ref: "Service"
@@ -22,18 +24,14 @@ const schema = new mongoose.Schema(
         petStaffMap: [{
             petId: { type: mongoose.Schema.Types.ObjectId, ref: "Pet" },
             staffId: { type: mongoose.Schema.Types.ObjectId, ref: "AccountAdmin" },
+            price: Number,
             status: {
                 type: String,
                 enum: ["pending", "in-progress", "completed"],
                 default: "pending"
             },
             startedAt: Date,
-            completedAt: Date,
-            surchargeAmount: {
-                type: Number,
-                default: 0
-            },
-            surchargeNotes: String
+            completedAt: Date
         }],
         start: Date, // Thời gian bắt đầu
         end: Date, // Thời gian kết thúc

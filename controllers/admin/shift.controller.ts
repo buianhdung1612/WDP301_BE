@@ -20,6 +20,7 @@ export const index = async (req: Request, res: Response) => {
         }
 
         const shifts = await Shift.find(filter)
+            .populate("departmentId")
             .sort({ startTime: 1 });
 
         res.json({
@@ -38,7 +39,7 @@ export const index = async (req: Request, res: Response) => {
 // [GET] /api/v1/admin/shifts/:id
 export const detail = async (req: Request, res: Response) => {
     try {
-        const shift = await Shift.findById(req.params.id);
+        const shift = await Shift.findById(req.params.id).populate("departmentId");
 
         if (!shift) {
             return res.status(404).json({

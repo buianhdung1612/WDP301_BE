@@ -6,10 +6,23 @@ const schema = new mongoose.Schema(
             type: mongoose.Schema.Types.ObjectId,
             ref: "CategoryService"
         },
+        departmentId: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "Department"
+        },
         name: String,
         slug: String,
         description: String,
+        procedure: String, // Quy trình thực hiện (tách riêng cho rõ)
         duration: Number,
+        minDuration: {
+            type: Number,
+            default: 0
+        },
+        maxDuration: {
+            type: Number,
+            default: 0
+        },
         petTypes: {
             type: [String],
             enum: ["DOG", "CAT"],
@@ -27,10 +40,6 @@ const schema = new mongoose.Schema(
                 value: Number // Giá tương ứng
             }
         ],
-        commissionRate: {
-            type: Number,
-            default: 0
-        }, // % hoa hồng cho nhân viên thực hiện (0-100)
         status: {
             type: String,
             enum: ["active", "inactive"],
@@ -41,23 +50,6 @@ const schema = new mongoose.Schema(
             default: false
         },
         deletedAt: Date,
-        minDuration: {
-            type: Number,
-            default: 0
-        },
-        maxDuration: {
-            type: Number,
-            default: 0
-        },
-        surchargeType: {
-            type: String,
-            enum: ["none", "fixed", "per-minute"],
-            default: "none"
-        },
-        surchargeValue: {
-            type: Number,
-            default: 0
-        },
         images: [String]
     },
     {

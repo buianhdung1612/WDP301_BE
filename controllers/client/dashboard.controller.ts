@@ -6,6 +6,29 @@ import jwt from "jsonwebtoken";
 import bcrypt from "bcryptjs";
 import Order from "../../models/order.model";
 
+// [GET] /api/v1/client/dashboard/profile
+export const profileGet = async (req: Request, res: Response) => {
+    try {
+        const user = res.locals.accountUser;
+
+        return res.json({
+            success: true,
+            data: {
+                id: user?.id,
+                fullName: user?.fullName,
+                email: user?.email,
+                phone: user?.phone,
+                avatar: user?.avatar || ""
+            }
+        });
+    } catch (error) {
+        return res.status(500).json({
+            success: false,
+            message: "Không thể lấy thông tin tài khoản!"
+        });
+    }
+};
+
 // [PATCH] /api/v1/client/dashboard/profile/edit
 export const profileEdit = async (req: Request, res: Response) => {
     try {
