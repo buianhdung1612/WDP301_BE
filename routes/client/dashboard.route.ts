@@ -7,6 +7,8 @@ const router = Router();
 
 router.use(authMiddleware.requireAuth);
 
+router.get("/profile", dashboardController.profileGet);
+
 router.patch("/profile/edit", dashboardValidate.profileEditPatch, dashboardController.profileEdit);
 
 router.get("/address", dashboardController.address);

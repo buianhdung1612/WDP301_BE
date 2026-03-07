@@ -4,14 +4,58 @@ import TimeSlot from "../../models/time-slot.model";
 import Service from "../../models/service.model";
 import Pet from "../../models/pet.model";
 
+// [GET] /api/v1/client/booking/time-slots
+export const listTimeSlots = async (req: Request, res: Response) => {
+    try {
+        const serviceId = req.query.serviceId as string;
+        const date = req.query.date as string;
+
+        let filter: any = {
+            deleted: false,
+            status: { $in: ["available", "full"] }
+        };
+
+        if (serviceId) {
+            filter.serviceId = serviceId;
+        }
+
+        if (date) {
+            const startDate = new Date(date);
+            const endDate = new Date(startDate);
+            endDate.setDate(endDate.getDate() + 1);
+            filter.date = { $gte: startDate, $lt: endDate };
+        }
+
+        const slots = await TimeSlot.find(filter).sort({ date: 1, startTime: 1 });
+
+        res.json({
+            code: 200,
+            message: "Danh sách khung giờ",
+            data: slots
+        });
+    } catch (error) {
+        res.status(500).json({
+            code: 500,
+            message: "Lỗi khi lấy danh sách khung giờ"
+        });
+    }
+};
+
 // [GET] /api/v1/client/bookings
 export const listMyBookings = async (req: Request, res: Response) => {
     try {
-        const userId = req.query.userId;
+        const userId = res.locals.accountUser?._id?.toString();
         const page = parseInt(req.query.page as string) || 1;
         const limit = parseInt(req.query.limit as string) || 10;
         const skip = (page - 1) * limit;
         const status = req.query.status as string;
+
+        if (!userId) {
+            return res.status(401).json({
+                code: 401,
+                message: "Vui lòng đăng nhập"
+            });
+        }
 
         let filter: any = { deleted: false, userId };
         if (status) {
@@ -47,7 +91,15 @@ export const listMyBookings = async (req: Request, res: Response) => {
 // [GET] /api/v1/client/bookings/:id
 export const getMyBooking = async (req: Request, res: Response) => {
     try {
-        const userId = req.query.userId;
+        const userId = res.locals.accountUser?._id?.toString();
+
+        if (!userId) {
+            return res.status(401).json({
+                code: 401,
+                message: "Vui lòng đăng nhập"
+            });
+        }
+
         const booking = await Booking.findById(req.params.id);
 
         if (!booking || booking.deleted || booking.userId !== userId) {
@@ -74,7 +126,14 @@ export const getMyBooking = async (req: Request, res: Response) => {
 export const createBooking = async (req: Request, res: Response) => {
     try {
         const { serviceId, slotId, petIds, customerName, customerPhone, customerEmail, notes } = req.body;
-        const userId = req.query.userId;
+        const userId = res.locals.accountUser?._id?.toString();
+
+        if (!userId) {
+            return res.status(401).json({
+                code: 401,
+                message: "Vui lòng đăng nhập"
+            });
+        }
 
         // Validate service
         const service = await Service.findById(serviceId);
@@ -178,8 +237,16 @@ export const createBooking = async (req: Request, res: Response) => {
 // [PATCH] /api/v1/client/bookings/:id/cancel
 export const cancelMyBooking = async (req: Request, res: Response) => {
     try {
-        const userId = req.query.userId;
+        const userId = res.locals.accountUser?._id?.toString();
         const { reason } = req.body;
+
+        if (!userId) {
+            return res.status(401).json({
+                code: 401,
+                message: "Vui lòng đăng nhập"
+            });
+        }
+
         const booking = await Booking.findById(req.params.id);
 
         if (!booking || booking.deleted || booking.userId !== userId) {

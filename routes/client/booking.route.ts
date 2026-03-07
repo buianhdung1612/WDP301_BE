@@ -4,6 +4,7 @@ import * as bookingController from "../../controllers/client/booking.controller"
 import * as petController from "../../controllers/client/pet.controller";
 import * as boardingCageController from "../../controllers/client/boarding-cage.controller";
 import * as boardingBookingController from "../../controllers/client/boarding-booking.controller";
+import * as authMiddleware from "../../middlewares/client/auth.middleware";
 
 const router = Router();
 
@@ -11,12 +12,13 @@ const router = Router();
 router.get("/services", serviceController.listServices);
 router.get("/services/:id", serviceController.getService);
 router.get("/service-categories", serviceController.getCategories);
+router.get("/time-slots", bookingController.listTimeSlots);
 
 // ================= SERVICE BOOKINGS =================
-router.get("/bookings", bookingController.listMyBookings);
-router.get("/bookings/:id", bookingController.getMyBooking);
-router.post("/bookings", bookingController.createBooking);
-router.patch("/bookings/:id/cancel", bookingController.cancelMyBooking);
+router.get("/bookings", authMiddleware.requireAuth, bookingController.listMyBookings);
+router.get("/bookings/:id", authMiddleware.requireAuth, bookingController.getMyBooking);
+router.post("/bookings", authMiddleware.requireAuth, bookingController.createBooking);
+router.patch("/bookings/:id/cancel", authMiddleware.requireAuth, bookingController.cancelMyBooking);
 
 // ================= BOARDING CAGES =================
 router.get("/boarding-cages", boardingCageController.getAllBoardingCages);
