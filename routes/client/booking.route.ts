@@ -16,6 +16,7 @@ router.get("/service-categories", serviceController.getCategories);
 
 // ================= SERVICE BOOKINGS =================
 router.get("/bookings", authMiddleware.requireAuth, bookingController.listMyBookings);
+router.get("/time-slots", bookingController.getAvailableTimeSlots);
 router.get("/bookings/:id", authMiddleware.requireAuth, bookingController.getMyBooking);
 router.post("/bookings", authMiddleware.requireAuth, bookingController.createBooking);
 router.patch("/bookings/:id/cancel", authMiddleware.requireAuth, bookingController.cancelMyBooking);

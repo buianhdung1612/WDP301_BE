@@ -27,25 +27,54 @@ export const getAvailableTimeSlots = async (req: Request, res: Response) => {
             return res.status(400).json({ code: 400, message: "Vui lòng chọn ngày" });
         }
 
-        const service = await Service.findById(serviceId);
-        const baseDuration = service?.duration || 30;
+        const service = await Service.findById(serviceId).populate("departmentId").populate("categoryId");
+        if (!service) {
+            return res.status(404).json({ code: 404, message: "Dịch vụ không tồn tại" });
+        }
 
-        const queryDateStr = date as string;
-        const startOfDay = new Date(queryDateStr);
-        startOfDay.setHours(0, 0, 0, 0);
-        const endOfDay = new Date(queryDateStr);
-        endOfDay.setHours(23, 59, 59, 999);
+        let targetDeptId = service.departmentId?._id?.toString() || service.departmentId?.toString();
+
+        // Nếu dịch vụ chưa gán phòng ban, thử tìm phòng ban theo danh mục
+        if (!targetDeptId && service.categoryId) {
+            const categoryName = (service.categoryId as any).name;
+            const departments = await mongoose.model("Department").find({ deleted: false });
+            // Tìm phòng ban có tên chứa từ khóa từ tên danh mục (ví dụ: "Spa", "Khách sạn")
+            const matchedDept = departments.find(d =>
+                categoryName.toLowerCase().includes(d.name.toLowerCase().replace("ban ", "").trim()) ||
+                d.name.toLowerCase().includes(categoryName.toLowerCase().split(" ")[0])
+            );
+            if (matchedDept) {
+                targetDeptId = matchedDept._id.toString();
+            }
+        }
+
+        const baseDuration = service.duration || 30;
+
+        const startOfDay = dayjs(date as string).startOf('day').toDate();
+        const endOfDay = dayjs(date as string).endOf('day').toDate();
 
         const scheduleQuery: any = {
             date: { $gte: startOfDay, $lte: endOfDay },
             status: { $in: ["scheduled", "checked-in"] }
         };
 
-        if (service?.departmentId) {
-            scheduleQuery.departmentId = service.departmentId;
-        }
+        let schedules = await WorkSchedule.find(scheduleQuery).populate("staffId").populate("shiftId");
 
-        const schedules = await WorkSchedule.find(scheduleQuery).populate("staffId").populate("shiftId");
+        // 2. Lấy TẤT CẢ các ca làm việc (Shifts) hoạt động của phòng ban này
+        const shiftFilter: any = { status: "active" };
+        if (targetDeptId) {
+            shiftFilter.departmentId = targetDeptId;
+        }
+        const allShifts = await mongoose.model("Shift").find(shiftFilter).sort({ startTime: 1 });
+
+        // Lọc lịch làm việc theo phòng ban đích (để tính toán nhân viên rảnh)
+        if (targetDeptId) {
+            schedules = schedules.filter(s => {
+                const wsDeptId = s.departmentId?.toString();
+                const shiftDeptId = (s.shiftId as any)?.departmentId?.toString();
+                return wsDeptId === targetDeptId || shiftDeptId === targetDeptId;
+            });
+        }
 
         const bookings = await Booking.find({
             start: { $gte: startOfDay, $lte: endOfDay },
@@ -54,19 +83,12 @@ export const getAvailableTimeSlots = async (req: Request, res: Response) => {
         });
 
         const staffConfigs: any[] = [];
-        const uniqueShiftMap = new Map();
 
-        // 1. Phân loại ca và nhân viên theo phòng ban của dịch vụ
+        // Phân loại nhân viên trực ca theo WorkSchedule
         for (const s of schedules) {
             if (!s.shiftId || !s.staffId) continue;
             const staffStrId = s.staffId._id.toString();
             const shiftIdStr = s.shiftId._id.toString();
-
-            // Luôn thêm ca vào Map nếu ca này thuộc đúng ban (đã lọc ở query schedules phía trên)
-            // hoặc nếu dịch vụ không có ban thì lấy ca của bất kỳ ai làm được dịch vụ này
-            if (!uniqueShiftMap.has(shiftIdStr)) {
-                uniqueShiftMap.set(shiftIdStr, s.shiftId);
-            }
 
             const roles = await Role.find({
                 _id: { $in: (s.staffId as any).roles },
@@ -85,7 +107,7 @@ export const getAvailableTimeSlots = async (req: Request, res: Response) => {
                 shiftId: shiftIdStr,
                 startTime: (s.shiftId as any).startTime,
                 endTime: (s.shiftId as any).endTime,
-                canDoService, // Lưu lại cờ kỹ năng
+                canDoService,
                 bookings: bookings.filter(b => {
                     const bStaffIds = b.staffIds?.map((id: any) => id.toString()) || [];
                     return bStaffIds.includes(staffStrId);
@@ -95,15 +117,14 @@ export const getAvailableTimeSlots = async (req: Request, res: Response) => {
 
         const resultShifts = [];
 
-        for (const [shiftId, shiftData] of uniqueShiftMap) {
-            const shiftName = (shiftData as any).name;
-            const shiftStart = (shiftData as any).startTime;
-            const shiftEnd = (shiftData as any).endTime;
+        // Duyệt qua TẤT CẢ các ca của phòng ban đó (kể cả ca chưa có ai làm)
+        for (const shiftData of allShifts) {
+            const shiftId = shiftData._id.toString();
+            const shiftName = shiftData.name;
+            const shiftStart = shiftData.startTime;
+            const shiftEnd = shiftData.endTime;
 
             const shiftStaffs = staffConfigs.filter(c => c.shiftId === shiftId);
-            // Vẫn lấy ca này dù không có ai làm được (để hiện UI như anh muốn)
-            // if (shiftStaffs.length === 0) continue; 
-
             const slots = [];
             const [sH, sM] = shiftStart.split(":").map(Number);
             const [eH, eM] = shiftEnd.split(":").map(Number);
