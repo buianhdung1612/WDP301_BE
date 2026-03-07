@@ -4,9 +4,10 @@ const schema = new mongoose.Schema(
     {
         userId: {
             type: mongoose.Schema.Types.ObjectId,
-            ref: "User",           // Tên model User
+            ref: "AccountUser",           // Tên model User
             required: true
-        }, name: String, // Tên thú cưng
+        },
+        name: String, // Tên thú cưng
         type: {
             type: String,
             enum: ["dog", "cat"],
@@ -19,15 +20,14 @@ const schema = new mongoose.Schema(
         avatar: String, // Ảnh thú cưng
         gender: {
             type: String,
-            enum: ["male", "female", "unknown"]
+            enum: ["male", "female"]
         },
         healthStatus: {
             type: String,
-            enum: ["healthy", "sick", "vaccination-pending"],
-            default: "healthy"
+            enum: ["accepted", "rejected"],
+            default: "accepted"
         },
-        notes: String, // Ghi chú đặc biệt (dị ứng, hành vi, vv)
-
+        notes: String,
         status: {
             type: String,
             enum: ["active", "inactive"],

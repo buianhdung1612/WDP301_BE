@@ -1,55 +1,138 @@
-import mongoose from "mongoose";
+﻿import mongoose from "mongoose";
+
+const feedingScheduleSchema = new mongoose.Schema(
+    {
+        time: String,
+        food: String,
+        amount: String,
+        note: String,
+        staffId: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "AccountAdmin"
+        },
+        staffName: String,
+        status: {
+            type: String,
+            enum: ["pending", "done", "skipped"],
+            default: "pending"
+        },
+        doneAt: Date
+    },
+    { _id: true }
+);
+
+const exerciseScheduleSchema = new mongoose.Schema(
+    {
+        time: String,
+        activity: String,
+        durationMinutes: Number,
+        note: String,
+        staffId: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "AccountAdmin"
+        },
+        staffName: String,
+        status: {
+            type: String,
+            enum: ["pending", "done", "skipped"],
+            default: "pending"
+        },
+        doneAt: Date
+    },
+    { _id: true }
+);
+
+const shiftChecklistSchema = new mongoose.Schema(
+    {
+        shift: {
+            type: String,
+            enum: ["morning", "afternoon", "night"],
+            default: "morning"
+        },
+        title: String,
+        note: String,
+        checked: {
+            type: Boolean,
+            default: false
+        },
+        checkedAt: Date
+    },
+    { _id: true }
+);
 
 const schema = new mongoose.Schema(
     {
-        boardingBookingCode: String, // Mã lịch lưu trú (VD: BRD20250123001)
-        userId: String, // ID chủ thú cưng
-        petIds: [String], // Danh sách ID thú cưng
-        cageId: String, // ID chuồng/phòng
-        
-        customerName: String,
-        customerPhone: String,
-        customerEmail: String,
-        
-        checkInDate: Date, // Ngày nhận
-        checkOutDate: Date, // Ngày trả
-        numberOfDays: Number, // Số ngày lưu trú
-        
-        // Giá cả
-        pricePerDay: Number, // Giá mỗi ngày
-        totalDays: Number, // Tổng ngày
-        basePrice: Number, // Giá gốc
-        discountAmount: {
+        code: String,
+        userId: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "AccountUser"
+        },
+        petIds: [{
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "Pet"
+        }],
+        cageId: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "BoardingCage"
+        },
+
+        checkInDate: Date,
+        checkOutDate: Date,
+        numberOfDays: Number,
+        quantity: {
+            type: Number,
+            default: 1,
+            min: 1,
+            max: 4
+        },
+
+        fullName: String,
+        phone: String,
+        email: String,
+
+        pricePerDay: Number,
+        subTotal: Number,
+        coupon: String,
+        discount: {
             type: Number,
             default: 0
         },
-        appliedCoupon: String,
-        totalPrice: Number, // Giá tổng cộng
-        
+        total: Number,
+
+        paymentMethod: {
+            type: String,
+            enum: ["money", "vnpay", "zalopay", "pay_at_site", "prepaid"],
+            default: "pay_at_site"
+        },
         paymentStatus: {
             type: String,
-            enum: ["unpaid", "partial", "paid"],
+            enum: ["unpaid", "paid", "refunded"],
             default: "unpaid"
         },
-        paymentMethod: String,
-        
-        notes: String, // Ghi chú (dị ứng, thức ăn yêu thích, etc.)
-        feedingSchedule: String, // Lịch ăn (VD: 3 bữa/ngày)
-        specialCare: String, // Chăm sóc đặc biệt
-        
-        status: {
+        paymentGateway: String,
+        holdExpiresAt: Date,
+
+        notes: String,
+        specialCare: String,
+
+        // Boarding care management
+        feedingSchedule: [feedingScheduleSchema],
+        exerciseSchedule: [exerciseScheduleSchema],
+        shiftChecklist: [shiftChecklistSchema],
+
+        boardingStatus: {
             type: String,
-            enum: ["pending", "confirmed", "checked-in", "checked-out", "cancelled"],
+            enum: ["pending", "held", "confirmed", "checked-in", "checked-out", "cancelled"],
             default: "pending"
         },
-        
+
         cancelledReason: String,
         cancelledAt: Date,
         cancelledBy: String,
-        
-        actualCheckInDate: Date, // Ngày nhận thực tế
-        actualCheckOutDate: Date, // Ngày trả thực tế
-        
+
+        actualCheckInDate: Date,
+        actualCheckOutDate: Date,
+
         deleted: {
             type: Boolean,
             default: false

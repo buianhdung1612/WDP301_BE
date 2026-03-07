@@ -19,7 +19,9 @@ export const createServiceSchema = Joi.object({
         "any.required": "Thời gian thực hiện là bắt buộc",
         "number.positive": "Thời gian thực hiện phải là số dương"
     }),
-    petType: Joi.array().items(Joi.string().valid("dog", "cat")).required().messages({
+    minDuration: Joi.number().min(1).optional(),
+    maxDuration: Joi.number().min(Joi.ref('duration')).optional(),
+    petTypes: Joi.array().items(Joi.string().valid("DOG", "CAT")).required().messages({
         "any.required": "Loại pet là bắt buộc",
         "array.includesRequiredUnknowns": "Loại pet không hợp lệ"
     }),
@@ -49,7 +51,9 @@ export const updateServiceSchema = Joi.object({
     slug: Joi.string().optional(),
     description: Joi.string().optional(),
     duration: Joi.number().positive().optional(),
-    petType: Joi.array().items(Joi.string().valid("dog", "cat")).optional(),
+    minDuration: Joi.number().min(1).optional(),
+    maxDuration: Joi.number().min(1).optional(),
+    petTypes: Joi.array().items(Joi.string().valid("DOG", "CAT")).optional(),
     pricingType: Joi.string().valid("fixed", "by-weight", "by-cage", "by-distance").optional(),
     basePrice: Joi.number().positive().optional(),
     priceList: Joi.array().optional(),

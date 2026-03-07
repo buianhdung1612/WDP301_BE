@@ -3,6 +3,7 @@ import Product from '../../models/product.model';
 import AttributeProduct from '../../models/attribute-product.model';
 import axios from 'axios';
 import { getInfoAddress } from '../../helpers/location.helper';
+import { getApiShipping } from '../../configs/setting.config';
 
 // [POST] /api/v1/client/cart/list
 export const list = async (req: Request, res: Response) => {
@@ -113,9 +114,11 @@ export const list = async (req: Request, res: Response) => {
                     }
                 };
 
+                const shippingSettings = await getApiShipping();
+
                 const goshipRes = await axios.post("https://sandbox.goship.io/api/v2/rates", dataGoShip, {
                     headers: {
-                        Authorization: `Bearer ${process.env.GOSHIP_TOKEN}`,
+                        Authorization: `Bearer ${shippingSettings?.tokenGoShip || ""}`,
                         "Content-Type": "application/json"
                     }
                 });

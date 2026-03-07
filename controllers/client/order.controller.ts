@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import axios from 'axios';
 import Order from '../../models/order.model';
+import Booking from '../../models/booking.model';
 import Product from '../../models/product.model';
 import AttributeProduct from '../../models/attribute-product.model';
 import Coupon from '../../models/coupon.model';
@@ -9,6 +10,7 @@ import { getInfoAddress } from '../../helpers/location.helper';
 import hmacSHA256 from 'crypto-js/hmac-sha256';
 import moment from 'moment';
 import puppeteer from 'puppeteer';
+import { getApiPayment, getApiShipping } from '../../configs/setting.config';
 
 // [POST] /api/v1/client/order/create
 export const createPost = async (req: Request, res: Response) => {
@@ -55,7 +57,7 @@ export const createPost = async (req: Request, res: Response) => {
         // Mảng items
         dataFinal.items = [];
         for (const item of req.body.items) {
-            const productDetail = await Product.findOne({
+            const productDetail: any = await Product.findOne({
                 _id: item.productId,
                 deleted: false,
                 status: "active"
@@ -63,11 +65,11 @@ export const createPost = async (req: Request, res: Response) => {
 
             if (productDetail) {
                 let price = 0;
-                const variant = [];
+                const variantArr = [];
 
                 if (item.variant && item.variant.length > 0) {
                     // Tìm đúng biến thể khớp trong danh sách
-                    const variantMatched = (productDetail.variants || []).find((variantItem: any) => {
+                    const variantMatchedIndex = (productDetail.variants || []).findIndex((variantItem: any) => {
                         return (
                             variantItem.attributeValue.length === item.variant.length &&
                             variantItem.attributeValue.every((attr: any) => {
@@ -77,7 +79,25 @@ export const createPost = async (req: Request, res: Response) => {
                         );
                     });
 
-                    if (variantMatched) {
+                    if (variantMatchedIndex !== -1) {
+                        const variantMatched = productDetail.variants[variantMatchedIndex];
+
+                        // Kiểm tra stock biến thể
+                        if (variantMatched.stock < item.quantity) {
+                            return res.json({
+                                code: "error",
+                                message: `Sản phẩm "${productDetail.name}" (biến thể) không đủ số lượng tồn kho!`
+                            });
+                        }
+
+                        // Trừ stock biến thể
+                        const updatedVariants = [...productDetail.variants];
+                        updatedVariants[variantMatchedIndex].stock -= item.quantity;
+                        await Product.updateOne(
+                            { _id: item.productId },
+                            { variants: updatedVariants }
+                        );
+
                         price = variantMatched.priceNew || 0;
                         for (const v of item.variant) {
                             const attribute: any = await AttributeProduct
@@ -87,13 +107,35 @@ export const createPost = async (req: Request, res: Response) => {
                                 .select("name")
                                 .lean();
                             if (attribute) {
-                                variant.push(`${attribute.name}: ${v.label}`);
+                                variantArr.push(`${attribute.name}: ${v.label}`);
                             }
                         };
                     } else {
+                        // Nếu không tìm thấy biến thể khớp, dùng giá gốc và trừ stock gốc
+                        if ((productDetail.stock || 0) < item.quantity) {
+                            return res.json({
+                                code: "error",
+                                message: `Sản phẩm "${productDetail.name}" không đủ số lượng tồn kho!`
+                            });
+                        }
+                        await Product.updateOne(
+                            { _id: item.productId },
+                            { $inc: { stock: -item.quantity } }
+                        );
                         price = productDetail.priceNew || 0;
                     }
                 } else {
+                    // Không có biến thể
+                    if ((productDetail.stock || 0) < item.quantity) {
+                        return res.json({
+                            code: "error",
+                            message: `Sản phẩm "${productDetail.name}" không đủ số lượng tồn kho!`
+                        });
+                    }
+                    await Product.updateOne(
+                        { _id: item.productId },
+                        { $inc: { stock: -item.quantity } }
+                    );
                     price = productDetail.priceNew || 0;
                 }
 
@@ -101,7 +143,7 @@ export const createPost = async (req: Request, res: Response) => {
                     productId: item.productId,
                     quantity: item.quantity,
                     price: price,
-                    variant: variant.length > 0 ? variant : undefined,
+                    variant: variantArr.length > 0 ? variantArr : undefined,
                     image: productDetail.images?.[0] || "",
                     name: productDetail.name
                 };
@@ -230,9 +272,11 @@ export const createPost = async (req: Request, res: Response) => {
             }
         };
 
+        const shippingSettings = await getApiShipping();
+
         const goshipRes = await axios.post("https://sandbox.goship.io/api/v2/shipments", dataGoShip, {
             headers: {
-                Authorization: `Bearer ${process.env.GOSHIP_TOKEN}`,
+                Authorization: `Bearer ${shippingSettings?.tokenGoShip || ""}`,
                 "Content-Type": "application/json"
             }
         });
@@ -260,7 +304,7 @@ export const createPost = async (req: Request, res: Response) => {
             phone: dataFinal.phone
         });
     } catch (error) {
-        console.error("Create Order Error:", error);
+        console.error(error);
         res.status(500).json({
             code: "error",
             message: "Lỗi hệ thống khi đặt hàng!"
@@ -299,7 +343,7 @@ export const success = async (req: Request, res: Response) => {
             order: orderDetail
         });
     } catch (error) {
-        console.error("Order Success Info Error:", error);
+        console.error(error);
         res.status(500).json({
             code: "error",
             message: "Lỗi hệ thống!"
@@ -308,44 +352,60 @@ export const success = async (req: Request, res: Response) => {
 };
 
 export const paymentZaloPay = async (req: Request, res: Response) => {
-    const { orderCode, phone } = req.query;
+    const { orderCode, bookingCode, phone } = req.query;
 
-    const orderDetail = await Order.findOne({
-        code: orderCode,
-        phone: phone,
-        deleted: false
-    })
+    let target: any = null;
+    let code: any = "";
 
-    if (!orderDetail) {
+    if (orderCode) {
+        target = await Order.findOne({ code: orderCode, phone, deleted: false });
+        code = orderCode;
+    } else if (bookingCode) {
+        target = await Booking.findOne({ code: bookingCode, customerPhone: phone, deleted: false });
+        code = bookingCode;
+    }
+
+    if (!target) {
         res.json({
             success: false,
-            message: "Không tìm thấy đơn hàng!"
+            message: "Không tìm thấy đơn hàng hoặc lịch đặt!"
         });
         return;
     }
 
+    // Thiết lập thời gian hết hạn (16 phút)
+    const paymentExpireAt = new Date(Date.now() + 16 * 60 * 1000);
+    if (orderCode) {
+        await Order.updateOne({ _id: target._id }, { paymentExpireAt });
+    } else if (bookingCode) {
+        await Booking.updateOne({ _id: target._id }, { paymentExpireAt });
+    }
+
+    const paymentSettings = await getApiPayment();
+
     const config = {
-        app_id: `${process.env.ZALOPAY_APPID}`,
-        key1: `${process.env.ZALOPAY_KEY1}`,
-        key2: `${process.env.ZALOPAY_KEY2}`,
-        endpoint: `${process.env.ZALOPAY_DOMAIN}/v2/create`
+        app_id: `${paymentSettings.zaloAppId}`,
+        key1: `${paymentSettings.zaloKey1}`,
+        key2: `${paymentSettings.zaloKey2}`,
+        endpoint: `${paymentSettings.zaloDomain}/v2/create`
     };
 
+    const successPath = orderCode ? `/order/success?orderCode=${orderCode}&phone=${phone}` : `/booking/list`; // Admin might want to go back to list
     const embed_data = {
-        redirecturl: `${process.env.DOMAIN_WEBSITE}/order/success?orderCode=${orderCode}&phone=${phone}`
+        redirecturl: `${process.env.DOMAIN_WEBSITE}${successPath}`
     };
 
     const items = [{}];
     const transID = Math.floor(Math.random() * 1000000);
     const order = {
         app_id: config.app_id,
-        app_trans_id: `${moment().format('YYMMDD')}_${transID}`, // translation missing: vi.docs.shared.sample_code.comments.app_trans_id
-        app_user: `${phone}-${orderCode}`,
+        app_trans_id: `${moment().format('YYMMDD')}_${transID}`,
+        app_user: `${phone}-${code}`,
         app_time: Date.now(), // miliseconds
         item: JSON.stringify(items),
         embed_data: JSON.stringify(embed_data),
-        amount: orderDetail.total,
-        description: `Thanh toán đơn hàng ${orderCode}`,
+        amount: target.total,
+        description: `Thanh toán ${orderCode ? 'đơn hàng' : 'lịch đặt'} ${code}`,
         bank_code: "",
         mac: "",
         callback_url: `${process.env.BACKEND_URL}/api/v1/client/order/payment-zalopay-result`
@@ -360,8 +420,10 @@ export const paymentZaloPay = async (req: Request, res: Response) => {
 }
 
 export const paymentZalopayResult = async (req: Request, res: Response) => {
+    const paymentSettings = await getApiPayment();
+
     const config = {
-        key2: `${process.env.ZALOPAY_KEY2}`
+        key2: `${paymentSettings.zaloKey2}`
     };
 
     let result: any = {};
@@ -371,7 +433,7 @@ export const paymentZalopayResult = async (req: Request, res: Response) => {
         let reqMac = req.body.mac;
 
         let mac = hmacSHA256(dataStr, config.key2).toString();
-        console.log("mac =", mac);
+
 
         // kiểm tra callback hợp lệ (đến từ ZaloPay server)
         if (reqMac !== mac) {
@@ -383,17 +445,49 @@ export const paymentZalopayResult = async (req: Request, res: Response) => {
             // thanh toán thành công
             // merchant cập nhật trạng thái cho đơn hàng
             let dataJson = JSON.parse(dataStr);
-            console.log("update order's status = success where app_trans_id =", dataJson["app_trans_id"]);
+            const [phone, code] = dataJson.app_user.split("-");
 
-            // Cập nhật trạng thái đơn hàng
-            const [phone, orderCode] = dataJson.app_user.split("-");
-            await Order.updateOne({
-                phone: phone,
-                code: orderCode,
-                deleted: false
-            }, {
-                paymentStatus: "paid"
-            });
+            if (dataJson.status === 1) {
+                // Thanh toán thành công
+                if (code.startsWith("BK")) {
+                    await Booking.updateOne({
+                        customerPhone: phone,
+                        code: code,
+                        deleted: false
+                    }, {
+                        paymentStatus: "paid"
+                    });
+                } else {
+                    await Order.updateOne({
+                        phone: phone,
+                        code: code,
+                        deleted: false
+                    }, {
+                        paymentStatus: "paid"
+                    });
+                }
+            } else {
+                // Thanh toán thất bại hoặc bị hủy
+                if (code.startsWith("BK")) {
+                    await Booking.updateOne({
+                        customerPhone: phone,
+                        code: code,
+                        deleted: false
+                    }, {
+                        paymentStatus: "unpaid",
+                        bookingStatus: "cancelled"
+                    });
+                } else {
+                    await Order.updateOne({
+                        phone: phone,
+                        code: code,
+                        deleted: false
+                    }, {
+                        paymentStatus: "unpaid",
+                        orderStatus: "cancelled"
+                    });
+                }
+            }
 
             result.return_code = 1;
             result.return_message = "success";
@@ -408,18 +502,23 @@ export const paymentZalopayResult = async (req: Request, res: Response) => {
 }
 
 export const paymentVNPay = async (req: Request, res: Response) => {
-    const { orderCode, phone } = req.query;
+    const { orderCode, bookingCode, phone } = req.query;
 
-    const orderDetail = await Order.findOne({
-        code: orderCode,
-        phone: phone,
-        deleted: false
-    })
+    let target: any = null;
+    let code: any = "";
 
-    if (!orderDetail) {
+    if (orderCode) {
+        target = await Order.findOne({ code: orderCode, phone, deleted: false });
+        code = orderCode;
+    } else if (bookingCode) {
+        target = await Booking.findOne({ code: bookingCode, customerPhone: phone, deleted: false });
+        code = bookingCode;
+    }
+
+    if (!target) {
         res.json({
             success: false,
-            message: "Không tìm thấy đơn hàng!"
+            message: "Không tìm thấy đơn hàng hoặc lịch đặt!"
         });
         return;
     }
@@ -431,12 +530,14 @@ export const paymentVNPay = async (req: Request, res: Response) => {
         req.connection.remoteAddress ||
         req.socket.remoteAddress;
 
-    let tmnCode = `${process.env.VNPAY_TMN_CODE}`;
-    let secretKey = `${process.env.VNPAY_HASH_SECRET}`;
-    let vnpUrl = `${process.env.VNPAY_URL}`;
+    const paymentSettings = await getApiPayment();
+
+    let tmnCode = `${paymentSettings.vnpTmnCode}`;
+    let secretKey = `${paymentSettings.vnpHashSecret}`;
+    let vnpUrl = `${paymentSettings.vnpUrl}`;
     let returnUrl = `http://localhost:3000/api/v1/client/order/payment-vnpay-result`;
-    let orderId = `${phone}-${orderCode}-${Date.now()}`;
-    let amount = orderDetail.total || 0;
+    let orderId = `${phone}-${code}-${Date.now()}`;
+    let amount = target.total || 0;
     let bankCode = "";
 
     let locale = 'vn';
@@ -481,7 +582,9 @@ export const paymentVNPayResult = async (req: Request, res: Response) => {
 
     vnp_Params = sortObject(vnp_Params);
 
-    let secretKey = `${process.env.VNPAY_HASH_SECRET}`;
+    const paymentSettings = await getApiPayment();
+
+    let secretKey = `${paymentSettings.vnpHashSecret}`;
 
     let querystring = require('qs');
     let signData = querystring.stringify(vnp_Params, { encode: false });
@@ -490,16 +593,54 @@ export const paymentVNPayResult = async (req: Request, res: Response) => {
     let signed = hmac.update(new Buffer(signData, 'utf-8')).digest("hex");
 
     if (secureHash === signed) {
-        const [phone, orderCode] = (vnp_Params['vnp_TxnRef'] as string).split('-');
-        await Order.findOneAndUpdate({
-            phone: phone,
-            code: orderCode,
-            deleted: false
-        }, {
-            paymentStatus: 'paid'
-        })
+        const [phone, code] = (vnp_Params['vnp_TxnRef'] as string).split('-');
 
-        res.redirect(`${process.env.DOMAIN_WEBSITE}/order/success?orderCode=${orderCode}&phone=${phone}`);
+        if (vnp_Params['vnp_ResponseCode'] === '00') {
+            if (code.startsWith("BK")) {
+                await Booking.findOneAndUpdate({
+                    customerPhone: phone,
+                    code: code,
+                    deleted: false
+                }, {
+                    paymentStatus: 'paid'
+                });
+            } else {
+                await Order.findOneAndUpdate({
+                    phone: phone,
+                    code: code,
+                    deleted: false
+                }, {
+                    paymentStatus: 'paid'
+                });
+            }
+
+            const successPath = code.startsWith("BK") ? `/dashboard/bookings` : `/order/success?orderCode=${code}&phone=${phone}`;
+            res.redirect(`${process.env.DOMAIN_WEBSITE}${successPath}`);
+        } else {
+            // Nếu thanh toán thất bại hoặc người dùng hủy
+            if (code.startsWith("BK")) {
+                await Booking.findOneAndUpdate({
+                    customerPhone: phone,
+                    code: code,
+                    deleted: false
+                }, {
+                    paymentStatus: 'unpaid',
+                    bookingStatus: 'cancelled'
+                });
+            } else {
+                await Order.findOneAndUpdate({
+                    phone: phone,
+                    code: code,
+                    deleted: false
+                }, {
+                    paymentStatus: 'unpaid',
+                    orderStatus: 'cancelled'
+                });
+            }
+            // Redirect back to shopping or order history if failed
+            const failPath = code.startsWith("BK") ? `/dashboard/bookings` : `/cart`;
+            res.redirect(`${process.env.DOMAIN_WEBSITE}${failPath}`);
+        }
     } else {
         res.render('success', { code: '97' })
     }

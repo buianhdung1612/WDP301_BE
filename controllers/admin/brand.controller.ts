@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
 import Brand from '../../models/brand.model';
-import slugify from 'slugify';
+import { convertToSlug } from '../../helpers/slug.helper';
 
 export const create = async (req: Request, res: Response) => {
     try {
@@ -10,32 +10,23 @@ export const create = async (req: Request, res: Response) => {
             ...rest
         } = req.body;
 
-        let finalSlug = slug;
-        if (!finalSlug || finalSlug.trim() === "") {
-            finalSlug = slugify(`${name}`, { lower: true, strict: true });
-        }
+        let finalSlug = slug || convertToSlug(name);
 
-        // Check trùng slug
-        const isExist = await Brand.exists({
-            slug: finalSlug,
-            deleted: false
-        });
-
-        if (isExist) {
-            return res.status(409).json({
-                success: false,
-                message: "Đường dẫn đã tồn tại!"
-            });
+        // Logic tự động xử lý slug trùng
+        let slugCheck = await Brand.findOne({ slug: finalSlug, deleted: false }).lean();
+        let count = 1;
+        const originalSlug = finalSlug;
+        while (slugCheck) {
+            finalSlug = `${originalSlug}-${count}`;
+            slugCheck = await Brand.findOne({ slug: finalSlug, deleted: false }).lean();
+            count++;
         }
 
         const payload = {
             ...rest,
             name,
             slug: finalSlug,
-            search: slugify(`${name}`, {
-                replacement: " ",
-                lower: true
-            })
+            search: convertToSlug(name).replace(/-/g, " ")
         };
 
         await Brand.create(payload);
@@ -64,10 +55,8 @@ export const list = async (req: Request, res: Response) => {
 
         // Search
         if (req.query.keyword) {
-            const keyword = slugify(`${req.query.keyword}`, {
-                replacement: ' ',
-                lower: true,
-            });
+            const keyword = convertToSlug(`${req.query.keyword}`).replace(/-/g, " ");
+
             find.search = new RegExp(keyword, "i");
         }
 
@@ -112,7 +101,7 @@ export const detail = async (req: Request, res: Response) => {
         });
     } catch (error) {
         console.error(error);
-return res.status(500).json({
+        return res.status(500).json({
             success: false,
             message: "Không thể lấy chi tiết thương hiệu"
         });
@@ -142,33 +131,32 @@ export const edit = async (req: Request, res: Response) => {
             });
         }
 
-        let finalSlug = slug;
-        if (!finalSlug || finalSlug.trim() === "") {
-            finalSlug = slugify(`${name}`, { lower: true, strict: true });
-        }
+        let finalSlug = slug || convertToSlug(name);
 
         // Check trùng slug
-        const isDuplicate = await Brand.exists({
+        let slugCheck = await Brand.findOne({
             _id: { $ne: id },
             slug: finalSlug,
             deleted: false
-        });
+        }).lean();
 
-        if (isDuplicate) {
-            return res.status(409).json({
-                success: false,
-                message: "Đường dẫn đã tồn tại"
-            });
+        let count = 1;
+        const originalSlug = finalSlug;
+        while (slugCheck) {
+            finalSlug = `${originalSlug}-${count}`;
+            slugCheck = await Brand.findOne({
+                _id: { $ne: id },
+                slug: finalSlug,
+                deleted: false
+            }).lean();
+            count++;
         }
 
         const payload = {
             ...rest,
             name,
             slug: finalSlug,
-            search: slugify(`${name}`, {
-                replacement: " ",
-                lower: true
-            })
+            search: convertToSlug(name || "").replace(/-/g, " ")
         };
 
         await Brand.updateOne(

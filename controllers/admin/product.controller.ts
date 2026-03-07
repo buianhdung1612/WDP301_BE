@@ -1,10 +1,10 @@
 import { Request, Response } from 'express';
 import CategoryProduct from '../../models/category-product.model';
-import slugify from 'slugify';
 import { buildCategoryTree } from '../../helpers/category.helper';
 import AttributeProduct from '../../models/attribute-product.model';
 import Product from '../../models/product.model';
 import { generateRandomString } from '../../helpers/generate.helper';
+import { convertToSlug } from '../../helpers/slug.helper';
 
 // Danh mục sản phẩm
 export const category = async (req: Request, res: Response) => {
@@ -15,10 +15,7 @@ export const category = async (req: Request, res: Response) => {
 
         // Tìm kiếm
         if (req.query.keyword) {
-            const keyword = slugify(`${req.query.keyword}`, {
-                replacement: " ",
-                lower: true
-            });
+            const keyword = convertToSlug(`${req.query.keyword}`).replace(/-/g, " ");
             find.search = new RegExp(keyword, "i");
         }
 
@@ -104,21 +101,22 @@ export const getCategoryTree = async (req: Request, res: Response) => {
 
 export const createCategory = async (req: Request, res: Response) => {
     try {
-        let slug = req.body.slug;
-        if (!slug || slug.trim() === "") {
-            slug = slugify(`${req.body.name}`, { lower: true, strict: true });
-        }
+        let slug = req.body.slug || convertToSlug(req.body.name);
 
-        const existSlug = await CategoryProduct.findOne({
+        let slugCheck = await CategoryProduct.findOne({
             slug: slug,
             deleted: false
         });
 
-        if (existSlug) {
-            return res.json({
-                code: "error",
-                message: "Đường dẫn đã tồn tại!"
+        let count = 1;
+        const originalSlug = slug;
+        while (slugCheck) {
+            slug = `${originalSlug}-${count}`;
+            slugCheck = await CategoryProduct.findOne({
+                slug: slug,
+                deleted: false
             });
+            count++;
         }
 
         // Nếu parent là chuỗi rỗng hoặc "null", chuyển về undefined/null để database nhận diện đúng là cấp cha
@@ -126,10 +124,7 @@ export const createCategory = async (req: Request, res: Response) => {
             delete req.body.parent;
         }
 
-        req.body.search = slugify(`${req.body.name}`, {
-            replacement: " ",
-            lower: true
-        });
+        req.body.search = convertToSlug(req.body.name).replace(/-/g, " ");
 
         req.body.slug = slug;
 
@@ -183,24 +178,33 @@ export const editCategory = async (req: Request, res: Response) => {
     try {
         const id = req.params.id;
 
-        const existSlug = await CategoryProduct.findOne({
-            _id: { $ne: id }, // Loại trừ bản ghi có _id trùng với id truyền vào
-            slug: req.body.slug
-        });
-
-        if (existSlug) {
-            res.json({
-                code: "error",
-                message: "Đường dẫn đã tồn tại!"
-            });
-
-            return;
+        if (req.body.name && !req.body.slug) {
+            req.body.slug = convertToSlug(req.body.name);
         }
 
-        req.body.search = slugify(`${req.body.name}`, {
-            replacement: " ",
-            lower: true
-        })
+        if (req.body.slug) {
+            let slug = req.body.slug;
+            let slugCheck = await CategoryProduct.findOne({
+                _id: { $ne: id },
+                slug: slug,
+                deleted: false
+            });
+
+            let count = 1;
+            const originalSlug = slug;
+            while (slugCheck) {
+                slug = `${originalSlug}-${count}`;
+                slugCheck = await CategoryProduct.findOne({
+                    _id: { $ne: id },
+                    slug: slug,
+                    deleted: false
+                });
+                count++;
+            }
+            req.body.slug = slug;
+        }
+
+        req.body.search = convertToSlug(req.body.name || "").replace(/-/g, " ");
 
         await CategoryProduct.updateOne({
             _id: id,
@@ -250,10 +254,7 @@ export const list = async (req: Request, res: Response) => {
         };
 
         if (req.query.keyword) {
-            const keyword = slugify(`${req.query.keyword}`, {
-                replacement: ' ',
-                lower: true,
-            });
+            const keyword = convertToSlug(`${req.query.keyword}`).replace(/-/g, " ");
             find.search = new RegExp(keyword, "i");
         }
 
@@ -355,19 +356,22 @@ const parseIfString = (val: any) => {
 
 export const createPost = async (req: Request, res: Response) => {
     try {
-        let slug = req.body.slug;
-        if (!slug || slug.trim() === "") {
-            slug = slugify(`${req.body.name}`, { lower: true, strict: true });
-        }
+        let slug = req.body.slug || convertToSlug(req.body.name);
 
-        let existSlug = await Product.findOne({
+        let slugCheck = await Product.findOne({
             slug: slug,
             deleted: false
         }).lean();
 
-        if (existSlug) {
-            // Append a short random string to make it unique if it already exists
-            slug = `${slug}-${generateRandomString(5).toLowerCase()}`;
+        let count = 1;
+        const originalSlug = slug;
+        while (slugCheck) {
+            slug = `${originalSlug}-${count}`;
+            slugCheck = await Product.findOne({
+                slug: slug,
+                deleted: false
+            }).lean();
+            count++;
         }
 
         req.body.slug = slug;
@@ -390,10 +394,7 @@ export const createPost = async (req: Request, res: Response) => {
         req.body.attributes = parseIfString(req.body.attributes);
         req.body.variants = parseIfString(req.body.variants);
 
-        req.body.search = slugify(`${req.body.name}`, {
-            replacement: " ",
-            lower: true
-        });
+        req.body.search = convertToSlug(`${req.body.name}`).replace(/-/g, " ");
 
         if (req.body.priceOld) {
             req.body.priceOld = parseInt(req.body.priceOld);
@@ -501,19 +502,30 @@ export const editPatch = async (req: Request, res: Response) => {
             });
         }
 
-        if (req.body.slug) {
-            const existSlug = await Product.findOne({
+        if (req.body.name && !req.body.slug) {
+            req.body.slug = convertToSlug(req.body.name);
+        }
+
+        if (req.body.slug && req.body.slug !== productDetail.slug) {
+            let slug = req.body.slug;
+            let slugCheck = await Product.findOne({
                 _id: { $ne: id },
-                slug: req.body.slug,
+                slug: slug,
                 deleted: false
             }).lean();
 
-            if (existSlug) {
-                return res.status(400).json({
-                    code: "error",
-                    message: "Đường dẫn đã tồn tại!"
-                });
+            let count = 1;
+            const originalSlug = slug;
+            while (slugCheck) {
+                slug = `${originalSlug}-${count}`;
+                slugCheck = await Product.findOne({
+                    _id: { $ne: id },
+                    slug: slug,
+                    deleted: false
+                }).lean();
+                count++;
             }
+            req.body.slug = slug;
         }
 
         if (req.body.position) {
@@ -527,10 +539,7 @@ export const editPatch = async (req: Request, res: Response) => {
         req.body.variants = parseIfString(req.body.variants);
 
         if (req.body.name) {
-            req.body.search = slugify(`${req.body.name}`, {
-                replacement: " ",
-                lower: true
-            });
+            req.body.search = convertToSlug(req.body.name).replace(/-/g, " ");
         }
 
         // Discount calculation logic
@@ -609,10 +618,7 @@ export const getAttributeList = async (req: Request, res: Response) => {
         };
 
         if (req.query.keyword) {
-            const keyword = slugify(`${req.query.keyword}`, {
-                replacement: ' ',
-                lower: true,
-            });
+            const keyword = convertToSlug(`${req.query.keyword}`).replace(/-/g, " ");
             find.search = new RegExp(keyword, "i");
         }
 
@@ -651,10 +657,7 @@ export const getAttributeList = async (req: Request, res: Response) => {
 
 export const createAttribute = async (req: Request, res: Response) => {
     try {
-        req.body.search = slugify(`${req.body.name}`, {
-            replacement: " ",
-            lower: true
-        });
+        req.body.search = convertToSlug(`${req.body.name}`).replace(/-/g, " ");
 
         const newRecord = new AttributeProduct(req.body);
         await newRecord.save();
@@ -705,10 +708,7 @@ export const updateAttribute = async (req: Request, res: Response) => {
     try {
         const id = req.params.id;
 
-        req.body.search = slugify(req.body.name, {
-            replacement: ' ',
-            lower: true,
-        });
+        req.body.search = convertToSlug(req.body.name).replace(/-/g, " ");
 
         await AttributeProduct.updateOne({
             _id: id,

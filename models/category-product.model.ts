@@ -4,7 +4,11 @@ const schema = new mongoose.Schema(
     {
         name: String,
         slug: String,
-        parent: String,
+        parent: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "CategoryProduct",
+            default: null
+        },
         description: String,
         avatar: String,
         status: {

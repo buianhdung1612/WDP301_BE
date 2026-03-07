@@ -38,23 +38,23 @@ export const createCategory = (req: Request, res: Response, next: NextFunction) 
 };
 
 export const createBlog = (req: Request, res: Response, next: NextFunction) => {
+    const isPatch = req.method === 'PATCH';
+
     const schema = Joi.object({
-        name: Joi.string()
-            .required()
-            .messages({
-                "string.empty": "Vui lòng nhập tên bài viết!"
-            }),
-        slug: Joi.string()
-            .required()
-            .messages({
-                "string.empty": "Vui lòng nhập tên đường dẫn!"
-            }),
+        name: isPatch
+            ? Joi.string().optional().allow('')
+            : Joi.string().required().messages({ "any.required": "Vui lòng nhập tên bài viết!", "string.empty": "Vui lòng nhập tên bài viết!" }),
+
+        slug: isPatch
+            ? Joi.string().optional().allow('')
+            : Joi.string().required().messages({ "any.required": "Vui lòng nhập tên đường dẫn!", "string.empty": "Vui lòng nhập tên đường dẫn!" }),
+
         category: Joi.string().allow(''),
         status: Joi.string().allow(''),
         avatar: Joi.string().allow(''),
         description: Joi.string().allow(''),
         content: Joi.string().allow('')
-    })
+    });
 
     const { error } = schema.validate(req.body, {
         abortEarly: true

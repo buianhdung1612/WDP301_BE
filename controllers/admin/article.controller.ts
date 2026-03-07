@@ -1,8 +1,8 @@
 import { Request, Response } from 'express';
 import CategoryBlog from '../../models/category-blog.model';
 import { buildCategoryTree } from '../../helpers/category.helper';
-import slugify from 'slugify';
 import Blog from '../../models/blog.model';
+import { convertToSlug } from '../../helpers/slug.helper';
 
 // Danh mục
 export const category = async (req: Request, res: Response) => {
@@ -16,10 +16,8 @@ export const category = async (req: Request, res: Response) => {
 
         // Tìm kiếm
         if (req.query.keyword) {
-            const keyword = slugify(`${req.query.keyword}`, {
-                replacement: " ",
-                lower: true
-            });
+            const keyword = convertToSlug(`${req.query.keyword}`).replace(/-/g, " ");
+
 
             const keywordRegex = new RegExp(keyword, "i");
             find.search = keywordRegex;
@@ -117,24 +115,23 @@ export const getCategoryTree = async (req: Request, res: Response) => {
 
 export const createCategory = async (req: Request, res: Response) => {
     try {
-        const { name, slug } = req.body;
+        const { name } = req.body;
 
-        // 1. Check slug tồn tại
-        const existSlug = await CategoryBlog.findOne({ slug });
+        let slug = req.body.slug || convertToSlug(name);
 
-        if (existSlug) {
-            return res.status(400).json({
-                success: false,
-                message: "Đường dẫn đã tồn tại!"
-            });
+        let slugCheck = await CategoryBlog.findOne({ slug, deleted: false });
+        let count = 1;
+        const originalSlug = slug;
+        while (slugCheck) {
+            slug = `${originalSlug}-${count}`;
+            slugCheck = await CategoryBlog.findOne({ slug, deleted: false });
+            count++;
         }
 
+        req.body.slug = slug;
+
         // 2. Generate search field
-        req.body.search = slugify(name, {
-            replacement: " ",
-            lower: true,
-            strict: true
-        });
+        req.body.search = convertToSlug(name).replace(/-/g, " ");
 
         // 3. Create category
         await CategoryBlog.create(req.body);
@@ -187,23 +184,33 @@ export const editCategory = async (req: Request, res: Response) => {
     try {
         const id = req.params.id;
 
-        const existSlug = await CategoryBlog.findOne({
-            _id: { $ne: id }, // Loại trừ bản ghi có _id trùng với id truyền vào
-            slug: req.body.slug
-        }).lean();
-
-        if (existSlug) {
-            return res.status(400).json({
-                success: false,
-                message: "Đường dẫn đã tồn tại!"
-            });
+        if (req.body.name && !req.body.slug) {
+            req.body.slug = convertToSlug(req.body.name);
         }
 
-        req.body.search = slugify(`${req.body.name}`, {
-            replacement: " ",
-            lower: true,
-            strict: true
-        })
+        if (req.body.slug) {
+            let slug = req.body.slug;
+            let slugCheck = await CategoryBlog.findOne({
+                _id: { $ne: id },
+                slug: slug,
+                deleted: false
+            }).lean();
+
+            let count = 1;
+            const originalSlug = slug;
+            while (slugCheck) {
+                slug = `${originalSlug}-${count}`;
+                slugCheck = await CategoryBlog.findOne({
+                    _id: { $ne: id },
+                    slug: slug,
+                    deleted: false
+                }).lean();
+                count++;
+            }
+            req.body.slug = slug;
+        }
+
+        req.body.search = convertToSlug(req.body.name || "").replace(/-/g, " ");
         await CategoryBlog.updateOne({
             _id: id,
             deleted: false
@@ -251,26 +258,31 @@ export const deleteCategory = async (req: Request, res: Response) => {
 // Bài viết
 export const create = async (req: Request, res: Response) => {
     try {
-        const existSlug = await Blog.findOne({
-            slug: req.body.slug
+        let slug = req.body.slug || convertToSlug(req.body.name);
+
+        let slugCheck = await Blog.findOne({
+            slug: slug,
+            deleted: false
         });
 
-        if (existSlug) {
-            return res.status(409).json({
-                success: false,
-                message: "Đường dẫn đã tồn tại!"
+        let count = 1;
+        const originalSlug = slug;
+        while (slugCheck) {
+            slug = `${originalSlug}-${count}`;
+            slugCheck = await Blog.findOne({
+                slug: slug,
+                deleted: false
             });
+            count++;
         }
+
+        req.body.slug = slug;
 
         if (req.body.category) {
             req.body.category = JSON.parse(req.body.category);
         }
 
-        req.body.search = slugify(`${req.body.name}`, {
-            replacement: " ",
-            lower: true,
-            strict: true
-        })
+        req.body.search = convertToSlug(req.body.name).replace(/-/g, " ");
 
         if (req.body.status === "published") {
             req.body.publishAt = new Date();
@@ -304,10 +316,8 @@ export const list = async (req: Request, res: Response) => {
 
         // Tìm kiếm
         if (req.query.keyword) {
-            const keyword = slugify(`${req.query.keyword}`, {
-                replacement: " ",
-                lower: true
-            });
+            const keyword = convertToSlug(`${req.query.keyword}`).replace(/-/g, " ");
+
 
             const keywordRegex = new RegExp(keyword, "i");
             find.search = keywordRegex;
@@ -406,46 +416,78 @@ export const edit = async (req: Request, res: Response) => {
             });
         }
 
-        const existSlug = await Blog.findOne({
-            _id: { $ne: id },
-            slug: req.body.slug
-        });
+        if (req.body.name && !req.body.slug) {
+            req.body.slug = convertToSlug(req.body.name);
+        }
 
-        if (existSlug) {
-            return res.status(409).json({
-                success: false,
-                message: "Đường dẫn đã tồn tại!"
+        if (req.body.slug) {
+            let slug = req.body.slug;
+            let slugCheck = await Blog.findOne({
+                _id: { $ne: id },
+                slug: slug,
+                deleted: false
             });
+
+            let count = 1;
+            const originalSlug = slug;
+            while (slugCheck) {
+                slug = `${originalSlug}-${count}`;
+                slugCheck = await Blog.findOne({
+                    _id: { $ne: id },
+                    slug: slug,
+                    deleted: false
+                });
+                count++;
+            }
+            req.body.slug = slug;
         }
         if (req.body.category) {
-            req.body.category = JSON.parse(req.body.category);
+            try {
+                if (typeof req.body.category === 'string') {
+                    req.body.category = JSON.parse(req.body.category);
+                }
+            } catch (e) {
+                console.error("Error parsing category:", e);
+                // Keep as is or handle if it's already an array
+            }
         }
 
-        req.body.search = slugify(req.body.name, {
-            replacement: " ",
-            lower: true,
-            strict: true
-        });
+        if (req.body.name) {
+            req.body.search = convertToSlug(req.body.name).replace(/-/g, " ");
+        }
 
         if (req.body.status === "published") {
             req.body.publishAt = new Date();
         }
 
-        await Blog.updateOne({
+        // Clean up fields that shouldn't be in the update payload
+        delete req.body._id;
+        delete req.body.id;
+        delete req.body.createdAt;
+        delete req.body.updatedAt;
+
+        const updateResult = await Blog.updateOne({
             _id: id,
             deleted: false
-        }, req.body)
+        }, req.body);
+
+        if (updateResult.matchedCount === 0) {
+            return res.status(404).json({
+                success: false,
+                message: "Không tìm thấy bài viết để cập nhật!"
+            });
+        }
 
         return res.status(200).json({
             success: true,
             message: "Cập nhật bài viết thành công!"
         });
     } catch (error) {
-        console.error(error);
+        console.error("Error in edit blog:", error);
 
         return res.status(500).json({
             success: false,
-            message: "Dữ liệu không hợp lệ!"
+            message: "Dữ liệu không hợp lệ hoặc lỗi hệ thống!"
         });
     }
 }

@@ -6,7 +6,7 @@ export function buildCategoryTree(categories: any[], parentId: string = "") {
     const childrenMap = new Map();
 
     categories.forEach(category => {
-        const pId = category.parent ? String(category.parent) : "";
+        const pId = (category.parent || category.parentId) ? String(category.parent || category.parentId) : "";
         if (!childrenMap.has(pId)) {
             childrenMap.set(pId, []);
         }
