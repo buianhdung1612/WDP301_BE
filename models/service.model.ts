@@ -6,6 +6,10 @@ const schema = new mongoose.Schema(
             type: mongoose.Schema.Types.ObjectId,
             ref: "CategoryService"
         },
+        departmentId: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "Department"
+        },
         name: String,
         slug: String,
         description: String,
@@ -36,10 +40,6 @@ const schema = new mongoose.Schema(
                 value: Number // Giá tương ứng
             }
         ],
-        commissionRate: {
-            type: Number,
-            default: 0
-        }, // % hoa hồng cho nhân viên thực hiện (0-100)
         status: {
             type: String,
             enum: ["active", "inactive"],

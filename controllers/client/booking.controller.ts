@@ -11,7 +11,7 @@ import puppeteer from 'puppeteer';
 import moment from "moment";
 import { findBestStaffForBooking, autoAssignPetsToStaff } from "../../helpers/booking-assignment.helper";
 
-// Helper to check if two time ranges overlap
+// Hỗ trợ kiểm tra xem hai khoảng thời gian có trùng nhau không
 const isOverlap = (start1: Date, end1: Date, start2: Date, end2: Date) => {
     return start1 < end2 && start2 < end1;
 };
@@ -19,7 +19,7 @@ const isOverlap = (start1: Date, end1: Date, start2: Date, end2: Date) => {
 // [GET] /api/v1/client/time-slots
 export const getAvailableTimeSlots = async (req: Request, res: Response) => {
     try {
-        const { serviceId, date, count: petCount, petIds } = req.query; // date format: YYYY-MM-DD
+        const { serviceId, date, count: petCount, petIds } = req.query; // định dạng ngày: YYYY-MM-DD
         const count = parseInt(petCount as string) || 1;
         const requestedPetIds = Array.isArray(petIds) ? petIds : (petIds ? (petIds as string).split(",") : []);
 
@@ -36,10 +36,16 @@ export const getAvailableTimeSlots = async (req: Request, res: Response) => {
         const endOfDay = new Date(queryDateStr);
         endOfDay.setHours(23, 59, 59, 999);
 
-        const schedules = await WorkSchedule.find({
+        const scheduleQuery: any = {
             date: { $gte: startOfDay, $lte: endOfDay },
             status: { $in: ["scheduled", "checked-in"] }
-        }).populate("staffId").populate("shiftId");
+        };
+
+        if (service?.departmentId) {
+            scheduleQuery.departmentId = service.departmentId;
+        }
+
+        const schedules = await WorkSchedule.find(scheduleQuery).populate("staffId").populate("shiftId");
 
         const bookings = await Booking.find({
             start: { $gte: startOfDay, $lte: endOfDay },
@@ -47,10 +53,20 @@ export const getAvailableTimeSlots = async (req: Request, res: Response) => {
             deleted: false
         });
 
-        const staffSchedules = new Map();
+        const staffConfigs: any[] = [];
+        const uniqueShiftMap = new Map();
+
+        // 1. Phân loại ca và nhân viên theo phòng ban của dịch vụ
         for (const s of schedules) {
             if (!s.shiftId || !s.staffId) continue;
             const staffStrId = s.staffId._id.toString();
+            const shiftIdStr = s.shiftId._id.toString();
+
+            // Luôn thêm ca vào Map nếu ca này thuộc đúng ban (đã lọc ở query schedules phía trên)
+            // hoặc nếu dịch vụ không có ban thì lấy ca của bất kỳ ai làm được dịch vụ này
+            if (!uniqueShiftMap.has(shiftIdStr)) {
+                uniqueShiftMap.set(shiftIdStr, s.shiftId);
+            }
 
             const roles = await Role.find({
                 _id: { $in: (s.staffId as any).roles },
@@ -63,11 +79,13 @@ export const getAvailableTimeSlots = async (req: Request, res: Response) => {
                 role.serviceIds?.some((id: any) => id.toString() === serviceId)
             );
 
-            if (!canDoService) continue;
-
-            staffSchedules.set(staffStrId, {
+            staffConfigs.push({
+                staffId: staffStrId,
+                fullName: (s.staffId as any).fullName,
+                shiftId: shiftIdStr,
                 startTime: (s.shiftId as any).startTime,
                 endTime: (s.shiftId as any).endTime,
+                canDoService, // Lưu lại cờ kỹ năng
                 bookings: bookings.filter(b => {
                     const bStaffIds = b.staffIds?.map((id: any) => id.toString()) || [];
                     return bStaffIds.includes(staffStrId);
@@ -75,94 +93,104 @@ export const getAvailableTimeSlots = async (req: Request, res: Response) => {
             });
         }
 
-        const availableSlots: any[] = [];
-        let current = new Date(startOfDay);
-        current.setHours(8, 0, 0, 0);
+        const resultShifts = [];
 
-        // Tìm giờ kết thúc muộn nhất trong tất cả các ca làm việc của ngày đó
-        let maxShiftEndMinutes = 0;
-        staffSchedules.forEach(config => {
-            const [eH, eM] = config.endTime.split(":").map(Number);
-            const endMinutes = eH * 60 + eM;
-            if (endMinutes > maxShiftEndMinutes) maxShiftEndMinutes = endMinutes;
-        });
+        for (const [shiftId, shiftData] of uniqueShiftMap) {
+            const shiftName = (shiftData as any).name;
+            const shiftStart = (shiftData as any).startTime;
+            const shiftEnd = (shiftData as any).endTime;
 
-        if (maxShiftEndMinutes === 0) maxShiftEndMinutes = 21 * 60; // Fallback nếu không tìm thấy ca nào
+            const shiftStaffs = staffConfigs.filter(c => c.shiftId === shiftId);
+            // Vẫn lấy ca này dù không có ai làm được (để hiện UI như anh muốn)
+            // if (shiftStaffs.length === 0) continue; 
 
-        const endTimeSlot = new Date(startOfDay);
-        endTimeSlot.setHours(Math.floor(maxShiftEndMinutes / 60), maxShiftEndMinutes % 60, 0, 0);
+            const slots = [];
+            const [sH, sM] = shiftStart.split(":").map(Number);
+            const [eH, eM] = shiftEnd.split(":").map(Number);
 
-        while (current.getTime() + baseDuration * 60000 <= endTimeSlot.getTime()) {
-            const timeStr = moment(current).format("HH:mm");
+            let current = new Date(startOfDay);
+            current.setHours(sH, sM, 0, 0);
+            const endTimeSlot = new Date(startOfDay);
+            endTimeSlot.setHours(eH, eM, 0, 0);
 
-            // Check Parallel Availability (N staff for base duration)
-            let parallelFreeCount = 0;
-            const parallelEnd = new Date(current.getTime() + baseDuration * 60000);
-            const slotStaffNames: string[] = [];
+            while (current.getTime() < endTimeSlot.getTime()) {
+                const timeStr = moment(current).format("HH:mm");
+                const parallelEnd = new Date(current.getTime() + baseDuration * 60000);
 
-            // Check Sequential Availability (1 staff for N*base duration)
-            let sequentialPossible = false;
-            const sequentialEnd = new Date(current.getTime() + (baseDuration * count) * 60000);
+                // Chỉ những nhân viên vừa đang trực ca này, vừa có kỹ năng mới được tính là "rảnh cho slot này"
+                const qualifiedStaffAvailable = [];
+                const slotStaffNames = [];
 
-            let totalStaffOnShift = 0;
+                for (const config of shiftStaffs) {
+                    if (!config.canDoService) continue; // Không có kỹ năng thì bỏ qua
 
-            staffSchedules.forEach((config, sId) => {
-                const [sH, sM] = config.startTime.split(":").map(Number);
-                const [eH, eM] = config.endTime.split(":").map(Number);
-                const shiftStart = new Date(startOfDay).setHours(sH, sM, 0, 0);
-                const shiftEnd = new Date(startOfDay).setHours(eH, eM, 0, 0);
-
-                // Check for Parallel (base duration)
-                if (current.getTime() >= shiftStart && parallelEnd.getTime() <= shiftEnd) {
-                    totalStaffOnShift++;
-                    const isBusyParallel = config.bookings.some((b: any) => isOverlap(current, parallelEnd, b.start as any as Date, b.end as any as Date));
-                    if (!isBusyParallel) {
-                        parallelFreeCount++;
-                        // Lấy tên nhân viên đang rảnh
-                        const staffDoc = schedules.find(s => s.staffId._id.toString() === sId)?.staffId as any;
-                        if (staffDoc) slotStaffNames.push(staffDoc.fullName);
+                    const isBusy = config.bookings.some((b: any) => isOverlap(current, parallelEnd, b.start as any as Date, b.end as any as Date));
+                    if (!isBusy) {
+                        qualifiedStaffAvailable.push(config);
+                        slotStaffNames.push(config.fullName);
                     }
                 }
 
-                // Check for Sequential (longer duration)
-                if (current.getTime() >= shiftStart && sequentialEnd.getTime() <= shiftEnd) {
-                    const isBusySequential = config.bookings.some((b: any) => isOverlap(current, sequentialEnd, b.start as any as Date, b.end as any as Date));
-                    if (!isBusySequential) {
-                        sequentialPossible = true;
+                const availableCount = qualifiedStaffAvailable.length;
+                let isAvailable = false;
+                let currentMode = "parallel";
+                let effectiveEnd = parallelEnd;
+
+                if (availableCount > 0) {
+                    const petsPerStaff = Math.ceil(count / availableCount);
+                    const requiredDuration = petsPerStaff * baseDuration;
+                    effectiveEnd = new Date(current.getTime() + requiredDuration * 60000);
+                    currentMode = petsPerStaff === 1 ? "parallel" : "sequential_mixed";
+
+                    if (effectiveEnd.getTime() <= endTimeSlot.getTime()) {
+                        let fullyFreeCount = 0;
+                        for (const config of qualifiedStaffAvailable) {
+                            const isBusyLong = config.bookings.some((b: any) => isOverlap(current, effectiveEnd, b.start as any as Date, b.end as any as Date));
+                            if (!isBusyLong) fullyFreeCount++;
+                        }
+
+                        if (fullyFreeCount > 0 && (fullyFreeCount * Math.floor(requiredDuration / baseDuration) >= count)) {
+                            isAvailable = true;
+                        }
                     }
                 }
-            });
 
-            // CRITICAL: Check if specific pets are already busy in this slot
-            let petIsBusy = false;
-            if (requestedPetIds.length > 0) {
-                const maxEnd = parallelFreeCount >= count ? parallelEnd : sequentialEnd;
-                petIsBusy = bookings.some(b => {
-                    const hasCommonPet = b.petIds.some((pid: any) => requestedPetIds.includes(pid.toString()));
-                    if (!hasCommonPet) return false;
-                    return isOverlap(current, maxEnd, b.start as any as Date, b.end as any as Date);
+                let petIsBusy = false;
+                if (requestedPetIds.length > 0 && isAvailable) {
+                    petIsBusy = bookings.some(b => {
+                        const hasCommonPet = b.petIds.some((pid: any) => requestedPetIds.includes(pid.toString()));
+                        if (!hasCommonPet) return false;
+                        return isOverlap(current, effectiveEnd, b.start as any as Date, b.end as any as Date);
+                    });
+                }
+
+                slots.push({
+                    time: timeStr,
+                    freeStaff: availableCount,
+                    status: (isAvailable && !petIsBusy) ? "available" : (petIsBusy ? "pet_busy" : "full"),
+                    totalStaff: shiftStaffs.filter(s => s.canDoService).length, // Chỉ đếm tổng nhân viên CÓ KỸ NĂNG trong ca
+                    mode: currentMode,
+                    staffNames: slotStaffNames
                 });
+
+                current = new Date(current.getTime() + 5 * 60000);
             }
 
-            const isAvailable = !petIsBusy && ((parallelFreeCount >= count) || sequentialPossible);
-
-            availableSlots.push({
-                time: timeStr,
-                freeStaff: parallelFreeCount,
-                availableSlots: parallelFreeCount,
-                status: totalStaffOnShift === 0 ? "closed" : (isAvailable ? "available" : (petIsBusy ? "pet_busy" : "full")),
-                totalStaff: totalStaffOnShift,
-                mode: parallelFreeCount >= count ? "parallel" : "sequential",
-                staffNames: slotStaffNames
+            resultShifts.push({
+                _id: shiftId,
+                name: shiftName,
+                startTime: shiftStart,
+                endTime: shiftEnd,
+                slots: slots
             });
-
-            current = new Date(current.getTime() + 5 * 60000);
         }
 
         res.json({
             code: 200,
-            message: "Danh sách khung giờ",
-            data: availableSlots
+            message: "Danh sách ca và khung giờ",
+            data: {
+                shifts: resultShifts
+            }
         });
     } catch (error) {
         res.status(500).json({
@@ -182,7 +210,7 @@ export const listMyBookings = async (req: Request, res: Response) => {
         const skip = (page - 1) * limit;
         const status = req.query.status as string;
 
-        let filter: any = { deleted: false, userId };
+        let filter: any = { deleted: false, userId }; // Lọc theo user hiện tại và chưa xóa
         if (status) {
             filter.bookingStatus = status;
         }
@@ -261,11 +289,11 @@ export const createBooking = async (req: Request, res: Response) => {
             return res.status(401).json({ code: 401, message: "Vui lòng đăng nhập" });
         }
 
-        // 0. Fetch Booking Config
+        // 0. Lấy cấu hình đặt lịch
         const config = await BookingConfig.findOne({});
         const autoConfirm = config?.autoConfirmEnabled ?? false;
 
-        // 1. Validate Service
+        // 1. Kiểm tra dịch vụ
         const service = await Service.findById(serviceId);
         if (!service || service.deleted || service.status === "inactive") {
             return res.status(400).json({ code: 400, message: "Dịch vụ không tồn tại" });
@@ -279,31 +307,37 @@ export const createBooking = async (req: Request, res: Response) => {
             return res.status(400).json({ code: 400, message: "Vui lòng chọn thú cưng" });
         }
 
-        // 2. Validate Pets
+        // 2. Kiểm tra thú cưng
         const pets = await Pet.find({ _id: { $in: petIds }, userId, deleted: false });
         if (pets.length !== numPets) {
             return res.status(400).json({ code: 400, message: "Một hoặc nhiều thú cưng không hợp lệ" });
         }
 
-        // 3. Automated Staff Assignment (Parallel First)
+        // 3. Tự động phân công nhân viên (Ưu tiên song song)
         let finalEndDate = new Date(start.getTime() + baseDuration * 60000);
         let bestStaffList = await findBestStaffForBooking(start, start, finalEndDate, serviceId as string, numPets);
 
-        // If not enough staff for parallel, try sequential
-        if (bestStaffList.length < numPets) {
+        if (bestStaffList.length > 0) {
+            // Điều chỉnh thời gian nếu không đủ nhân viên cho tất cả thú cưng (ví dụ: 4 bé nhưng chỉ có 3 nhân viên)
+            if (bestStaffList.length < numPets) {
+                const adjustedDuration = baseDuration * Math.ceil(numPets / bestStaffList.length);
+                finalEndDate = new Date(start.getTime() + adjustedDuration * 60000);
+            }
+        } else {
+            // Không có nhân viên làm song song? Thử tìm 1 nhân viên làm tuần tự
             const sequentialDuration = baseDuration * numPets;
             finalEndDate = new Date(start.getTime() + sequentialDuration * 60000);
             bestStaffList = await findBestStaffForBooking(start, start, finalEndDate, serviceId as string, 1);
+
+            if (bestStaffList.length === 0) {
+                return res.status(400).json({
+                    code: 400,
+                    message: "Rất tiếc, khung giờ này hiện tại không còn đủ nhân viên rảnh cho tất cả thú cưng của bạn. Vui lòng chọn khung giờ khác!"
+                });
+            }
         }
 
-        if (bestStaffList.length === 0) {
-            return res.status(400).json({
-                code: 400,
-                message: "Rất tiếc, khung giờ này hiện tại không còn đủ nhân viên rảnh cho tất cả thú cưng của bạn. Vui lòng chọn khung giờ khác!"
-            });
-        }
-
-        // 3.5 Check for pet overlapping bookings (Same customer, overlapping time, shared pets)
+        // 3.5 Kiểm tra lịch trùng của thú cưng (Cùng khách hàng, cùng thời gian, chung thú cưng)
         const petOverlap = await Booking.findOne({
             userId,
             bookingStatus: { $nin: ["cancelled", "completed"] },
@@ -319,7 +353,7 @@ export const createBooking = async (req: Request, res: Response) => {
             });
         }
 
-        // 4. Calculate Price
+        // 4. Tính giá tiền
         let totalPrice = 0;
         if (service.pricingType === "fixed") {
             totalPrice = (service.basePrice || 0) * numPets;
@@ -341,7 +375,7 @@ export const createBooking = async (req: Request, res: Response) => {
             }
         }
 
-        // 5. Create Booking
+        // 5. Tạo lịch đặt
         const bookingCode = `BK${Date.now()}`;
         const newBooking = new Booking({
             code: bookingCode,
@@ -435,7 +469,7 @@ export const updateBooking = async (req: Request, res: Response) => {
             });
         }
 
-        // Only allow if user is owner
+        // Chỉ cho phép nếu user là chủ sở hữu đơn hàng
         if (userId && booking.userId?.toString() !== userId.toString()) {
             return res.status(403).json({
                 code: 403,

@@ -24,6 +24,7 @@ const schema = new mongoose.Schema(
         petStaffMap: [{
             petId: { type: mongoose.Schema.Types.ObjectId, ref: "Pet" },
             staffId: { type: mongoose.Schema.Types.ObjectId, ref: "AccountAdmin" },
+            price: Number,
             status: {
                 type: String,
                 enum: ["pending", "in-progress", "completed"],
