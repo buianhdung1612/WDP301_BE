@@ -9,6 +9,7 @@ import Pet from "../../models/pet.model";
 import Role from "../../models/role.model";
 import WorkSchedule from "../../models/work-schedule.model";
 import { buildDefaultBoardingCareSchedule } from "../../utils/boarding-care-template.util";
+import { convertToSlug } from "../../helpers/slug.helper";
 
 const MAX_ROOMS_PER_CAGE = Math.max(1, Number(process.env.BOARDING_CAGE_CAPACITY || 4));
 const BOOKING_LOCK_MS = Math.max(3000, Number(process.env.BOARDING_BOOKING_LOCK_MS || 8000));
@@ -548,6 +549,9 @@ export const createBoardingBooking = async (req: Request, res: Response) => {
             cancelledReason: nextBoardingStatus === "cancelled" ? "Admin tao don o trang thai huy" : null,
         });
 
+        booking.search = convertToSlug(`${booking.code} ${booking.fullName || ""} ${booking.phone || ""}`).replace(/-/g, " ");
+        await booking.save();
+
         if (nextBoardingStatus === "checked-in") {
             await BoardingCage.findByIdAndUpdate(cageId, { status: "occupied" });
         } else if (nextBoardingStatus === "checked-out" || nextBoardingStatus === "cancelled") {
@@ -591,12 +595,19 @@ export const listBoardingBookings = async (req: Request, res: Response) => {
         if (paymentStatus) filter.paymentStatus = paymentStatus;
 
         const andConditions: any[] = [];
-        if (search) {
+        const keyword = req.query.keyword || req.query.q || req.query.search;
+        if (keyword) {
+            const cleanCode = String(keyword).replace(/^#/, "");
+            const keywordRegex = new RegExp(String(keyword), "i");
+            const codeRegex = new RegExp(cleanCode, "i");
+            const slugKeyword = convertToSlug(String(keyword)).replace(/-/g, " ");
+
             andConditions.push({
                 $or: [
-                    { code: new RegExp(search, "i") },
-                    { fullName: new RegExp(search, "i") },
-                    { phone: new RegExp(search, "i") },
+                    { search: new RegExp(slugKeyword, "i") },
+                    { code: codeRegex },
+                    { fullName: keywordRegex },
+                    { phone: keywordRegex },
                 ]
             });
         }
@@ -619,19 +630,60 @@ export const listBoardingBookings = async (req: Request, res: Response) => {
             filter.$and = andConditions;
         }
 
-        const bookings = await BoardingBooking.find(filter)
-            .populate("userId", "fullName phone email avatar")
-            .populate("petIds", "name type breed avatar weight")
-            .populate("cageId", "cageCode type size dailyPrice status")
-            .populate("feedingSchedule.staffId", "fullName phone employeeCode")
-            .populate("exerciseSchedule.staffId", "fullName phone employeeCode")
-            .sort({ createdAt: -1 });
+        const page = Math.max(1, parseInt(req.query.page as string) || 1);
+        const limit = parseInt(req.query.limit as string) || 10;
+        const skip = (page - 1) * limit;
 
-        const data = !canAssignHotelStaff && currentStaffId
-            ? bookings.map((booking: any) => filterBookingCareScheduleForStaffView(booking, currentStaffId))
-            : bookings;
+        const [recordList, totalRecords, counts] = await Promise.all([
+            BoardingBooking.find(filter)
+                .populate("userId", "fullName phone email avatar")
+                .populate("petIds", "name type breed avatar weight")
+                .populate("cageId", "cageCode type size dailyPrice status")
+                .populate("feedingSchedule.staffId", "fullName phone employeeCode")
+                .populate("exerciseSchedule.staffId", "fullName phone employeeCode")
+                .sort({ createdAt: -1 })
+                .skip(skip)
+                .limit(limit),
+            BoardingBooking.countDocuments(filter),
+            BoardingBooking.aggregate([
+                { $match: { deleted: false } },
+                { $group: { _id: "$boardingStatus", count: { $sum: 1 } } }
+            ])
+        ]);
 
-        return res.json({ code: 200, data });
+        const statusCounts: any = {
+            all: await BoardingBooking.countDocuments({ deleted: false }),
+            pending: 0,
+            held: 0,
+            confirmed: 0,
+            "checked-in": 0,
+            "checked-out": 0,
+            cancelled: 0
+        };
+
+        counts.forEach((item: any) => {
+            if (statusCounts.hasOwnProperty(item._id)) {
+                statusCounts[item._id] = item.count;
+            }
+        });
+
+        const processedList = !canAssignHotelStaff && currentStaffId
+            ? recordList.map((booking: any) => filterBookingCareScheduleForStaffView(booking, currentStaffId))
+            : recordList;
+
+        return res.json({
+            code: 200,
+            data: {
+                recordList: processedList,
+                statusCounts,
+                pagination: {
+                    totalRecords,
+                    totalPages: Math.ceil(totalRecords / limit),
+                    currentPage: page,
+                    limit
+                }
+            }
+        });
     } catch (error: any) {
         return res.status(500).json({ code: 500, message: error.message || "Loi he thong" });
     }

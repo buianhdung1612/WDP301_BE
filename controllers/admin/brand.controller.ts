@@ -46,28 +46,50 @@ export const create = async (req: Request, res: Response) => {
 
 export const list = async (req: Request, res: Response) => {
     try {
-        const find: {
-            deleted: boolean;
-            search?: RegExp;
-        } = {
+        const find: any = {
             deleted: false
         };
 
         // Search
-        if (req.query.keyword) {
-            const keyword = convertToSlug(`${req.query.keyword}`).replace(/-/g, " ");
-
-            find.search = new RegExp(keyword, "i");
+        const keyword = req.query.keyword || req.query.q;
+        if (keyword) {
+            const slugKeyword = convertToSlug(`${keyword}`).replace(/-/g, " ");
+            const regex = new RegExp(`${keyword}`, "i");
+            find.$or = [
+                { search: new RegExp(slugKeyword, "i") },
+                { name: regex }
+            ];
         }
 
-        const recordList = await Brand.find(find)
-            .sort({ createdAt: -1 })
-            .lean();
+        if (req.query.status) {
+            find.status = req.query.status;
+        }
+
+        const limitItems = parseInt(`${req.query.limit}`) || 20;
+        const page = Math.max(1, parseInt(`${req.query.page}`) || 1);
+        const skip = (page - 1) * limitItems;
+
+        const [recordList, totalRecord] = await Promise.all([
+            Brand.find(find)
+                .sort({ createdAt: -1 })
+                .limit(limitItems)
+                .skip(skip)
+                .lean(),
+            Brand.countDocuments(find)
+        ]);
 
         return res.status(200).json({
             success: true,
             message: "Lấy danh sách thương hiệu thành công",
-            data: recordList
+            data: {
+                recordList,
+                pagination: {
+                    totalRecords: totalRecord,
+                    totalPages: Math.ceil(totalRecord / limitItems),
+                    currentPage: page,
+                    limit: limitItems
+                }
+            }
         });
     } catch (error) {
         console.error(error);

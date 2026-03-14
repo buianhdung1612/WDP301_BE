@@ -7,18 +7,40 @@ export const index = async (req: Request, res: Response) => {
     try {
         const filter: any = {};
 
+        const page = parseInt(req.query.page as string) || 1;
+        const limit = parseInt(req.query.limit as string) || 20;
+        const skip = (page - 1) * limit;
+
         if (req.query.status) {
             filter.status = req.query.status;
         }
 
-        const departments = await Department.find(filter)
-            .populate("managerId", "fullName email")
-            .sort({ createdAt: -1 });
+        const keyword = req.query.keyword || req.query.q;
+        if (keyword) {
+            filter.name = new RegExp(keyword as string, "i");
+        }
+
+        const [departments, total] = await Promise.all([
+            Department.find(filter)
+                .populate("managerId", "fullName email")
+                .sort({ createdAt: -1 })
+                .skip(skip)
+                .limit(limit),
+            Department.countDocuments(filter)
+        ]);
 
         res.json({
             code: 200,
             message: "Danh sách phòng ban",
-            data: departments
+            data: {
+                recordList: departments,
+                pagination: {
+                    currentPage: page,
+                    limit,
+                    total,
+                    totalPages: Math.ceil(total / limit)
+                }
+            }
         });
     } catch (error) {
         res.status(500).json({

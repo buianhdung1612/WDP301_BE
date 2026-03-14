@@ -9,13 +9,41 @@ import { convertToSlug } from "../../helpers/slug.helper";
 // [GET] /api/v1/admin/service/categories
 export const categoryList = async (req: Request, res: Response) => {
     try {
-        const categories = await ServiceCategory.find({ deleted: false })
-            .sort({ createdAt: -1 });
+        const page = parseInt(req.query.page as string) || 1;
+        const limit = parseInt(req.query.limit as string) || 20;
+        const skip = (page - 1) * limit;
+
+        const find: any = { deleted: false };
+
+        if (req.query.keyword) {
+            const keyword = convertToSlug(`${req.query.keyword}`).replace(/-/g, " ");
+            find.name = new RegExp(keyword, "i");
+        }
+
+        if (req.query.status) {
+            find.status = req.query.status;
+        }
+
+        const [categories, total] = await Promise.all([
+            ServiceCategory.find(find)
+                .sort({ createdAt: -1 })
+                .skip(skip)
+                .limit(limit),
+            ServiceCategory.countDocuments(find)
+        ]);
 
         res.json({
             code: 200,
             message: "Danh sách danh mục dịch vụ",
-            data: categories
+            data: {
+                recordList: categories,
+                pagination: {
+                    currentPage: page,
+                    limit,
+                    total,
+                    totalPages: Math.ceil(total / limit)
+                }
+            }
         });
     } catch (error) {
         res.status(500).json({
@@ -197,23 +225,43 @@ export const serviceList = async (req: Request, res: Response) => {
         const limit = parseInt(req.query.limit as string) || 10;
         const skip = (page - 1) * limit;
 
-        const services = await Service.find({ deleted: false })
-            .populate("categoryId", "name")
-            .skip(skip)
-            .limit(limit)
-            .sort({ createdAt: -1 });
+        const find: any = { deleted: false };
 
-        const total = await Service.countDocuments({ deleted: false });
+        const keyword = req.query.keyword || req.query.q;
+        if (keyword) {
+            const slugKeyword = convertToSlug(`${keyword}`).replace(/-/g, " ");
+            const regex = new RegExp(`${keyword}`, "i");
+            find.$or = [
+                { name: regex },
+                { slug: new RegExp(convertToSlug(`${keyword}`), "i") },
+                { search: new RegExp(slugKeyword, "i") }
+            ];
+        }
+
+        if (req.query.status) {
+            find.status = req.query.status;
+        }
+
+        const [services, total] = await Promise.all([
+            Service.find(find)
+                .populate("categoryId", "name")
+                .skip(skip)
+                .limit(limit)
+                .sort({ createdAt: -1 }),
+            Service.countDocuments(find)
+        ]);
 
         res.json({
             code: 200,
             message: "Danh sách dịch vụ",
-            data: services,
-            pagination: {
-                currentPage: page,
-                limit,
-                total,
-                totalPages: Math.ceil(total / limit)
+            data: {
+                recordList: services,
+                pagination: {
+                    currentPage: page,
+                    limit,
+                    total,
+                    totalPages: Math.ceil(total / limit)
+                }
             }
         });
     } catch (error) {

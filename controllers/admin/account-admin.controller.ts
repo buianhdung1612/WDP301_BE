@@ -11,9 +11,25 @@ export const list = async (req: Request, res: Response) => {
             deleted: false
         };
 
-        if (req.query.keyword) {
-            const keyword = convertToSlug(`${req.query.keyword}`).replace(/-/g, " ");
-            find.search = new RegExp(keyword, "i");
+        const keyword = req.query.keyword || req.query.q;
+        if (keyword) {
+            const slugKeyword = convertToSlug(`${keyword}`).replace(/-/g, " ");
+            const regex = new RegExp(`${keyword}`, "i");
+            find.$or = [
+                { search: new RegExp(slugKeyword, "i") },
+                { fullName: regex },
+                { email: regex },
+                { phone: regex }
+            ];
+        }
+
+        if (req.query.status && req.query.status !== 'all') {
+            find.status = req.query.status;
+        }
+
+        if (req.query.roleIds) {
+            const roleIds = (req.query.roleIds as string).split(",");
+            find.roles = { $in: roleIds };
         }
 
         if (req.query.departmentId) {
@@ -21,8 +37,8 @@ export const list = async (req: Request, res: Response) => {
                 departmentId: req.query.departmentId,
                 deleted: false
             }).select("_id");
-            const roleIds = roles.map(r => r._id);
-            find.roles = { $in: roleIds };
+            const departmentRoleIds = roles.map(r => r._id);
+            find.roles = { ...find.roles, $in: departmentRoleIds };
         }
 
         // Pagination
@@ -30,15 +46,31 @@ export const list = async (req: Request, res: Response) => {
         const page = Math.max(1, parseInt(req.query.page as string) || 1);
         const skip = (page - 1) * limitItems;
 
-        const [recordList, totalRecords] = await Promise.all([
+        const [recordList, totalRecords, counts] = await Promise.all([
             AccountAdmin.find(find)
                 .select("-password")
                 .sort({ createdAt: "desc" })
                 .limit(limitItems)
                 .skip(skip)
                 .lean(),
-            AccountAdmin.countDocuments(find)
+            AccountAdmin.countDocuments(find),
+            AccountAdmin.aggregate([
+                { $match: { deleted: false } },
+                { $group: { _id: "$status", count: { $sum: 1 } } }
+            ])
         ]);
+
+        const statusCounts = {
+            all: await AccountAdmin.countDocuments({ deleted: false }),
+            active: 0,
+            inactive: 0
+        };
+
+        counts.forEach((item: any) => {
+            if (statusCounts.hasOwnProperty(item._id)) {
+                (statusCounts as any)[item._id] = item.count;
+            }
+        });
 
         // Populate roles with serviceIds for staff filtering
         const populatedList = await Promise.all(recordList.map(async (item) => {
@@ -54,12 +86,15 @@ export const list = async (req: Request, res: Response) => {
         res.json({
             code: 200,
             message: "Danh sách quản trị viên",
-            data: populatedList,
-            pagination: {
-                totalRecords,
-                totalPages: Math.ceil(totalRecords / limitItems),
-                currentPage: page,
-                limit: limitItems
+            data: {
+                recordList: populatedList,
+                statusCounts,
+                pagination: {
+                    totalRecords,
+                    totalPages: Math.ceil(totalRecords / limitItems),
+                    currentPage: page,
+                    limit: limitItems
+                }
             }
         });
     } catch (error) {
@@ -85,7 +120,7 @@ export const create = async (req: Request, res: Response) => {
             });
         }
 
-        req.body.search = convertToSlug(`${req.body.fullName} ${req.body.email}`).replace(/-/g, " ");
+        req.body.search = convertToSlug(`${req.body.fullName} ${req.body.email} ${req.body.phone || ""}`).replace(/-/g, " ");
 
         // Hash password
         if (req.body.password) {
@@ -157,10 +192,11 @@ export const edit = async (req: Request, res: Response) => {
             });
         }
 
-        if (req.body.fullName || req.body.email) {
+        if (req.body.fullName || req.body.email || req.body.phone) {
             const name = req.body.fullName || "";
             const email = req.body.email || "";
-            req.body.search = convertToSlug(`${name} ${email}`).replace(/-/g, " ");
+            const phone = req.body.phone || "";
+            req.body.search = convertToSlug(`${name} ${email} ${phone}`).replace(/-/g, " ");
         }
 
         // Do not update password here

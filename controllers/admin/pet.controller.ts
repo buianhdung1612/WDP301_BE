@@ -14,21 +14,34 @@ export const listPets = async (req: Request, res: Response) => {
             filter.userId = userId;
         }
 
-        const pets = await Pet.find(filter)
-            .skip(skip)
-            .limit(limit)
-            .sort({ createdAt: -1 });
+        const keyword = req.query.keyword || req.query.q;
+        if (keyword) {
+            filter.name = new RegExp(`${keyword}`, "i");
+        }
 
-        const total = await Pet.countDocuments(filter);
+        if (req.query.status) {
+            filter.status = req.query.status;
+        }
+
+        const [pets, total] = await Promise.all([
+            Pet.find(filter)
+                .skip(skip)
+                .limit(limit)
+                .sort({ createdAt: -1 }),
+            Pet.countDocuments(filter)
+        ]);
 
         res.json({
             code: 200,
             message: "Danh sách thú cưng",
-            data: pets,
-            pagination: {
-                currentPage: page,
-                limit,
-                total,
+            data: {
+                recordList: pets,
+                pagination: {
+                    currentPage: page,
+                    limit,
+                    total,
+                    totalPages: Math.ceil(total / limit)
+                }
             }
         });
     } catch (error) {

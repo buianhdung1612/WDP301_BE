@@ -168,7 +168,7 @@ const schema = new mongoose.Schema(
 
         actualCheckInDate: Date,
         actualCheckOutDate: Date,
-
+        search: String,
         deleted: {
             type: Boolean,
             default: false

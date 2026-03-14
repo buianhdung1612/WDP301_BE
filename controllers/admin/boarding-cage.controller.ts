@@ -89,8 +89,30 @@ export const listBoardingCages = async (req: Request, res: Response) => {
             ];
         }
 
-        const cages = await BoardingCage.find(filter).sort({ createdAt: -1 });
-        return res.json({ code: 200, data: cages });
+        const page = Math.max(1, parseInt(req.query.page as string) || 1);
+        const limit = parseInt(req.query.limit as string) || 20;
+        const skip = (page - 1) * limit;
+
+        const [recordList, totalRecords] = await Promise.all([
+            BoardingCage.find(filter)
+                .sort({ createdAt: -1 })
+                .skip(skip)
+                .limit(limit),
+            BoardingCage.countDocuments(filter)
+        ]);
+
+        return res.json({
+            code: 200,
+            data: {
+                recordList,
+                pagination: {
+                    totalRecords,
+                    totalPages: Math.ceil(totalRecords / limit),
+                    currentPage: page,
+                    limit
+                }
+            }
+        });
     } catch (error: any) {
         return res.status(500).json({ code: 500, message: error.message || "Lỗi hệ thống" });
     }

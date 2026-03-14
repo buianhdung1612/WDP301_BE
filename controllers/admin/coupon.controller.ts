@@ -65,22 +65,37 @@ export const create = async (req: Request, res: Response) => {
 
 export const list = async (req: Request, res: Response) => {
     try {
-        const find: {
-            deleted: boolean;
-            search?: RegExp;
-        } = {
+        const find: any = {
             deleted: false
         };
 
-        // Search
-        if (req.query.keyword) {
-            const keyword = convertToSlug(`${req.query.keyword}`).replace(/-/g, " ");
-            find.search = new RegExp(keyword, "i");
+        const keyword = req.query.keyword || req.query.q;
+        if (keyword) {
+            const slugKeyword = convertToSlug(`${keyword}`).replace(/-/g, " ");
+            const regex = new RegExp(`${keyword}`, "i");
+            find.$or = [
+                { search: new RegExp(slugKeyword, "i") },
+                { code: regex },
+                { name: regex }
+            ];
         }
 
-        const recordList = await Coupon.find(find)
-            .sort({ createdAt: -1 })
-            .lean();
+        if (req.query.status) {
+            find.status = req.query.status;
+        }
+
+        const limitItems = parseInt(req.query.limit as string) || 20;
+        const page = Math.max(1, parseInt(req.query.page as string) || 1);
+        const skip = (page - 1) * limitItems;
+
+        const [recordList, totalRecords] = await Promise.all([
+            Coupon.find(find)
+                .sort({ createdAt: -1 })
+                .limit(limitItems)
+                .skip(skip)
+                .lean(),
+            Coupon.countDocuments(find)
+        ]);
 
         const formattedList = recordList.map(item => ({
             ...item,
@@ -95,7 +110,15 @@ export const list = async (req: Request, res: Response) => {
         return res.status(200).json({
             success: true,
             message: "Lấy danh mã giảm giá thành công",
-            data: formattedList
+            data: {
+                recordList: formattedList,
+                pagination: {
+                    totalRecords,
+                    totalPages: Math.ceil(totalRecords / limitItems),
+                    currentPage: page,
+                    limit: limitItems
+                }
+            }
         });
     } catch (error) {
         console.error(error);

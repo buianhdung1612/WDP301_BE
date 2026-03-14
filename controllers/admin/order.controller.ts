@@ -12,14 +12,64 @@ export const list = async (req: Request, res: Response) => {
             filter.orderStatus = req.query.status;
         }
 
-        const orders = await Order.find(filter)
-            .populate("userId", "fullName phone email")
-            .sort({ createdAt: -1 });
+        const keyword = req.query.keyword || req.query.q;
+        if (keyword) {
+            const cleanCode = String(keyword).replace(/^#/, "");
+            const keywordRegex = new RegExp(String(keyword), "i");
+            const codeRegex = new RegExp(cleanCode, "i");
+            filter.$or = [
+                { code: codeRegex },
+                { fullName: keywordRegex },
+                { phone: keywordRegex }
+            ];
+        }
+
+        const limitItems = parseInt(`${req.query.limit}`) || 20;
+        const page = Math.max(1, parseInt(`${req.query.page}`) || 1);
+        const skip = (page - 1) * limitItems;
+
+        const [recordList, totalRecords, counts] = await Promise.all([
+            Order.find(filter)
+                .populate("userId", "fullName phone email")
+                .sort({ createdAt: -1 })
+                .limit(limitItems)
+                .skip(skip)
+                .lean(),
+            Order.countDocuments(filter),
+            Order.aggregate([
+                { $match: { deleted: false } },
+                { $group: { _id: "$orderStatus", count: { $sum: 1 } } }
+            ])
+        ]);
+
+        const statusCounts: any = {
+            all: await Order.countDocuments({ deleted: false }),
+            pending: 0,
+            confirmed: 0,
+            shipping: 0,
+            completed: 0,
+            cancelled: 0
+        };
+
+        counts.forEach((item: any) => {
+            if (statusCounts.hasOwnProperty(item._id)) {
+                statusCounts[item._id] = item.count;
+            }
+        });
 
         res.json({
             code: 200,
             message: "Danh sách đơn hàng",
-            data: orders
+            data: {
+                recordList,
+                statusCounts,
+                pagination: {
+                    totalRecords,
+                    totalPages: Math.ceil(totalRecords / limitItems),
+                    currentPage: page,
+                    limit: limitItems
+                }
+            }
         });
     } catch (error: any) {
         res.status(500).json({ code: 500, message: error.message });

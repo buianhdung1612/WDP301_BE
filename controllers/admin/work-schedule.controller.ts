@@ -36,21 +36,38 @@ export const index = async (req: Request, res: Response) => {
             filter.status = req.query.status;
         }
 
-        const schedules = await WorkSchedule.find(filter)
-            .populate({
-                path: "staffId",
-                select: "fullName email employeeCode roles",
-                populate: { path: "roles", select: "name" }
-            })
-            .populate("shiftId", "name startTime endTime")
-            .populate("departmentId", "name")
-            .populate("createdBy", "fullName")
-            .sort({ date: -1, 'shiftId.startTime': 1 });
+        const page = parseInt(req.query.page as string) || 1;
+        const limit = parseInt(req.query.limit as string) || 20;
+        const skip = (page - 1) * limit;
+
+        const [schedules, total] = await Promise.all([
+            WorkSchedule.find(filter)
+                .populate({
+                    path: "staffId",
+                    select: "fullName email employeeCode roles",
+                    populate: { path: "roles", select: "name" }
+                })
+                .populate("shiftId", "name startTime endTime")
+                .populate("departmentId", "name")
+                .populate("createdBy", "fullName")
+                .sort({ date: -1, 'shiftId.startTime': 1 })
+                .skip(skip)
+                .limit(limit),
+            WorkSchedule.countDocuments(filter)
+        ]);
 
         res.json({
             code: 200,
             message: "Danh sách lịch làm việc",
-            data: schedules
+            data: {
+                recordList: schedules,
+                pagination: {
+                    currentPage: page,
+                    limit,
+                    total,
+                    totalPages: Math.ceil(total / limit)
+                }
+            }
         });
     } catch (error) {
         console.error("Error fetching schedules:", error);

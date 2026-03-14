@@ -6,6 +6,10 @@ const schema = new mongoose.Schema(
         sku: String,
         slug: String,
         position: Number,
+        brandId: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "Brand"
+        },
         category: [{
             type: mongoose.Schema.Types.ObjectId,
             ref: "CategoryProduct"

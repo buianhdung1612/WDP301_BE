@@ -18,15 +18,9 @@ const schema = new mongoose.Schema(
         }, // Ngày làm việc
         status: {
             type: String,
-            enum: ["scheduled", "checked-in", "checked-out", "absent", "on-leave"],
+            enum: ["scheduled", "absent", "on-leave"],
             default: "scheduled"
         },
-        checkInTime: Date,
-        checkOutTime: Date,
-        actualWorkHours: {
-            type: Number,
-            default: 0
-        }, // Số giờ làm thực tế
         notes: String,
         createdBy: {
             type: mongoose.Schema.Types.ObjectId,

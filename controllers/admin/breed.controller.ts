@@ -5,18 +5,41 @@ import Breed from "../../models/breed.model";
 export const listBreeds = async (req: Request, res: Response) => {
     try {
         const type = req.query.type as string;
+        const page = parseInt(req.query.page as string) || 1;
+        const limit = parseInt(req.query.limit as string) || 20;
+        const skip = (page - 1) * limit;
+
         let filter: any = {};
 
         if (type) {
             filter.type = type;
         }
 
-        const breeds = await Breed.find(filter).sort({ name: 1 });
+        const keyword = req.query.keyword || req.query.q;
+        if (keyword) {
+            filter.name = new RegExp(keyword as string, "i");
+        }
+
+        const [breeds, total] = await Promise.all([
+            Breed.find(filter)
+                .sort({ name: 1 })
+                .skip(skip)
+                .limit(limit),
+            Breed.countDocuments(filter)
+        ]);
 
         res.json({
             code: 200,
             message: "Danh sách giống thú cưng",
-            data: breeds
+            data: {
+                recordList: breeds,
+                pagination: {
+                    currentPage: page,
+                    limit,
+                    total,
+                    totalPages: Math.ceil(total / limit)
+                }
+            }
         });
     } catch (error) {
         res.status(500).json({

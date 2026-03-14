@@ -5,6 +5,7 @@ import AttributeProduct from '../../models/attribute-product.model';
 import Product from '../../models/product.model';
 import { generateRandomString } from '../../helpers/generate.helper';
 import { convertToSlug } from '../../helpers/slug.helper';
+import Brand from '../../models/brand.model';
 
 // Danh mục sản phẩm
 export const category = async (req: Request, res: Response) => {
@@ -253,16 +254,29 @@ export const list = async (req: Request, res: Response) => {
             deleted: false
         };
 
-        if (req.query.keyword) {
-            const keyword = convertToSlug(`${req.query.keyword}`).replace(/-/g, " ");
-            find.search = new RegExp(keyword, "i");
+        if (req.query.status && req.query.status !== 'all') {
+            const statusArr = Array.isArray(req.query.status)
+                ? req.query.status
+                : (typeof req.query.status === 'string' ? req.query.status.split(',') : [req.query.status]);
+
+            find.status = { $in: statusArr };
         }
 
-        if (req.query.status) {
-            find.status = req.query.status;
+        const keyword = req.query.keyword || req.query.q;
+        if (keyword) {
+            const slugKeyword = convertToSlug(`${keyword}`).replace(/-/g, " ");
+            const cleanCode = String(keyword).replace(/^#/, "");
+            const keywordRegex = new RegExp(String(keyword), "i");
+            const codeRegex = new RegExp(cleanCode, "i");
+            find.$or = [
+                { search: new RegExp(slugKeyword, "i") },
+                { title: keywordRegex },
+                { code: codeRegex },
+                { sku: keywordRegex }
+            ];
         }
 
-        const limitItems = 20;
+        const limitItems = parseInt(`${req.query.limit}`) || 20;
         const page = Math.max(1, parseInt(`${req.query.page}`) || 1);
         const skip = (page - 1) * limitItems;
 
@@ -283,19 +297,28 @@ export const list = async (req: Request, res: Response) => {
             return acc;
         }, {});
 
-        const recordListWithCategory = recordList.map(item => ({
+        // Get brand names
+        const brandIds = recordList.map(item => item.brandId).filter(id => !!id);
+        const brands = await Brand.find({ _id: { $in: brandIds } }).select("name").lean();
+        const brandMap = brands.reduce((acc: any, cur: any) => {
+            acc[cur._id.toString()] = cur.name;
+            return acc;
+        }, {});
+
+        const recordListWithInfo = recordList.map(item => ({
             ...item,
             categoryInfo: (item.category || []).map((id: any) => ({
                 id,
                 name: categoryMap[id.toString()] || "N/A"
-            }))
+            })),
+            brandName: item.brandId ? brandMap[item.brandId.toString()] || "N/A" : "N/A"
         }));
 
         return res.json({
             success: true,
             message: "Lấy danh sách sản phẩm thành công",
             data: {
-                recordList: recordListWithCategory,
+                recordList: recordListWithInfo,
                 pagination: {
                     totalRecords: totalRecord,
                     totalPages: Math.ceil(totalRecord / limitItems),

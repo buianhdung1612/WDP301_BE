@@ -10,9 +10,20 @@ export const list = async (req: Request, res: Response) => {
             deleted: false
         };
 
-        if (req.query.keyword) {
-            const keyword = convertToSlug(`${req.query.keyword}`).replace(/-/g, " ");
-            find.search = new RegExp(keyword, "i");
+        const keyword = req.query.keyword || req.query.q;
+        if (keyword) {
+            const slugKeyword = convertToSlug(`${keyword}`).replace(/-/g, " ");
+            const regex = new RegExp(`${keyword}`, "i");
+            find.$or = [
+                { search: new RegExp(slugKeyword, "i") },
+                { fullName: regex },
+                { email: regex },
+                { phone: regex }
+            ];
+        }
+
+        if (req.query.status) {
+            find.status = req.query.status;
         }
 
         if (req.query.createdBy) {
@@ -24,25 +35,44 @@ export const list = async (req: Request, res: Response) => {
         const page = Math.max(1, parseInt(req.query.page as string) || 1);
         const skip = (page - 1) * limitItems;
 
-        const [recordList, totalRecords] = await Promise.all([
+        const [recordList, totalRecords, counts] = await Promise.all([
             AccountUser.find(find)
                 .select("-password")
                 .sort({ createdAt: "desc" })
                 .limit(limitItems)
                 .skip(skip)
                 .lean(),
-            AccountUser.countDocuments(find)
+            AccountUser.countDocuments(find),
+            AccountUser.aggregate([
+                { $match: { deleted: false } },
+                { $group: { _id: "$status", count: { $sum: 1 } } }
+            ])
         ]);
+
+        const statusCounts = {
+            all: await AccountUser.countDocuments({ deleted: false }),
+            active: 0,
+            inactive: 0
+        };
+
+        counts.forEach((item: any) => {
+            if (statusCounts.hasOwnProperty(item._id)) {
+                (statusCounts as any)[item._id] = item.count;
+            }
+        });
 
         res.json({
             code: 200,
             message: "Danh sách tài khoản khách hàng",
-            data: recordList,
-            pagination: {
-                totalRecords,
-                totalPages: Math.ceil(totalRecords / limitItems),
-                currentPage: page,
-                limit: limitItems
+            data: {
+                recordList,
+                statusCounts,
+                pagination: {
+                    totalRecords,
+                    totalPages: Math.ceil(totalRecords / limitItems),
+                    currentPage: page,
+                    limit: limitItems
+                }
             }
         });
     } catch (error) {
@@ -68,7 +98,7 @@ export const create = async (req: Request, res: Response) => {
             });
         }
 
-        req.body.search = convertToSlug(`${req.body.fullName} ${req.body.email}`).replace(/-/g, " ");
+        req.body.search = convertToSlug(`${req.body.fullName} ${req.body.email} ${req.body.phone || ""}`).replace(/-/g, " ");
 
         // Hash password
         if (req.body.password) {
@@ -140,10 +170,11 @@ export const edit = async (req: Request, res: Response) => {
             });
         }
 
-        if (req.body.fullName || req.body.email) {
+        if (req.body.fullName || req.body.email || req.body.phone) {
             const name = req.body.fullName || "";
             const email = req.body.email || "";
-            req.body.search = convertToSlug(`${name} ${email}`).replace(/-/g, " ");
+            const phone = req.body.phone || "";
+            req.body.search = convertToSlug(`${name} ${email} ${phone}`).replace(/-/g, " ");
         }
 
         // Do not update password here

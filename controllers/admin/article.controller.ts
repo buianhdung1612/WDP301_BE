@@ -7,51 +7,53 @@ import { convertToSlug } from '../../helpers/slug.helper';
 // Danh mục
 export const category = async (req: Request, res: Response) => {
     try {
-        const find: {
-            deleted: boolean;
-            search?: RegExp;
-        } = {
+        const find: any = {
             deleted: false
         };
 
         // Tìm kiếm
-        if (req.query.keyword) {
-            const keyword = convertToSlug(`${req.query.keyword}`).replace(/-/g, " ");
-
-
-            const keywordRegex = new RegExp(keyword, "i");
-            find.search = keywordRegex;
+        const keyword = req.query.keyword || req.query.q;
+        if (keyword) {
+            const slugKeyword = convertToSlug(`${keyword}`).replace(/-/g, " ");
+            const regex = new RegExp(`${keyword}`, "i");
+            find.$or = [
+                { search: new RegExp(slugKeyword, "i") },
+                { name: regex }
+            ];
         }
-        // Hết Tìm kiếm
+
+        if (req.query.status) {
+            find.status = req.query.status;
+        }
 
         // Phân trang
-        const limitItems = 20;
+        const limitItems = parseInt(req.query.limit as string) || 20;
         let page = 1;
         if (req.query.page && parseInt(`${req.query.page}`) > 0) {
             page = parseInt(`${req.query.page}`);
         }
 
-        const totalRecords = await CategoryBlog.countDocuments(find);
-        const totalPages = Math.ceil(totalRecords / limitItems);
-        const skip = (page - 1) * limitItems;
+        const [recordList, totalRecords] = await Promise.all([
+            CategoryBlog.find(find)
+                .sort({ createdAt: "desc" })
+                .limit(limitItems)
+                .skip((page - 1) * limitItems)
+                .lean(),
+            CategoryBlog.countDocuments(find)
+        ]);
 
         const pagination = {
-            totalRecords: totalRecords,
-            totalPages: totalPages,
-            skip: skip
+            totalRecords,
+            totalPages: Math.ceil(totalRecords / limitItems),
+            currentPage: page,
+            limit: limitItems
         };
         // Hết Phân trang
 
-        const recordList: any[] = await CategoryBlog
-            .find(find)
-            .sort({ createdAt: "desc" })
-            .limit(limitItems)
-            .skip(skip)
-            .lean();
 
         const parentIds = recordList
-            .filter(item => item.parent)
-            .map(item => item.parent.toString());
+            .filter((item: any) => item.parent)
+            .map((item: any) => item.parent.toString());
 
         let parentMap: Record<string, string> = {};
 
@@ -66,7 +68,7 @@ export const category = async (req: Request, res: Response) => {
             }
         }
 
-        for (const item of recordList) {
+        for (const item of recordList as any[]) {
             if (item.parent) {
                 item.parentName = parentMap[item.parent.toString()] || null;
             }
@@ -307,47 +309,48 @@ export const create = async (req: Request, res: Response) => {
 
 export const list = async (req: Request, res: Response) => {
     try {
-        const find: {
-            deleted: boolean;
-            search?: RegExp;
-        } = {
+        const find: any = {
             deleted: false
         };
 
         // Tìm kiếm
-        if (req.query.keyword) {
-            const keyword = convertToSlug(`${req.query.keyword}`).replace(/-/g, " ");
-
-
-            const keywordRegex = new RegExp(keyword, "i");
-            find.search = keywordRegex;
+        const keyword = req.query.keyword || req.query.q;
+        if (keyword) {
+            const slugKeyword = convertToSlug(`${keyword}`).replace(/-/g, " ");
+            const regex = new RegExp(`${keyword}`, "i");
+            find.$or = [
+                { search: new RegExp(slugKeyword, "i") },
+                { title: regex },
+                { name: regex } // In case it's name not title, though Blog usually has title
+            ];
         }
-        // Hết Tìm kiếm
+
+        if (req.query.status) {
+            find.status = req.query.status;
+        }
 
         // Phân trang
-        const limitItems = 20;
+        const limitItems = parseInt(req.query.limit as string) || 20;
         let page = 1;
         if (req.query.page && parseInt(`${req.query.page}`) > 0) {
             page = parseInt(`${req.query.page}`);
         }
 
-        const totalRecords = await Blog.countDocuments(find);
-        const totalPages = Math.ceil(totalRecords / limitItems);
-        const skip = (page - 1) * limitItems;
+        const [recordList, totalRecords] = await Promise.all([
+            Blog.find(find)
+                .sort({ createdAt: "desc" })
+                .limit(limitItems)
+                .skip((page - 1) * limitItems)
+                .lean(),
+            Blog.countDocuments(find)
+        ]);
 
         const pagination = {
             totalRecords,
-            totalPages,
-            skip
+            totalPages: Math.ceil(totalRecords / limitItems),
+            currentPage: page,
+            limit: limitItems
         };
-        // Hết Phân trang
-
-        const recordList = await Blog
-            .find(find)
-            .sort({ createdAt: "desc" })
-            .limit(limitItems)
-            .skip(skip)
-            .lean();
 
         return res.status(200).json({
             success: true,

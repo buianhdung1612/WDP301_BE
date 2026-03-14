@@ -12,6 +12,7 @@ import dayjs from "dayjs";
 import puppeteer from "puppeteer";
 import { autoUpdateBookingStatuses } from "../../helpers/booking-job.helper";
 import { findBestStaffForBooking, autoAssignPetsToStaff } from "../../helpers/booking-assignment.helper";
+import { convertToSlug } from "../../helpers/slug.helper";
 
 // [POST] /api/v1/admin/booking/bookings/create
 export const createBooking = async (req: Request, res: Response) => {
@@ -31,7 +32,9 @@ export const createBooking = async (req: Request, res: Response) => {
             total,
             discount,
             staffIds,
-            petStaffMap
+            petStaffMap,
+            customerName,
+            customerPhone
         } = req.body;
 
         // Validate required fields
@@ -220,8 +223,14 @@ export const createBooking = async (req: Request, res: Response) => {
             subTotal: subTotal || (service as any).basePrice || 0,
             total: total || (service as any).basePrice * numPets || 0,
             discount: discount || 0,
+            customerName: customerName || userDetail?.fullName || "",
+            customerPhone: customerPhone || userDetail?.phone || "",
             deleted: false
         });
+
+        const name = newBooking.customerName || "";
+        const phone = newBooking.customerPhone || "";
+        newBooking.search = convertToSlug(`${bookingCode} ${name} ${phone}`).replace(/-/g, " ");
 
         await newBooking.save();
         const populatedBooking = await Booking.findById(newBooking._id).populate("userId");
@@ -402,6 +411,21 @@ export const listBookings = async (req: Request, res: Response) => {
             };
         }
 
+        const keyword = req.query.keyword || req.query.q || req.query.search;
+        if (keyword) {
+            const cleanCode = String(keyword).replace(/^#/, "");
+            const keywordRegex = new RegExp(String(keyword), "i");
+            const codeRegex = new RegExp(cleanCode, "i");
+            const slugKeyword = convertToSlug(String(keyword)).replace(/-/g, " ");
+
+            filter.$or = [
+                { search: new RegExp(slugKeyword, "i") },
+                { customerName: keywordRegex },
+                { customerPhone: keywordRegex },
+                { code: codeRegex }
+            ];
+        }
+
         let query = Booking.find(filter)
             .populate("serviceId", "name basePrice duration")
             .populate("userId", "fullName phone email")
@@ -414,18 +438,43 @@ export const listBookings = async (req: Request, res: Response) => {
             query = query.skip(skip).limit(limit);
         }
 
-        const bookings = await query;
-        const total = await Booking.countDocuments(filter);
+        const [bookings, totalRecords, counts] = await Promise.all([
+            query,
+            Booking.countDocuments(filter),
+            Booking.aggregate([
+                { $match: { deleted: false } },
+                { $group: { _id: "$bookingStatus", count: { $sum: 1 } } }
+            ])
+        ]);
+
+        const statusCounts: any = {
+            all: await Booking.countDocuments({ deleted: false }),
+            pending: 0,
+            confirmed: 0,
+            "in-progress": 0,
+            completed: 0,
+            cancelled: 0,
+            delayed: 0
+        };
+
+        counts.forEach((item: any) => {
+            if (statusCounts.hasOwnProperty(item._id)) {
+                statusCounts[item._id] = item.count;
+            }
+        });
 
         res.json({
             code: 200,
             message: "Danh sách lịch đặt",
-            data: bookings,
-            pagination: noLimit ? null : {
-                currentPage: page,
-                limit,
-                total,
-                totalPages: Math.ceil(total / limit)
+            data: {
+                recordList: bookings,
+                statusCounts,
+                pagination: noLimit ? null : {
+                    totalRecords,
+                    totalPages: Math.ceil(totalRecords / limit),
+                    currentPage: page,
+                    limit
+                }
             }
         });
     } catch (error) {
@@ -528,6 +577,21 @@ export const listStaffTasks = async (req: Request, res: Response) => {
                 $gte: date.startOf('day').toDate(),
                 $lte: date.endOf('day').toDate()
             };
+        }
+
+        const keyword = req.query.keyword || req.query.q || req.query.search;
+        if (keyword) {
+            const cleanCode = String(keyword).replace(/^#/, "");
+            const keywordRegex = new RegExp(String(keyword), "i");
+            const codeRegex = new RegExp(cleanCode, "i");
+            const slugKeyword = convertToSlug(String(keyword)).replace(/-/g, " ");
+
+            filter.$or = [
+                { search: new RegExp(slugKeyword, "i") },
+                { customerName: keywordRegex },
+                { customerPhone: keywordRegex },
+                { code: codeRegex }
+            ];
         }
 
         const query = Booking.find(filter)
@@ -1035,7 +1099,7 @@ export const updateBooking = async (req: Request, res: Response) => {
         const allowedUpdates = [
             "serviceId", "userId", "petIds", "notes",
             "start", "end", "staffIds", "petStaffMap", "discount",
-            "paymentMethod", "paymentStatus"
+            "paymentMethod", "paymentStatus", "customerName", "customerPhone"
         ];
 
         allowedUpdates.forEach(update => {
@@ -1057,6 +1121,10 @@ export const updateBooking = async (req: Request, res: Response) => {
         if ((petsChanged || staffChanged) && !mapProvided) {
             (booking as any).petStaffMap = autoAssignPetsToStaff(booking.petIds as any, booking.staffIds as any);
         }
+
+        const name = booking.customerName || "";
+        const phone = booking.customerPhone || "";
+        booking.search = convertToSlug(`${booking.code} ${name} ${phone}`).replace(/-/g, " ");
 
         await booking.save();
 
