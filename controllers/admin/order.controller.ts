@@ -1,5 +1,7 @@
 import { Request, Response } from "express";
 import Order from "../../models/order.model";
+import { addPointAfterPayment } from "../../helpers/point.helper";
+import { refundOrderResources } from "../../helpers/order.helper";
 
 // [GET] /api/v1/admin/orders
 export const list = async (req: Request, res: Response) => {
@@ -50,15 +52,37 @@ export const detail = async (req: Request, res: Response) => {
 export const updateStatus = async (req: Request, res: Response) => {
     try {
         const { status } = req.body;
-        const order = await Order.findOneAndUpdate(
-            { _id: req.params.id, deleted: false },
-            { orderStatus: status },
-            { new: true }
-        );
+        const id = req.params.id;
+
+        // Kiểm tra đơn hàng tồn tại
+        const order = await Order.findOne({
+            _id: id,
+            deleted: false
+        });
 
         if (!order) {
             return res.status(404).json({ code: 404, message: "Không tìm thấy đơn hàng" });
         }
+
+        // 1. Không cho thay đổi đơn đã hoàn thành hoặc đã hủy
+        if (["completed", "cancelled"].includes(order.orderStatus) && status !== order.orderStatus) {
+            return res.status(400).json({
+                code: 400,
+                message: "Không thể thay đổi trạng thái đơn hàng đã hoàn thành hoặc đã hủy!"
+            });
+        }
+
+        if (status === "completed" && order.orderStatus !== "completed" && order.code) {
+            await addPointAfterPayment(order.code);
+        }
+
+        // Hoàn lại tài nguyên nếu hủy đơn
+        if (status === "cancelled" && order.orderStatus !== "cancelled" && order.code) {
+            await refundOrderResources(order.code);
+        }
+
+        order.orderStatus = status;
+        await order.save();
 
         res.json({
             code: 200,
@@ -89,7 +113,7 @@ export const editPatch = async (req: Request, res: Response) => {
             });
         }
 
-        // Không cho thay đổi đơn đã hoàn thành hoặc đã hủy
+        // 1. Không cho thay đổi trạng thái đơn hàng khi đã hoàn thành hoặc đã hủy
         if (["completed", "cancelled"].includes(order.orderStatus) && orderStatus !== order.orderStatus) {
             return res.status(400).json({
                 code: 400,
@@ -97,12 +121,33 @@ export const editPatch = async (req: Request, res: Response) => {
             });
         }
 
-        // Không cho paid thành unpaid
+        // 2. Không cho paid thành unpaid
         if (order.paymentStatus === "paid" && paymentStatus === "unpaid") {
             return res.status(400).json({
                 code: 400,
                 message: "Không thể chuyển đơn đã thanh toán về chưa thanh toán!"
             });
+        }
+
+        // 3. Nếu đơn hàng đã hoàn thành hoặc hủy, không cho phép thay đổi trạng thái thanh toán hoặc ghi chú (tùy chọn)
+        if (["completed", "cancelled"].includes(order.orderStatus)) {
+            // Nếu vẫn muốn cho phép sửa ghi chú thì bỏ note ra
+            if (paymentStatus && paymentStatus !== order.paymentStatus) {
+                return res.status(400).json({
+                    code: 400,
+                    message: "Không thể thay đổi trạng thái thanh toán của đơn hàng đã kết thúc!"
+                });
+            }
+        }
+
+        // Tích điểm cho người dùng nếu đơn hàng hoàn thành
+        if (orderStatus === "completed" && order.orderStatus !== "completed" && order.code) {
+            await addPointAfterPayment(order.code);
+        }
+
+        // Hoàn lại tài nguyên nếu hủy đơn
+        if (orderStatus === "cancelled" && order.orderStatus !== "cancelled" && order.code) {
+            await refundOrderResources(order.code);
         }
 
         if (orderStatus) order.orderStatus = orderStatus;

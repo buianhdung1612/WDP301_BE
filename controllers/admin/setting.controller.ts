@@ -202,3 +202,45 @@ export const generalPatch = async (req: any, res: Response) => {
         data: record.data
     })
 }
+
+export const point = async (req: Request, res: Response) => {
+    const key = "point";
+
+    const record = await Setting.findOne({
+        key: key
+    });
+
+    res.json({
+        code: 200,
+        message: "Cấu hình tích điểm",
+        data: record ? record.data : {
+            MONEY_PER_POINT: 10000,
+            POINT_TO_MONEY: 100
+        }
+    });
+}
+
+export const pointPatch = async (req: any, res: Response) => {
+    const key = "point";
+
+    const record = await Setting.findOneAndUpdate(
+        {
+            key: key
+        },
+        {
+            key: key,
+            data: req.body,
+            updatedBy: req.adminId
+        },
+        {
+            upsert: true,
+            new: true
+        }
+    );
+
+    res.json({
+        code: 200,
+        message: "Cập nhật thành công!",
+        data: record.data
+    })
+}

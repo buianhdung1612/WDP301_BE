@@ -25,10 +25,6 @@ const schema = new mongoose.Schema(
             type: Boolean,
             default: false
         }, // Được phân ca không?
-        commissionRate: {
-            type: Number,
-            default: 0
-        }, // % hoa hồng mặc định theo level/role
         permissions: [String],
         status: {
             type: String,

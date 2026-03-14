@@ -64,13 +64,12 @@ export const detail = async (req: Request, res: Response) => {
 // [POST] /api/v1/admin/shifts
 export const create = async (req: Request, res: Response) => {
     try {
-        const { name, startTime, endTime, salaryMultiplier, departmentId } = req.body;
+        const { name, startTime, endTime, departmentId } = req.body;
 
         const shift = new Shift({
             name,
             startTime,
             endTime,
-            salaryMultiplier: salaryMultiplier || 1.0,
             departmentId,
             status: "active"
         });
@@ -94,7 +93,7 @@ export const create = async (req: Request, res: Response) => {
 // [PATCH] /api/v1/admin/shifts/:id
 export const update = async (req: Request, res: Response) => {
     try {
-        const { name, startTime, endTime, salaryMultiplier, status, departmentId } = req.body;
+        const { name, startTime, endTime, status, departmentId } = req.body;
 
         const shift = await Shift.findById(req.params.id);
 
@@ -108,7 +107,6 @@ export const update = async (req: Request, res: Response) => {
         if (name) shift.name = name;
         if (startTime) shift.startTime = startTime;
         if (endTime) shift.endTime = endTime;
-        if (salaryMultiplier !== undefined) shift.salaryMultiplier = salaryMultiplier;
         if (status !== undefined) shift.status = status;
         if (departmentId !== undefined) shift.departmentId = departmentId;
 

@@ -5,21 +5,24 @@ import Booking from '../../models/booking.model';
 import Product from '../../models/product.model';
 import AttributeProduct from '../../models/attribute-product.model';
 import Coupon from '../../models/coupon.model';
+import AccountUser from '../../models/account-user.model';
 import { generateRandomNumber, generateRandomString } from '../../helpers/generate.helper';
 import { getInfoAddress } from '../../helpers/location.helper';
 import hmacSHA256 from 'crypto-js/hmac-sha256';
 import moment from 'moment';
 import puppeteer from 'puppeteer';
-import { getApiPayment, getApiShipping } from '../../configs/setting.config';
+import { getApiPayment, getApiShipping, getPointConfig } from '../../configs/setting.config';
+import { addPointAfterPayment } from '../../helpers/point.helper';
+import { refundOrderResources } from '../../helpers/order.helper';
 
 // [POST] /api/v1/client/order/create
 export const createPost = async (req: Request, res: Response) => {
+    const dataFinal: any = {};
     try {
-        const dataFinal: any = {};
-
-
-        // ThêmuserId (có thể không đăng nhập vẫn đặt được hàng)
-        dataFinal.userId = res.locals.accountUser?.id || "";
+        // Thêm userId (nếu đã đăng nhập)
+        if (res.locals.accountUser) {
+            dataFinal.userId = res.locals.accountUser.id;
+        }
 
         // Thêm code
         let code = "";
@@ -156,9 +159,11 @@ export const createPost = async (req: Request, res: Response) => {
 
         // Trường discount
         dataFinal.discount = 0;
-        if (req.body.coupon) {
+        const couponCodeRaw = req.body.coupon;
+        if (couponCodeRaw && typeof couponCodeRaw === 'string' && couponCodeRaw.trim() !== "") {
+            const couponCode = couponCodeRaw.trim().toUpperCase();
             const couponDetail: any = await Coupon.findOne({
-                code: req.body.coupon.trim(),
+                code: couponCode,
                 deleted: false,
                 status: "active"
             });
@@ -211,7 +216,7 @@ export const createPost = async (req: Request, res: Response) => {
 
                 // Cập nhật lại số lượng đã dùng
                 await Coupon.updateOne({
-                    _id: couponDetail.id,
+                    _id: couponDetail._id,
                     deleted: false,
                     status: "active"
                 }, {
@@ -225,7 +230,36 @@ export const createPost = async (req: Request, res: Response) => {
                 });
             }
         }
-        // Hết trường discount
+        // Hết trường discount từ coupon
+
+        // Xử lý dùng điểm (usedPoint)
+        dataFinal.usedPoint = 0;
+        dataFinal.pointDiscount = 0;
+
+        const usedPointBody = parseInt(req.body.usedPoint);
+        if (usedPointBody > 0 && res.locals.accountUser) {
+            const user = res.locals.accountUser;
+            const canUsePoint = (user.totalPoint || 0) - (user.usedPoint || 0);
+
+            if (usedPointBody > canUsePoint) {
+                return res.json({
+                    code: "error",
+                    message: "Số điểm sử dụng vượt quá số điểm hiện có!"
+                });
+            }
+
+            const pointConfig = await getPointConfig();
+            dataFinal.usedPoint = usedPointBody;
+            dataFinal.pointDiscount = usedPointBody * (pointConfig.POINT_TO_MONEY || 0);
+
+            // Cập nhật usedPoint trong AccountUser
+            await AccountUser.updateOne({
+                _id: user.id
+            }, {
+                $inc: { usedPoint: usedPointBody }
+            });
+        }
+        // Hết Xử lý dùng điểm
 
         // Trường shippingMethod
         // Tọa độ người gửi
@@ -291,7 +325,7 @@ export const createPost = async (req: Request, res: Response) => {
         // Hết Trường shippingMethod
 
         // Trường total
-        dataFinal.total = dataFinal.subTotal + dataFinal.shipping.fee - dataFinal.discount;
+        dataFinal.total = dataFinal.subTotal + dataFinal.shipping.fee - dataFinal.discount - dataFinal.pointDiscount;
 
         // Lưu dữ liệu vào CSDL
         const newRecord = new Order(dataFinal);
@@ -303,11 +337,26 @@ export const createPost = async (req: Request, res: Response) => {
             orderCode: dataFinal.code,
             phone: dataFinal.phone
         });
-    } catch (error) {
-        console.error(error);
-        res.status(500).json({
+    } catch (error: any) {
+        console.error("LỖI QUY TRÌNH ĐẶT HÀNG:", error.response?.data || error.message);
+
+        // Lưu đơn hàng dưới dạng thất bại để track log và hoàn tài nguyên
+        if (dataFinal.code) {
+            dataFinal.orderStatus = "cancelled";
+            dataFinal.note = (dataFinal.note || "") + ` [Lỗi tự động: ${error.message}]`;
+            try {
+                const failedOrder = new Order(dataFinal);
+                await failedOrder.save();
+                // Hoàn lại tài nguyên thông qua helper
+                await refundOrderResources(dataFinal.code);
+            } catch (saveError) {
+                console.error("KHÔNG THỂ LƯU ĐƠN HÀNG LỖI:", saveError);
+            }
+        }
+
+        res.json({
             code: "error",
-            message: "Lỗi hệ thống khi đặt hàng!"
+            message: error.response?.data?.message || error.message || "Lỗi hệ thống khi đặt hàng!"
         });
     }
 };
@@ -442,51 +491,29 @@ export const paymentZalopayResult = async (req: Request, res: Response) => {
             result.return_message = "mac not equal";
         }
         else {
-            // thanh toán thành công
+            // thanh toán thành công (ZaloPay chỉ gọi callback khi thanh toán thành công và MAC khớp)
             // merchant cập nhật trạng thái cho đơn hàng
             let dataJson = JSON.parse(dataStr);
             const [phone, code] = dataJson.app_user.split("-");
 
-            if (dataJson.status === 1) {
-                // Thanh toán thành công
-                if (code.startsWith("BK")) {
-                    await Booking.updateOne({
-                        customerPhone: phone,
-                        code: code,
-                        deleted: false
-                    }, {
-                        paymentStatus: "paid"
-                    });
-                } else {
-                    await Order.updateOne({
-                        phone: phone,
-                        code: code,
-                        deleted: false
-                    }, {
-                        paymentStatus: "paid"
-                    });
-                }
+            // Thanh toán thành công
+            if (code.startsWith("BK")) {
+                await Booking.updateOne({
+                    customerPhone: phone,
+                    code: code,
+                    deleted: false
+                }, {
+                    paymentStatus: "paid"
+                });
             } else {
-                // Thanh toán thất bại hoặc bị hủy
-                if (code.startsWith("BK")) {
-                    await Booking.updateOne({
-                        customerPhone: phone,
-                        code: code,
-                        deleted: false
-                    }, {
-                        paymentStatus: "unpaid",
-                        bookingStatus: "cancelled"
-                    });
-                } else {
-                    await Order.updateOne({
-                        phone: phone,
-                        code: code,
-                        deleted: false
-                    }, {
-                        paymentStatus: "unpaid",
-                        orderStatus: "cancelled"
-                    });
-                }
+                await Order.updateOne({
+                    phone: phone,
+                    code: code,
+                    deleted: false
+                }, {
+                    paymentStatus: "paid"
+                });
+                await addPointAfterPayment(code);
             }
 
             result.return_code = 1;
@@ -612,6 +639,7 @@ export const paymentVNPayResult = async (req: Request, res: Response) => {
                 }, {
                     paymentStatus: 'paid'
                 });
+                await addPointAfterPayment(code);
             }
 
             const successPath = code.startsWith("BK") ? `/dashboard/bookings` : `/order/success?orderCode=${code}&phone=${phone}`;
@@ -636,6 +664,7 @@ export const paymentVNPayResult = async (req: Request, res: Response) => {
                     paymentStatus: 'unpaid',
                     orderStatus: 'cancelled'
                 });
+                await refundOrderResources(code);
             }
             // Redirect back to shopping or order history if failed
             const failPath = code.startsWith("BK") ? `/dashboard/bookings` : `/cart`;

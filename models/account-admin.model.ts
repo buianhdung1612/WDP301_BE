@@ -22,10 +22,6 @@ const schema = new mongoose.Schema(
             enum: ["full-time", "part-time", "contract"],
             default: "full-time"
         },
-        baseSalary: {
-            type: Number,
-            default: 0
-        },
         bankAccount: String,
         emergencyContact: {
             name: String,

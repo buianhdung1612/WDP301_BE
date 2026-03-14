@@ -14,10 +14,6 @@ const schema = new mongoose.Schema(
             type: String,
             required: true
         }, // "12:00"
-        salaryMultiplier: {
-            type: Number,
-            default: 1.0
-        }, // 1.0 (thường), 1.5 (ca đêm), 2.0 (lễ)
         status: {
             type: String,
             default: "active"

@@ -61,6 +61,10 @@ export const create = (req: Request, res: Response, next: NextFunction) => {
             .messages({
                 "string.empty": "Vui lòng chọn phương thức vận chuyển!",
             }),
+        usedPoint: Joi.number().min(0).messages({
+            "number.base": "Số điểm phải là kiểu số!",
+            "number.min": "Số điểm không được âm!"
+        }),
     });
 
     const { error } = schema.validate(req.body);

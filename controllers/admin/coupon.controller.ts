@@ -190,23 +190,28 @@ export const edit = async (req: Request, res: Response) => {
             });
         }
 
-        const payload = {
-            ...rest,
-            code,
-            name,
-            value: Number(value) || 0,
-            minOrderValue: Number(minOrderValue) || 0,
-            maxDiscountValue: Number(maxDiscountValue) || 0,
-            usageLimit: Number(usageLimit) || 0,
-            startDate: startDate
-                ? moment(startDate, "DD/MM/YYYY").toDate()
-                : undefined,
-            endDate: endDate
-                ? moment(endDate, "DD/MM/YYYY").toDate()
-                : undefined,
-            search: convertToSlug(`${code} ${name}`).replace(/-/g, " ")
+        const payload: any = { ...rest };
 
-        };
+        if (code !== undefined) payload.code = code;
+        if (name !== undefined) payload.name = name;
+        if (value !== undefined) payload.value = Number(value) || 0;
+        if (minOrderValue !== undefined) payload.minOrderValue = Number(minOrderValue) || 0;
+        if (maxDiscountValue !== undefined) payload.maxDiscountValue = Number(maxDiscountValue) || 0;
+        if (usageLimit !== undefined) payload.usageLimit = Number(usageLimit) || 0;
+        if (startDate !== undefined) {
+            payload.startDate = startDate ? moment(startDate, "DD/MM/YYYY").toDate() : null;
+        }
+        if (endDate !== undefined) {
+            payload.endDate = endDate ? moment(endDate, "DD/MM/YYYY").toDate() : null;
+        }
+
+        if (code !== undefined || name !== undefined) {
+            const currentRecord = await Coupon.findById(id);
+            const finalCode = code !== undefined ? code : currentRecord?.code;
+            const finalName = name !== undefined ? name : currentRecord?.name;
+            payload.search = convertToSlug(`${finalCode} ${finalName}`).replace(/-/g, " ");
+        }
+
         await Coupon.updateOne(
             { _id: id, deleted: false },
             payload

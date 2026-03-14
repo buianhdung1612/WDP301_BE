@@ -35,3 +35,13 @@ export const getGeneral = async () => {
     });
     return setting ? setting.data : null;
 }
+
+export const getPointConfig = async () => {
+    const setting = await Setting.findOne({
+        key: "point"
+    });
+    return setting ? setting.data : {
+        MONEY_PER_POINT: 10000,
+        POINT_TO_MONEY: 100
+    };
+}

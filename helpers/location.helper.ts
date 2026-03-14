@@ -12,6 +12,7 @@ const normalizeAddress = async (city: string, district: string, ward: string) =>
         }
     });
     const cityInfo = cityRes.data.data.find((item: any) => item.name == city);
+    if (!cityInfo) throw new Error(`Không tìm thấy tỉnh/thành "${city}" trên hệ thống GoShip`);
 
     // Thông tin quận/huyện
     const districtRes = await axios.get(`https://sandbox.goship.io/api/v2/cities/${cityInfo.id}/districts`, {
@@ -20,7 +21,11 @@ const normalizeAddress = async (city: string, district: string, ward: string) =>
         }
     });
 
-    const districtInfo = districtRes.data.data.find((item: any) => item.name.includes(district));
+    const districtInfo = districtRes.data.data.find((item: any) =>
+        item.name.toLowerCase().includes(district.toLowerCase()) ||
+        district.toLowerCase().includes(item.name.toLowerCase())
+    );
+    if (!districtInfo) throw new Error(`Không tìm thấy quận/huyện "${district}" trên hệ thống GoShip`);
 
     // Thông tin phường/xã
     const wardRes = await axios.get(`https://sandbox.goship.io/api/v2/districts/${districtInfo.id}/wards`, {
@@ -29,7 +34,11 @@ const normalizeAddress = async (city: string, district: string, ward: string) =>
         }
     });
 
-    const wardInfo = wardRes.data.data.find((item: any) => item.name.includes(ward));
+    const wardInfo = wardRes.data.data.find((item: any) =>
+        item.name.toLowerCase().includes(ward.toLowerCase()) ||
+        ward.toLowerCase().includes(item.name.toLowerCase())
+    );
+    if (!wardInfo) throw new Error(`Không tìm thấy phường/xã "${ward}" trên hệ thống GoShip`);
 
     const dataFinal = {
         city: cityInfo.id,

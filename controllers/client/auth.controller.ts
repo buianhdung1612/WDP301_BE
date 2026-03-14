@@ -69,7 +69,9 @@ export const registerPost = async (req: Request, res: Response) => {
                 id: newAccount.id,
                 fullName: newAccount.fullName,
                 email: newAccount.email,
-                phone: newAccount.phone
+                phone: newAccount.phone,
+                totalPoint: newAccount.totalPoint || 0,
+                usedPoint: newAccount.usedPoint || 0
             }
         });
     } catch (error) {
@@ -140,7 +142,9 @@ export const loginPost = async (req: Request, res: Response) => {
                 fullName: existAccount.fullName,
                 email: existAccount.email,
                 phone: existAccount.phone,
-                avatar: existAccount.avatar
+                avatar: existAccount.avatar,
+                totalPoint: existAccount.totalPoint || 0,
+                usedPoint: existAccount.usedPoint || 0
             }
         });
     } catch (error) {

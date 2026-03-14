@@ -23,4 +23,8 @@ router.get('/general', settingController.general);
 
 router.patch('/general', settingController.generalPatch);
 
+router.get('/point', settingController.point);
+
+router.patch('/point', settingController.pointPatch);
+
 export default router;

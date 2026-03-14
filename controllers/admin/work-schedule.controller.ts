@@ -1,6 +1,5 @@
 import { Request, Response } from "express";
 import WorkSchedule from "../../models/work-schedule.model";
-import AttendanceConfig from "../../models/attendance-config.model";
 import dayjs from "dayjs";
 
 // [GET] /api/v1/admin/schedules
@@ -134,9 +133,7 @@ export const getCalendarData = async (req: Request, res: Response) => {
                 title: staff?.fullName || 'Nhân viên',
                 start: dayjs(schedule.date).format('YYYY-MM-DD') + 'T' + (schedule.shiftId as any)?.startTime,
                 end: dayjs(schedule.date).format('YYYY-MM-DD') + 'T' + (schedule.shiftId as any)?.endTime,
-                backgroundColor: schedule.status === 'checked-out' ? '#00A76F' :
-                    schedule.status === 'checked-in' ? '#00B8D9' :
-                        schedule.status === 'absent' ? '#FF5630' : '#FFAB00',
+                backgroundColor: '#FFAB00',
                 borderColor: 'transparent',
                 extendedProps: {
                     staffId: staff?._id,
@@ -148,9 +145,6 @@ export const getCalendarData = async (req: Request, res: Response) => {
                     startTime: (schedule.shiftId as any)?.startTime,
                     endTime: (schedule.shiftId as any)?.endTime,
                     status: schedule.status,
-                    checkInTime: schedule.checkInTime,
-                    checkOutTime: schedule.checkOutTime,
-                    actualWorkHours: schedule.actualWorkHours,
                     departmentId: (schedule.departmentId as any)?._id,
                     departmentName: (schedule.departmentId as any)?.name,
                     notes: schedule.notes
@@ -416,146 +410,6 @@ export const update = async (req: Request, res: Response) => {
     }
 };
 
-// [POST] /api/v1/admin/schedules/:id/check-in
-export const checkIn = async (req: Request, res: Response) => {
-    try {
-        const schedule = await WorkSchedule.findById(req.params.id)
-            .populate("shiftId", "startTime endTime");
-
-        if (!schedule) {
-            return res.status(404).json({
-                code: 404,
-                message: "Không tìm thấy lịch làm việc"
-            });
-        }
-
-        const currentAdminId = res.locals.accountAdmin._id.toString();
-        const permissions = res.locals.permissions || [];
-        const isOwner = schedule.staffId.toString() === currentAdminId;
-        const canEditAll = permissions.includes("attendance_edit");
-
-        if (!isOwner && !canEditAll) {
-            return res.status(403).json({
-                code: 403,
-                message: "Bạn không có quyền check-in cho người khác!"
-            });
-        }
-
-        if (schedule.status !== 'scheduled') {
-            return res.status(400).json({
-                code: 400,
-                message: "Lịch làm việc không ở trạng thái chờ check-in"
-            });
-        }
-
-        // Lấy cấu hình chấm công
-        const config = await AttendanceConfig.findOne() || await AttendanceConfig.create({});
-        const earlyLimit = config.checkInEarlyLimit;
-
-        const now = dayjs();
-        const shiftStartStr = (schedule.shiftId as any)?.startTime; // "08:00"
-
-        // Tạo thời điểm bắt đầu ca (date + startTime)
-        const shiftStartDate = dayjs(schedule.date).format('YYYY-MM-DD');
-        const shiftStartTime = dayjs(`${shiftStartDate}T${shiftStartStr}`);
-
-        // Nếu không có quyền attendance_edit (tức là staff tự check-in), kiểm tra thời gian
-        if (!canEditAll) {
-            // 1. Kiểm tra giờ hoạt động của hệ thống
-            const systemStartTime = dayjs(`${shiftStartDate}T${config.workDayStartTime}`);
-            const systemEndTime = dayjs(`${shiftStartDate}T${config.workDayEndTime}`);
-
-            if (now.isBefore(systemStartTime) || now.isAfter(systemEndTime)) {
-                return res.status(400).json({
-                    code: 400,
-                    message: `Hệ thống chỉ cho phép check-in trong khoảng ${config.workDayStartTime} - ${config.workDayEndTime}`
-                });
-            }
-
-            // 2. Kiểm tra giờ check-in sớm của ca
-            if (now.isBefore(shiftStartTime.subtract(earlyLimit, 'minute'))) {
-                return res.status(400).json({
-                    code: 400,
-                    message: `Chưa đến giờ check-in! Bạn chỉ được phép check-in sớm tối đa ${earlyLimit} phút.`
-                });
-            }
-        }
-
-        schedule.status = 'checked-in';
-        schedule.checkInTime = now.toDate();
-        await schedule.save();
-
-        res.json({
-            code: 200,
-            message: "Check-in thành công",
-            data: schedule
-        });
-    } catch (error) {
-        console.error("Check-in error:", error);
-        res.status(500).json({
-            code: 500,
-            message: "Lỗi khi thực hiện check-in"
-        });
-    }
-};
-
-// [POST] /api/v1/admin/schedules/:id/check-out
-export const checkOut = async (req: Request, res: Response) => {
-    try {
-        const schedule = await WorkSchedule.findById(req.params.id)
-            .populate("shiftId", "startTime endTime");
-
-        if (!schedule) {
-            return res.status(404).json({
-                code: 404,
-                message: "Không tìm thấy lịch làm việc"
-            });
-        }
-
-        const currentAdminId = res.locals.accountAdmin._id.toString();
-        const permissions = res.locals.permissions || [];
-        const isOwner = schedule.staffId.toString() === currentAdminId;
-        const canEditAll = permissions.includes("attendance_edit");
-
-        if (!isOwner && !canEditAll) {
-            return res.status(403).json({
-                code: 403,
-                message: "Bạn không có quyền check-out cho người khác!"
-            });
-        }
-
-        if (schedule.status !== 'checked-in') {
-            return res.status(400).json({
-                code: 400,
-                message: "Chưa check-in"
-            });
-        }
-
-        const now = dayjs();
-        schedule.status = 'checked-out';
-        schedule.checkOutTime = now.toDate();
-
-        // Tính toán số giờ làm việc thực tế
-        if (schedule.checkInTime && schedule.checkOutTime) {
-            const diff = schedule.checkOutTime.getTime() - schedule.checkInTime.getTime();
-            schedule.actualWorkHours = Math.round(diff / (1000 * 60 * 60) * 100) / 100;
-        }
-
-        await schedule.save();
-
-        res.json({
-            code: 200,
-            message: "Check-out thành công",
-            data: schedule
-        });
-    } catch (error) {
-        console.error("Check-out error:", error);
-        res.status(500).json({
-            code: 500,
-            message: "Lỗi khi thực hiện check-out"
-        });
-    }
-};
 
 // [DELETE] /api/v1/admin/schedules/:id
 export const remove = async (req: Request, res: Response) => {

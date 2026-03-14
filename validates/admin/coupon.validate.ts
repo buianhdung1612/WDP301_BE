@@ -4,20 +4,20 @@ import Joi from "joi";
 export const create = (req: Request, res: Response, next: NextFunction) => {
     const schema = Joi.object({
         code: Joi.string()
-            .required()
+            .when('$method', { is: 'POST', then: Joi.required() })
             .messages({
                 "string.empty": "Vui lòng nhập mã giảm giá!"
             }),
         name: Joi.string()
-            .required()
+            .when('$method', { is: 'POST', then: Joi.required() })
             .messages({
                 "string.empty": "Vui lòng nhập tên mã giảm giá!"
             }),
         typeDiscount: Joi.string().allow(''),
-        value: Joi.string().allow(''),
-        minOrderValue: Joi.string().allow(''),
-        maxDiscountValue: Joi.string().allow(''),
-        usageLimit: Joi.string().allow(''),
+        value: Joi.alternatives().try(Joi.string(), Joi.number()).allow(''),
+        minOrderValue: Joi.alternatives().try(Joi.string(), Joi.number()).allow(''),
+        maxDiscountValue: Joi.alternatives().try(Joi.string(), Joi.number()).allow(''),
+        usageLimit: Joi.alternatives().try(Joi.string(), Joi.number()).allow(''),
         typeDisplay: Joi.string().allow(''),
         status: Joi.string().allow(''),
         startDate: Joi.string().allow(''),
@@ -25,7 +25,7 @@ export const create = (req: Request, res: Response, next: NextFunction) => {
         description: Joi.string().allow(''),
     });
 
-    const { error } = schema.validate(req.body);
+    const { error } = schema.validate(req.body, { context: { method: req.method } });
 
     if (error) {
         const errorMessage = error.details[0].message;

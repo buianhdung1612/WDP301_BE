@@ -3,7 +3,7 @@ import Product from '../../models/product.model';
 import AttributeProduct from '../../models/attribute-product.model';
 import axios from 'axios';
 import { getInfoAddress } from '../../helpers/location.helper';
-import { getApiShipping } from '../../configs/setting.config';
+import { getApiShipping, getPointConfig } from '../../configs/setting.config';
 
 // [POST] /api/v1/client/cart/list
 export const list = async (req: Request, res: Response) => {
@@ -130,12 +130,29 @@ export const list = async (req: Request, res: Response) => {
             }
         }
 
+        // 3. Trả thêm điểm của người dùng
+        const pointConfig = await getPointConfig();
+        const point = {
+            canUsePoint: 0,
+            POINT_TO_MONEY: pointConfig.POINT_TO_MONEY
+        };
+        if (res.locals.accountUser) {
+            point.canUsePoint = res.locals.accountUser.totalPoint - res.locals.accountUser.usedPoint;
+        }
+        // Hết Trả thêm điểm của người dùng
+
+
         res.json({
             success: true,
             code: "success",
             message: "Thành công!",
             cart: cartDetail,
-            shippingOptions: shippingOptions
+            shippingOptions: shippingOptions,
+            canUsePoint: point.canUsePoint,
+            totalPoint: res.locals.accountUser ? res.locals.accountUser.totalPoint : 0,
+            usedPoint: res.locals.accountUser ? res.locals.accountUser.usedPoint : 0,
+            POINT_TO_MONEY: point.POINT_TO_MONEY,
+            MONEY_PER_POINT: pointConfig.MONEY_PER_POINT
         });
     } catch (error) {
         console.error("Cart List Error:", error);
