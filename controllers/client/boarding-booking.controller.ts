@@ -12,6 +12,8 @@ import { buildDefaultBoardingCareSchedule } from "../../utils/boarding-care-temp
 const DEFAULT_HOLD_MINUTES = Number(process.env.BOARDING_HOLD_MINUTES || 15);
 const MAX_ROOMS_PER_CAGE = Math.max(1, Number(process.env.BOARDING_CAGE_CAPACITY || 4));
 const BOOKING_LOCK_MS = Math.max(3000, Number(process.env.BOARDING_BOOKING_LOCK_MS || 8000));
+const COUNTER_DEPOSIT_MIN_DAYS = 2;
+const COUNTER_DEPOSIT_PERCENT = 20;
 
 const releaseExpiredHolds = async () => {
     const now = new Date();
@@ -55,6 +57,40 @@ const getBookingQuantity = (booking: any): number => {
     if (Number.isFinite(quantity) && quantity > 0) return Math.round(quantity);
     if (Array.isArray(booking?.petIds) && booking.petIds.length > 0) return booking.petIds.length;
     return 1;
+};
+
+const shouldRequireCounterDeposit = (paymentMethod: string, totalDays: number) =>
+    String(paymentMethod || "").toLowerCase() === "pay_at_site" && Number(totalDays || 0) >= COUNTER_DEPOSIT_MIN_DAYS;
+
+const getDepositAmount = (total: number, paymentMethod: string, totalDays: number) => {
+    if (!shouldRequireCounterDeposit(paymentMethod, totalDays)) return 0;
+    return Math.round(Math.max(Number(total || 0), 0) * (COUNTER_DEPOSIT_PERCENT / 100));
+};
+
+const buildSuccessfulPaymentUpdate = (booking: any) => {
+    const depositAmount = Math.max(0, Number(booking?.depositAmount || 0));
+    const total = Math.max(0, Number(booking?.total || 0));
+    const isDepositBooking = String(booking?.paymentMethod || "").toLowerCase() === "pay_at_site" && depositAmount > 0;
+
+    return {
+        paymentStatus: isDepositBooking ? "partial" : "paid",
+        paidAmount: isDepositBooking ? depositAmount : total,
+        boardingStatus: "confirmed",
+        holdExpiresAt: null
+    };
+};
+
+const hasSatisfiedCheckInPayment = (booking: any) => {
+    const paymentStatus = String(booking?.paymentStatus || "").toLowerCase();
+    if (paymentStatus === "paid") return true;
+
+    const depositAmount = Math.max(0, Number(booking?.depositAmount || 0));
+    if (depositAmount <= 0) {
+        return String(booking?.paymentMethod || "").toLowerCase() !== "prepaid";
+    }
+
+    const paidAmount = Math.max(0, Number(booking?.paidAmount || 0));
+    return paymentStatus === "partial" || paidAmount >= depositAmount;
 };
 
 const acquireCageBookingLock = async (cageId: string) => {
@@ -219,8 +255,10 @@ export const createBoardingBooking = async (req: Request, res: Response) => {
         const bookingCode = `BRD${new Date().toISOString().replace(/\D/g, "").slice(0, 14)}`;
         const defaultCareSchedule = buildDefaultBoardingCareSchedule(pets as any[]);
 
-        const isPrepaid = paymentMethod === "prepaid";
-        const holdExpiresAt = isPrepaid ? new Date(Date.now() + DEFAULT_HOLD_MINUTES * 60 * 1000) : undefined;
+        const depositAmount = getDepositAmount(totalPrice, paymentMethod, totalDays);
+        const depositPercent = depositAmount > 0 ? COUNTER_DEPOSIT_PERCENT : 0;
+        const requiresOnlinePayment = paymentMethod === "prepaid" || depositAmount > 0;
+        const holdExpiresAt = requiresOnlinePayment ? new Date(Date.now() + DEFAULT_HOLD_MINUTES * 60 * 1000) : undefined;
 
         const booking = await BoardingBooking.create({
             code: bookingCode,
@@ -239,6 +277,9 @@ export const createBoardingBooking = async (req: Request, res: Response) => {
             discount: discountAmount,
             coupon: appliedCoupon,
             total: totalPrice,
+            depositPercent,
+            depositAmount,
+            paidAmount: 0,
             paymentMethod,
             paymentGateway,
             holdExpiresAt,
@@ -246,11 +287,11 @@ export const createBoardingBooking = async (req: Request, res: Response) => {
             specialCare,
             feedingSchedule: defaultCareSchedule.feedingSchedule,
             exerciseSchedule: defaultCareSchedule.exerciseSchedule,
-            boardingStatus: isPrepaid ? "held" : "confirmed"
+            boardingStatus: requiresOnlinePayment ? "held" : "confirmed"
         });
 
         return res.status(201).json({
-            message: isPrepaid
+            message: requiresOnlinePayment
                 ? `Dat lich tam giu thanh cong trong ${DEFAULT_HOLD_MINUTES} phut`
                 : "Boarding booking created successfully",
             data: booking
@@ -328,8 +369,8 @@ export const initiateBoardingPayment = async (req: Request, res: Response) => {
                 app_time: Date.now(),
                 item: JSON.stringify(items),
                 embed_data: JSON.stringify(embed_data),
-                amount: booking.total || 0,
-                description: `Thanh toan boarding ${booking.code}`,
+                amount: Number(booking.depositAmount || 0) > 0 ? Number(booking.depositAmount || 0) : Number(booking.total || 0),
+                description: Number(booking.depositAmount || 0) > 0 ? `Dat coc boarding ${booking.code}` : `Thanh toan boarding ${booking.code}`,
                 bank_code: "",
                 mac: "",
                 callback_url: `${process.env.BACKEND_URL}/api/v1/client/boarding/payment-zalopay-result`
@@ -367,7 +408,7 @@ export const initiateBoardingPayment = async (req: Request, res: Response) => {
         let vnpUrl = `${paymentSettings.vnpUrl}`;
         const returnUrl = `${process.env.BACKEND_URL}/api/v1/client/boarding/payment-vnpay-result`;
         const orderId = `${booking._id}_${Date.now()}`;
-        const amount = booking.total || 0;
+        const amount = Number(booking.depositAmount || 0) > 0 ? Number(booking.depositAmount || 0) : Number(booking.total || 0);
 
         let vnpParams: any = {
             vnp_Version: "2.1.0",
@@ -425,14 +466,13 @@ export const paymentBoardingZalopayResult = async (req: Request, res: Response) 
                 String(dataJson?.status || dataJson?.return_code || "").toLowerCase() === "success";
 
             if (isPaymentSuccess) {
-                await BoardingBooking.findOneAndUpdate(
-                    { _id: bookingId, deleted: false, paymentStatus: { $ne: "paid" } },
-                    {
-                        paymentStatus: "paid",
-                        boardingStatus: "confirmed",
-                        holdExpiresAt: null
-                    }
-                );
+                const booking = await BoardingBooking.findOne({ _id: bookingId, deleted: false });
+                if (booking && booking.paymentStatus !== "paid") {
+                    await BoardingBooking.updateOne(
+                        { _id: bookingId, deleted: false },
+                        { $set: buildSuccessfulPaymentUpdate(booking) }
+                    );
+                }
             }
             result.return_code = 1;
             result.return_message = "success";
@@ -459,14 +499,13 @@ export const paymentBoardingZalopayReturn = async (req: Request, res: Response) 
             String(resultCode || "").toLowerCase() === "success";
 
         if (bookingId && mongoose.Types.ObjectId.isValid(bookingId) && isPaymentSuccess) {
-            await BoardingBooking.findOneAndUpdate(
-                { _id: bookingId, deleted: false, paymentStatus: { $ne: "paid" } },
-                {
-                    paymentStatus: "paid",
-                    boardingStatus: "confirmed",
-                    holdExpiresAt: null
-                }
-            );
+            const booking = await BoardingBooking.findOne({ _id: bookingId, deleted: false });
+            if (booking && booking.paymentStatus !== "paid") {
+                await BoardingBooking.updateOne(
+                    { _id: bookingId, deleted: false },
+                    { $set: buildSuccessfulPaymentUpdate(booking) }
+                );
+            }
             return res.redirect(`${process.env.DOMAIN_WEBSITE}/hotels/success?bookingId=${bookingId}&payment=success`);
         }
 
@@ -499,14 +538,13 @@ export const paymentBoardingVNPayResult = async (req: Request, res: Response) =>
         const isPaymentSuccess = responseCode === "00" && (!transactionStatus || transactionStatus === "00");
 
         if (isPaymentSuccess) {
-            await BoardingBooking.findOneAndUpdate(
-                { _id: bookingId, deleted: false, paymentStatus: { $ne: "paid" } },
-                {
-                    paymentStatus: "paid",
-                    boardingStatus: "confirmed",
-                    holdExpiresAt: null
-                }
-            );
+            const booking = await BoardingBooking.findOne({ _id: bookingId, deleted: false });
+            if (booking && booking.paymentStatus !== "paid") {
+                await BoardingBooking.updateOne(
+                    { _id: bookingId, deleted: false },
+                    { $set: buildSuccessfulPaymentUpdate(booking) }
+                );
+            }
             return res.redirect(`${process.env.DOMAIN_WEBSITE}/hotels/success?bookingId=${bookingId}&payment=success`);
         }
 
@@ -524,6 +562,9 @@ export const checkInBoarding = async (req: Request, res: Response) => {
         if (!booking) return res.status(404).json({ message: "Booking not found" });
         if (booking.boardingStatus !== "confirmed") {
             return res.status(400).json({ message: "Booking is not ready for check-in" });
+        }
+        if (!hasSatisfiedCheckInPayment(booking)) {
+            return res.status(400).json({ message: `Don luu tru tu ${COUNTER_DEPOSIT_MIN_DAYS} ngay tro len thanh toan tai quay phai dat coc ${COUNTER_DEPOSIT_PERCENT}% truoc khi nhan chuong` });
         }
 
         booking.boardingStatus = "checked-in";
