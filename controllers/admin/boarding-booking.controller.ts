@@ -4,6 +4,7 @@ import BoardingBooking from "../../models/boarding-booking.model";
 import BoardingCage from "../../models/boarding-cage.model";
 import AccountAdmin from "../../models/account-admin.model";
 import AccountUser from "../../models/account-user.model";
+import Department from "../../models/department.model";
 import Pet from "../../models/pet.model";
 import Role from "../../models/role.model";
 import WorkSchedule from "../../models/work-schedule.model";
@@ -11,6 +12,8 @@ import { buildDefaultBoardingCareSchedule } from "../../utils/boarding-care-temp
 
 const MAX_ROOMS_PER_CAGE = Math.max(1, Number(process.env.BOARDING_CAGE_CAPACITY || 4));
 const BOOKING_LOCK_MS = Math.max(3000, Number(process.env.BOARDING_BOOKING_LOCK_MS || 8000));
+const COUNTER_DEPOSIT_MIN_DAYS = 2;
+const COUNTER_DEPOSIT_PERCENT = 20;
 
 const pickParam = (value: unknown): string | undefined => {
     if (typeof value === "string") return value;
@@ -53,11 +56,44 @@ const normalizeObjectId = (value: unknown): mongoose.Types.ObjectId | null => {
     return new mongoose.Types.ObjectId(raw);
 };
 
+const normalizeObjectIdString = (value: unknown): string | null => {
+    const objectId = normalizeObjectId(value);
+    return objectId ? String(objectId) : null;
+};
+
 const getBookingQuantity = (booking: any): number => {
     const quantity = Number(booking?.quantity || 0);
     if (Number.isFinite(quantity) && quantity > 0) return Math.round(quantity);
     if (Array.isArray(booking?.petIds) && booking.petIds.length > 0) return booking.petIds.length;
     return 1;
+};
+
+const shouldRequireCounterDeposit = (paymentMethod: string, totalDays: number) =>
+    String(paymentMethod || "").toLowerCase() === "pay_at_site" && Number(totalDays || 0) >= COUNTER_DEPOSIT_MIN_DAYS;
+
+const getDepositAmount = (total: number, paymentMethod: string, totalDays: number) => {
+    if (!shouldRequireCounterDeposit(paymentMethod, totalDays)) return 0;
+    return Math.round(Math.max(Number(total || 0), 0) * (COUNTER_DEPOSIT_PERCENT / 100));
+};
+
+const getPaidAmountByStatus = (bookingLike: any, paymentStatus: string) => {
+    const normalized = String(paymentStatus || "").toLowerCase();
+    if (normalized === "paid") return Math.max(0, Number(bookingLike?.total || 0));
+    if (normalized === "partial") return Math.max(0, Number(bookingLike?.depositAmount || 0));
+    return 0;
+};
+
+const hasSatisfiedCheckInPayment = (booking: any) => {
+    const paymentStatus = String(booking?.paymentStatus || "").toLowerCase();
+    if (paymentStatus === "paid") return true;
+
+    const depositAmount = Math.max(0, Number(booking?.depositAmount || 0));
+    if (depositAmount <= 0) {
+        return String(booking?.paymentMethod || "").toLowerCase() !== "prepaid";
+    }
+
+    const paidAmount = Math.max(0, Number(booking?.paidAmount || 0));
+    return paymentStatus === "partial" || paidAmount >= depositAmount;
 };
 
 const acquireCageBookingLock = async (cageId: string) => {
@@ -88,22 +124,143 @@ const releaseCageBookingLock = async (cageId: string) => {
 
 const canAssignBoardingHotelStaff = (req: Request, res: Response) => {
     const permissions = Array.isArray(res.locals.permissions) ? res.locals.permissions : [];
-    if (
+    return (
         permissions.includes("account_admin_view") ||
         permissions.includes("account_admin_edit") ||
         permissions.includes("role_permissions")
-    ) {
-        return true;
+    );
+};
+
+const normalizeLookupText = (value: unknown) => String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .trim();
+
+const getBoardingHotelDepartmentIds = async () => {
+    const departments = await Department.find({
+        deleted: false,
+        status: "active",
+    }).select("_id name code").lean();
+
+    return departments
+        .filter((item: any) => {
+            const name = normalizeLookupText(item?.name);
+            const code = normalizeLookupText(item?.code);
+            return (
+                name.includes("khach san") ||
+                code.includes("hotel") ||
+                code.includes("boarding") ||
+                code.includes("khachsan") ||
+                code.includes("khach-san")
+            );
+        })
+        .map((item: any) => item._id);
+};
+
+const getBoardingHotelStaffRoleIds = async () => {
+    const departmentIds = await getBoardingHotelDepartmentIds();
+    if (!departmentIds.length) return [];
+
+    const roles = await Role.find({
+        deleted: false,
+        status: "active",
+        departmentId: { $in: departmentIds },
+    }).select("_id");
+
+    return roles.map((item) => item._id);
+};
+
+const getBoardingHotelStaffAccounts = async (staffIds?: string[]) => {
+    const roleIds = await getBoardingHotelStaffRoleIds();
+    if (!roleIds.length) return [];
+
+    const filter: any = {
+        deleted: false,
+        status: "active",
+        roles: { $in: roleIds },
+    };
+
+    if (staffIds !== undefined) {
+        if (staffIds.length === 0) return [];
+        filter._id = { $in: staffIds };
     }
 
-    const roles = Array.isArray((req as any).user?.roles) ? (req as any).user.roles : [];
-    const hasNonStaffRole = roles.some((role: any) => role && typeof role === "object" && role.isStaff === false);
-    const hasStaffRole = roles.some((role: any) => role && typeof role === "object" && role.isStaff === true);
+    return AccountAdmin.find(filter)
+        .select("fullName phone email avatar employeeCode")
+        .sort({ fullName: 1 })
+        .lean();
+};
 
-    if (hasNonStaffRole) return true;
-    if (hasStaffRole) return false;
+const getCurrentBoardingStaffId = (req: Request) => normalizeObjectIdString((req as any).user?.id);
+const getCurrentBoardingStaffName = (req: Request) => String((req as any).user?.fullName || (req as any).user?.name || "").trim();
 
-    return false;
+const filterCareItemsByStaff = (items: any[], staffId: string) => {
+    if (!Array.isArray(items) || !staffId) return [];
+    return items.filter((item: any) => {
+        const assignedId = normalizeObjectIdString(item?.staffId?._id || item?.staffId);
+        return !assignedId || assignedId === staffId;
+    });
+};
+
+const filterBookingCareScheduleForStaffView = (booking: any, staffId: string) => {
+    const plain = booking?.toObject ? booking.toObject() : { ...booking };
+    plain.feedingSchedule = filterCareItemsByStaff(plain.feedingSchedule, staffId);
+    plain.exerciseSchedule = filterCareItemsByStaff(plain.exerciseSchedule, staffId);
+    return plain;
+};
+
+const mergeOwnAssignedScheduleItems = (options: {
+    existingItems: any[];
+    submittedItems: any[];
+    currentStaffId: string;
+    currentStaffName: string;
+    type: "feeding" | "exercise";
+}) => {
+    const { existingItems, submittedItems, currentStaffId, currentStaffName, type } = options;
+    const submittedById = new Map<string, any>();
+    (Array.isArray(submittedItems) ? submittedItems : []).forEach((item: any) => {
+        const id = normalizeObjectIdString(item?._id);
+        if (id) submittedById.set(id, item);
+    });
+
+    const result = (Array.isArray(existingItems) ? existingItems : []).map((existingItem: any) => {
+        const assignedId = normalizeObjectIdString(existingItem?.staffId?._id || existingItem?.staffId);
+        if (!currentStaffId || (assignedId && assignedId !== currentStaffId)) return existingItem;
+
+        const existingId = normalizeObjectIdString(existingItem?._id);
+        const submittedItem = existingId ? submittedById.get(existingId) : null;
+        if (!submittedItem) return existingItem;
+
+        const status = normalizeTaskStatus(submittedItem?.status);
+        const doneAt = status === "done"
+            ? (submittedItem?.doneAt ? new Date(submittedItem.doneAt) : new Date())
+            : null;
+
+        return {
+            ...existingItem,
+            note: String(submittedItem?.note || "").trim(),
+            proofMedia: normalizeProofMedia(submittedItem?.proofMedia),
+            status,
+            doneAt,
+            staffId: assignedId ? existingItem?.staffId : currentStaffId,
+            staffName: assignedId ? existingItem?.staffName : String(submittedItem?.staffName || existingItem?.staffName || currentStaffName).trim(),
+        };
+    });
+
+    const newSubmittedItems = (Array.isArray(submittedItems) ? submittedItems : []).filter(
+        (item: any) => !normalizeObjectIdString(item?._id)
+    );
+
+    newSubmittedItems.forEach((newItem: any) => {
+        result.push({
+            ...newItem,
+            staffId: currentStaffId,
+            staffName: currentStaffName,
+        });
+    });
+
+    return result;
 };
 
 const restrictSubmittedAssignedStaff = (items: any[], existingItems: any[]) => {
@@ -152,6 +309,7 @@ const sanitizeFeedingSchedule = (items: any[]): any[] => {
             const staffId = normalizeObjectId(item?.staffId);
             const proofMedia = normalizeProofMedia(item?.proofMedia);
             return {
+                _id: normalizeObjectId(item?._id),
                 time: normalizeTime(item?.time),
                 food: String(item?.food || "").trim(),
                 amount: String(item?.amount || "").trim(),
@@ -178,6 +336,7 @@ const sanitizeExerciseSchedule = (items: any[]): any[] => {
             const staffId = normalizeObjectId(item?.staffId);
             const proofMedia = normalizeProofMedia(item?.proofMedia);
             return {
+                _id: normalizeObjectId(item?._id),
                 time: normalizeTime(item?.time),
                 activity: String(item?.activity || "").trim(),
                 durationMinutes,
@@ -226,25 +385,7 @@ export const listBoardingHotelStaffs = async (_req: Request, res: Response) => {
         }
 
         const queryDate = pickParam(_req.query.date);
-        const roles = await Role.find({
-            deleted: false,
-            status: "active",
-            $or: [
-                { isStaff: true },
-                { permissions: { $in: ["boarding_booking_view", "boarding_booking_edit", "boarding_booking_checkin", "boarding_booking_checkout"] } }
-            ]
-        }).select("_id");
-
-        const roleIds = roles.map((item) => item._id);
-        if (!roleIds.length) {
-            return res.json({ code: 200, data: [] });
-        }
-
-        const staffFilter: any = {
-            deleted: false,
-            status: "active",
-            roles: { $in: roleIds },
-        };
+        let scheduledStaffIds: string[] | undefined;
 
         if (queryDate) {
             const dateObj = new Date(queryDate);
@@ -254,19 +395,14 @@ export const listBoardingHotelStaffs = async (_req: Request, res: Response) => {
                 const endOfDay = new Date(dateObj);
                 endOfDay.setHours(23, 59, 59, 999);
 
-                const scheduledStaffIds = await WorkSchedule.distinct("staffId", {
+                scheduledStaffIds = (await WorkSchedule.distinct("staffId", {
                     date: { $gte: startOfDay, $lte: endOfDay },
                     status: { $in: ["scheduled", "checked-in", "checked-out"] },
-                });
-
-                staffFilter._id = { $in: scheduledStaffIds };
+                })).map((item: any) => String(item));
             }
         }
 
-        const staffs = await AccountAdmin.find(staffFilter)
-            .select("fullName phone email avatar employeeCode")
-            .sort({ fullName: 1 })
-            .lean();
+        const staffs = await getBoardingHotelStaffAccounts(scheduledStaffIds);
 
         return res.json({ code: 200, data: staffs });
     } catch (error: any) {
@@ -364,13 +500,20 @@ export const createBoardingBooking = async (req: Request, res: Response) => {
         const total = Math.max(subTotal - finalDiscount, 0);
         const defaultCareSchedule = buildDefaultBoardingCareSchedule([pet as any]);
 
+        const depositAmount = getDepositAmount(total, paymentMethod, totalDays);
+        const depositPercent = depositAmount > 0 ? COUNTER_DEPOSIT_PERCENT : 0;
         const allowBoardingStatus = ["pending", "held", "confirmed", "checked-in", "checked-out", "cancelled"];
-        const allowPaymentStatus = ["unpaid", "paid", "refunded"];
+        const allowPaymentStatus = ["unpaid", "partial", "paid", "refunded"];
         const allowPaymentMethod = ["money", "vnpay", "zalopay", "pay_at_site", "prepaid"];
 
         const nextBoardingStatus = allowBoardingStatus.includes(boardingStatus) ? boardingStatus : "confirmed";
         const nextPaymentStatus = allowPaymentStatus.includes(paymentStatus) ? paymentStatus : "unpaid";
         const nextPaymentMethod = allowPaymentMethod.includes(paymentMethod) ? paymentMethod : "pay_at_site";
+        const paidAmount = getPaidAmountByStatus({ total, depositAmount }, nextPaymentStatus);
+
+        if (nextBoardingStatus === "checked-in" && depositAmount > 0 && paidAmount < depositAmount) {
+            return res.status(400).json({ code: 400, message: `Don thanh toan tai quay tu ${COUNTER_DEPOSIT_MIN_DAYS} ngay tro len phai dat coc ${COUNTER_DEPOSIT_PERCENT}% truoc khi nhan chuong` });
+        }
 
         const booking = await BoardingBooking.create({
             code: generateBoardingCode(),
@@ -387,6 +530,9 @@ export const createBoardingBooking = async (req: Request, res: Response) => {
             subTotal,
             discount: finalDiscount,
             total,
+            depositPercent,
+            depositAmount,
+            paidAmount,
             paymentMethod: nextPaymentMethod,
             paymentStatus: nextPaymentStatus,
             notes: String(notes || "").trim(),
@@ -438,24 +584,54 @@ export const listBoardingBookings = async (req: Request, res: Response) => {
     try {
         const { search, status, paymentStatus } = req.query as Record<string, string>;
         const filter: any = { deleted: false };
+        const canAssignHotelStaff = canAssignBoardingHotelStaff(req, res);
+        const currentStaffId = getCurrentBoardingStaffId(req);
 
         if (status) filter.boardingStatus = status;
         if (paymentStatus) filter.paymentStatus = paymentStatus;
+
+        const andConditions: any[] = [];
         if (search) {
-            filter.$or = [
-                { code: new RegExp(search, "i") },
-                { fullName: new RegExp(search, "i") },
-                { phone: new RegExp(search, "i") },
-            ];
+            andConditions.push({
+                $or: [
+                    { code: new RegExp(search, "i") },
+                    { fullName: new RegExp(search, "i") },
+                    { phone: new RegExp(search, "i") },
+                ]
+            });
+        }
+
+        if (!canAssignHotelStaff) {
+            if (!currentStaffId) {
+                return res.status(403).json({ code: 403, message: "Ban khong co quyen xem lich cham soc nay" });
+            }
+            andConditions.push({
+                $or: [
+                    { "feedingSchedule.staffId": currentStaffId },
+                    { "exerciseSchedule.staffId": currentStaffId },
+                    { "feedingSchedule.staffId": null },
+                    { "exerciseSchedule.staffId": null },
+                ]
+            });
+        }
+
+        if (andConditions.length > 0) {
+            filter.$and = andConditions;
         }
 
         const bookings = await BoardingBooking.find(filter)
             .populate("userId", "fullName phone email avatar")
             .populate("petIds", "name type breed avatar weight")
             .populate("cageId", "cageCode type size dailyPrice status")
+            .populate("feedingSchedule.staffId", "fullName phone employeeCode")
+            .populate("exerciseSchedule.staffId", "fullName phone employeeCode")
             .sort({ createdAt: -1 });
 
-        return res.json({ code: 200, data: bookings });
+        const data = !canAssignHotelStaff && currentStaffId
+            ? bookings.map((booking: any) => filterBookingCareScheduleForStaffView(booking, currentStaffId))
+            : bookings;
+
+        return res.json({ code: 200, data });
     } catch (error: any) {
         return res.status(500).json({ code: 500, message: error.message || "Loi he thong" });
     }
@@ -469,6 +645,9 @@ export const getBoardingBookingDetail = async (req: Request, res: Response) => {
             return res.status(400).json({ code: 400, message: "ID khong hop le" });
         }
 
+        const canAssignHotelStaff = canAssignBoardingHotelStaff(req, res);
+        const currentStaffId = getCurrentBoardingStaffId(req);
+
         const booking = await BoardingBooking.findOne({ _id: id, deleted: false })
             .populate("userId", "fullName phone email avatar")
             .populate("petIds", "name type breed avatar weight")
@@ -477,6 +656,19 @@ export const getBoardingBookingDetail = async (req: Request, res: Response) => {
             .populate("exerciseSchedule.staffId", "fullName phone employeeCode");
 
         if (!booking) return res.status(404).json({ code: 404, message: "Khong tim thay don khach san" });
+
+        if (!canAssignHotelStaff) {
+            if (!currentStaffId) {
+                return res.status(403).json({ code: 403, message: "Ban khong co quyen xem lich cham soc nay" });
+            }
+            const filteredBooking = filterBookingCareScheduleForStaffView(booking, currentStaffId);
+            const hasAssignedItems = (filteredBooking.feedingSchedule?.length || 0) + (filteredBooking.exerciseSchedule?.length || 0) > 0;
+            if (!hasAssignedItems) {
+                return res.status(403).json({ code: 403, message: "Ban khong co quyen xem lich cham soc nay" });
+            }
+            return res.json({ code: 200, data: filteredBooking });
+        }
+
         return res.json({ code: 200, data: booking });
     } catch (error: any) {
         return res.status(500).json({ code: 500, message: error.message || "Loi he thong" });
@@ -499,6 +691,10 @@ export const updateBoardingBookingStatus = async (req: Request, res: Response) =
 
         const booking: any = await BoardingBooking.findOne({ _id: id, deleted: false });
         if (!booking) return res.status(404).json({ code: 404, message: "Khong tim thay don khach san" });
+
+        if (boardingStatus === "checked-in" && !hasSatisfiedCheckInPayment(booking)) {
+            return res.status(400).json({ code: 400, message: `Don thanh toan tai quay tu ${COUNTER_DEPOSIT_MIN_DAYS} ngay tro len phai dat coc ${COUNTER_DEPOSIT_PERCENT}% truoc khi nhan chuong` });
+        }
 
         booking.boardingStatus = boardingStatus;
         if (boardingStatus === "checked-in") {
@@ -531,13 +727,26 @@ export const updateBoardingPaymentStatus = async (req: Request, res: Response) =
         if (!id || !mongoose.Types.ObjectId.isValid(id)) {
             return res.status(400).json({ code: 400, message: "ID khong hop le" });
         }
-        if (!["unpaid", "paid", "refunded"].includes(paymentStatus)) {
+        if (!["unpaid", "partial", "paid", "refunded"].includes(paymentStatus)) {
             return res.status(400).json({ code: 400, message: "Trang thai thanh toan khong hop le" });
+        }
+
+        const booking = await BoardingBooking.findOne({ _id: id, deleted: false });
+        if (!booking) return res.status(404).json({ code: 404, message: "Khong tim thay don khach san" });
+
+        const nextPaidAmount = getPaidAmountByStatus(booking, paymentStatus);
+        const updatePayload: any = {
+            paymentStatus,
+            paidAmount: nextPaidAmount,
+        };
+        if ((paymentStatus === "partial" || paymentStatus === "paid") && String(booking.boardingStatus || "") === "held") {
+            updatePayload.boardingStatus = "confirmed";
+            updatePayload.holdExpiresAt = null;
         }
 
         const updated = await BoardingBooking.findOneAndUpdate(
             { _id: id, deleted: false },
-            { paymentStatus },
+            updatePayload,
             { new: true }
         );
 
@@ -573,8 +782,17 @@ export const updateBoardingCareSchedule = async (req: Request, res: Response) =>
         if (!booking) return res.status(404).json({ code: 404, message: "Khong tim thay don khach san" });
 
         const canAssignHotelStaff = canAssignBoardingHotelStaff(req, res);
+        const currentStaffId = getCurrentBoardingStaffId(req);
+        const currentStaffName = getCurrentBoardingStaffName(req);
+
+        if (!canAssignHotelStaff && !currentStaffId) {
+            return res.status(403).json({ code: 403, message: "Ban khong co quyen cap nhat lich cham soc nay" });
+        }
 
         if (resetTemplate) {
+            if (!canAssignHotelStaff) {
+                return res.status(403).json({ code: 403, message: "Ban khong co quyen tao lai lich mau" });
+            }
             const pets = await Pet.find({
                 _id: { $in: Array.isArray(booking.petIds) ? booking.petIds : [] },
                 deleted: false,
@@ -592,13 +810,20 @@ export const updateBoardingCareSchedule = async (req: Request, res: Response) =>
             });
         }
 
+        const visibleExistingFeeding = !canAssignHotelStaff
+            ? filterCareItemsByStaff(Array.isArray(booking.feedingSchedule) ? booking.feedingSchedule : [], currentStaffId || "")
+            : Array.isArray(booking.feedingSchedule) ? booking.feedingSchedule : [];
+        const visibleExistingExercise = !canAssignHotelStaff
+            ? filterCareItemsByStaff(Array.isArray(booking.exerciseSchedule) ? booking.exerciseSchedule : [], currentStaffId || "")
+            : Array.isArray(booking.exerciseSchedule) ? booking.exerciseSchedule : [];
+
         const sanitizedFeeding = feedingSchedule !== undefined
             ? (
                 canAssignHotelStaff
                     ? sanitizeFeedingSchedule(feedingSchedule)
                     : restrictSubmittedAssignedStaff(
                         sanitizeFeedingSchedule(feedingSchedule),
-                        Array.isArray(booking.feedingSchedule) ? booking.feedingSchedule : []
+                        visibleExistingFeeding
                     )
             ).slice(0, 30)
             : undefined;
@@ -608,7 +833,7 @@ export const updateBoardingCareSchedule = async (req: Request, res: Response) =>
                     ? sanitizeExerciseSchedule(exerciseSchedule)
                     : restrictSubmittedAssignedStaff(
                         sanitizeExerciseSchedule(exerciseSchedule),
-                        Array.isArray(booking.exerciseSchedule) ? booking.exerciseSchedule : []
+                        visibleExistingExercise
                     )
             ).slice(0, 30)
             : undefined;
@@ -635,42 +860,81 @@ export const updateBoardingCareSchedule = async (req: Request, res: Response) =>
         ));
 
         if (staffIds.length > 0) {
-            const baseDateRaw = careDate || booking.checkInDate;
-            const baseDate = new Date(baseDateRaw);
-            if (!Number.isNaN(baseDate.getTime())) {
-                const startOfDay = new Date(baseDate);
-                startOfDay.setHours(0, 0, 0, 0);
-                const endOfDay = new Date(baseDate);
-                endOfDay.setHours(23, 59, 59, 999);
+            const existingAssignedStaffIds = new Set(
+                [
+                    ...(Array.isArray(booking.feedingSchedule) ? booking.feedingSchedule : []).map((item: any) => item?.staffId ? String(item.staffId) : ""),
+                    ...(Array.isArray(booking.exerciseSchedule) ? booking.exerciseSchedule : []).map((item: any) => item?.staffId ? String(item.staffId) : ""),
+                ].filter(Boolean)
+            );
 
-                const schedules = await WorkSchedule.find({
-                    staffId: { $in: staffIds },
-                    date: { $gte: startOfDay, $lte: endOfDay },
-                    status: { $in: ["scheduled", "checked-in", "checked-out"] },
-                }).select("staffId").lean();
+            const hotelStaffs = await getBoardingHotelStaffAccounts(staffIds);
+            const hotelStaffSet = new Set(hotelStaffs.map((item: any) => String(item._id)));
+            const invalidDepartmentIds = staffIds.filter((staffId) => !hotelStaffSet.has(staffId) && !existingAssignedStaffIds.has(staffId));
 
-                const availableSet = new Set(schedules.map((item: any) => String(item.staffId)));
-                const unavailableIds = staffIds.filter((staffId) => !availableSet.has(staffId));
+            if (invalidDepartmentIds.length > 0) {
+                const invalidStaffs = await AccountAdmin.find({ _id: { $in: invalidDepartmentIds } }).select("fullName").lean();
+                const invalidNames = invalidStaffs.map((item: any) => item.fullName).filter(Boolean);
+                return res.status(400).json({
+                    code: 400,
+                    message: `${invalidNames.join(", ") || "Nhan vien duoc chon"} khong thuoc Ban khach san nen khong the gan vao lich cham soc khach san`,
+                });
+            }
 
-                if (unavailableIds.length > 0) {
-                    const unavailableStaffs = await AccountAdmin.find({
-                        _id: { $in: unavailableIds },
-                    }).select("fullName").lean();
-                    const staffNames = unavailableStaffs.map((item: any) => item.fullName).filter(Boolean);
-                    const dateText = `${String(startOfDay.getDate()).padStart(2, "0")}/${String(startOfDay.getMonth() + 1).padStart(2, "0")}/${startOfDay.getFullYear()}`;
-                    return res.status(400).json({
-                        code: 400,
-                        message: `${staffNames.join(", ") || "Nhân viên được chọn"} khong co lich lam viec ngay ${dateText}`,
-                    });
+            const hotelStaffIds = staffIds.filter((staffId) => hotelStaffSet.has(staffId));
+            if (hotelStaffIds.length > 0) {
+                const baseDateRaw = careDate || booking.checkInDate;
+                const baseDate = new Date(baseDateRaw);
+                if (!Number.isNaN(baseDate.getTime())) {
+                    const startOfDay = new Date(baseDate);
+                    startOfDay.setHours(0, 0, 0, 0);
+                    const endOfDay = new Date(baseDate);
+                    endOfDay.setHours(23, 59, 59, 999);
+
+                    const schedules = await WorkSchedule.find({
+                        staffId: { $in: hotelStaffIds },
+                        date: { $gte: startOfDay, $lte: endOfDay },
+                        status: { $in: ["scheduled", "checked-in", "checked-out"] },
+                    }).select("staffId").lean();
+
+                    const availableSet = new Set(schedules.map((item: any) => String(item.staffId)));
+                    const unavailableIds = hotelStaffIds.filter((staffId) => !availableSet.has(staffId));
+
+                    if (unavailableIds.length > 0) {
+                        const staffNames = hotelStaffs
+                            .filter((item: any) => unavailableIds.includes(String(item._id)))
+                            .map((item: any) => item.fullName)
+                            .filter(Boolean);
+                        const dateText = `${String(startOfDay.getDate()).padStart(2, "0")}/${String(startOfDay.getMonth() + 1).padStart(2, "0")}/${startOfDay.getFullYear()}`;
+                        return res.status(400).json({
+                            code: 400,
+                            message: `${staffNames.join(", ") || "Nhan vien duoc chon"} khong co lich lam viec ngay ${dateText}`,
+                        });
+                    }
                 }
             }
         }
 
         if (sanitizedFeeding !== undefined) {
-            booking.feedingSchedule = sanitizedFeeding;
+            booking.feedingSchedule = canAssignHotelStaff
+                ? sanitizedFeeding
+                : mergeOwnAssignedScheduleItems({
+                    existingItems: Array.isArray(booking.feedingSchedule) ? booking.feedingSchedule : [],
+                    submittedItems: sanitizedFeeding,
+                    currentStaffId: currentStaffId || "",
+                    currentStaffName: currentStaffName || "",
+                    type: "feeding",
+                });
         }
         if (sanitizedExercise !== undefined) {
-            booking.exerciseSchedule = sanitizedExercise;
+            booking.exerciseSchedule = canAssignHotelStaff
+                ? sanitizedExercise
+                : mergeOwnAssignedScheduleItems({
+                    existingItems: Array.isArray(booking.exerciseSchedule) ? booking.exerciseSchedule : [],
+                    submittedItems: sanitizedExercise,
+                    currentStaffId: currentStaffId || "",
+                    currentStaffName: currentStaffName || "",
+                    type: "exercise",
+                });
         }
 
         await booking.save();

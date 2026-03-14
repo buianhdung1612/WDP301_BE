@@ -10,6 +10,7 @@ type FeedingItem = {
     amount: string;
     note: string;
     status: "pending";
+    petType: "dog" | "cat" | "all";
     staffId: null;
     staffName: string;
     doneAt: null;
@@ -21,6 +22,7 @@ type ExerciseItem = {
     durationMinutes: number;
     note: string;
     status: "pending";
+    petType: "dog" | "cat" | "all";
     staffId: null;
     staffName: string;
     doneAt: null;
@@ -60,6 +62,7 @@ const buildDogFeedingTemplate = (dogs: PetLite[]): FeedingItem[] => {
             amount: "40-50% khẩu phần ngày",
             note: `${amountHint}. Sau ăn nghỉ 20-30 phút`,
             status: "pending",
+            petType: "dog",
             staffId: null,
             staffName: "",
             doneAt: null,
@@ -70,6 +73,7 @@ const buildDogFeedingTemplate = (dogs: PetLite[]): FeedingItem[] => {
             amount: "Nhỏ",
             note: "Không bắt buộc với chó trưởng thành",
             status: "pending",
+            petType: "dog",
             staffId: null,
             staffName: "",
             doneAt: null,
@@ -80,6 +84,7 @@ const buildDogFeedingTemplate = (dogs: PetLite[]): FeedingItem[] => {
             amount: "50-60% khẩu phần ngày",
             note: "Có thể điều chỉnh theo khẩu vị và hướng dẫn của chủ nuôi",
             status: "pending",
+            petType: "dog",
             staffId: null,
             staffName: "",
             doneAt: null,
@@ -95,6 +100,7 @@ const buildDogExerciseTemplate = (): ExerciseItem[] => {
             durationMinutes: 25,
             note: "Mục tiêu: 15-30 phút",
             status: "pending",
+            petType: "dog",
             staffId: null,
             staffName: "",
             doneAt: null,
@@ -105,6 +111,7 @@ const buildDogExerciseTemplate = (): ExerciseItem[] => {
             durationMinutes: 30,
             note: "Mục tiêu: 20-40 phút. Tổng vận động/ngày tùy giống: 30-90 phút",
             status: "pending",
+            petType: "dog",
             staffId: null,
             staffName: "",
             doneAt: null,
@@ -120,6 +127,7 @@ const buildCatFeedingTemplate = (): FeedingItem[] => {
             amount: "Khoảng 30% khẩu phần ngày",
             note: "Mèo ăn ít nhưng nhiều bữa",
             status: "pending",
+            petType: "cat",
             staffId: null,
             staffName: "",
             doneAt: null,
@@ -130,6 +138,7 @@ const buildCatFeedingTemplate = (): FeedingItem[] => {
             amount: "Khoảng 20% khẩu phần ngày",
             note: "Theo dõi khả năng ăn hết khẩu phần",
             status: "pending",
+            petType: "cat",
             staffId: null,
             staffName: "",
             doneAt: null,
@@ -140,6 +149,7 @@ const buildCatFeedingTemplate = (): FeedingItem[] => {
             amount: "Khoảng 40-50% khẩu phần ngày",
             note: "Mèo trưởng thành tham khảo 40-60g hạt/ngày hoặc 2-3 gói pate",
             status: "pending",
+            petType: "cat",
             staffId: null,
             staffName: "",
             doneAt: null,
@@ -150,6 +160,7 @@ const buildCatFeedingTemplate = (): FeedingItem[] => {
             amount: "Nhỏ",
             note: "Có thể bổ sung ít hạt hoặc snack mèo",
             status: "pending",
+            petType: "cat",
             staffId: null,
             staffName: "",
             doneAt: null,
@@ -165,6 +176,7 @@ const buildCatExerciseTemplate = (): ExerciseItem[] => {
             durationMinutes: 20,
             note: "Mục tiêu 15-30 phút/ngày",
             status: "pending",
+            petType: "cat",
             staffId: null,
             staffName: "",
             doneAt: null,

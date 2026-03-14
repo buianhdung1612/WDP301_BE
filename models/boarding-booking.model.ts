@@ -29,6 +29,11 @@ const feedingScheduleSchema = new mongoose.Schema(
             enum: ["pending", "done", "skipped"],
             default: "pending"
         },
+        petType: {
+            type: String,
+            enum: ["dog", "cat", "all"],
+            default: "all"
+        },
         doneAt: Date
     },
     { _id: true }
@@ -50,6 +55,11 @@ const exerciseScheduleSchema = new mongoose.Schema(
             type: String,
             enum: ["pending", "done", "skipped"],
             default: "pending"
+        },
+        petType: {
+            type: String,
+            enum: ["dog", "cat", "all"],
+            default: "all"
         },
         doneAt: Date
     },
@@ -112,6 +122,18 @@ const schema = new mongoose.Schema(
             default: 0
         },
         total: Number,
+        depositPercent: {
+            type: Number,
+            default: 0
+        },
+        depositAmount: {
+            type: Number,
+            default: 0
+        },
+        paidAmount: {
+            type: Number,
+            default: 0
+        },
 
         paymentMethod: {
             type: String,
@@ -120,7 +142,7 @@ const schema = new mongoose.Schema(
         },
         paymentStatus: {
             type: String,
-            enum: ["unpaid", "paid", "refunded"],
+            enum: ["unpaid", "partial", "paid", "refunded"],
             default: "unpaid"
         },
         paymentGateway: String,
