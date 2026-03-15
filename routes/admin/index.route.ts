@@ -21,6 +21,7 @@ import boardingCageRoutes from "./boarding-cage.route";
 import boardingBookingRoutes from "./boarding-booking.route";
 
 import orderRoutes from "./order.route"
+import dashboardRoutes from "./dashboard.route";
 
 import * as authMiddleware from "../../middlewares/admin/auth.middleware";
 
@@ -50,5 +51,6 @@ router.use('/schedules', authMiddleware.verifyToken, workScheduleRoutes);
 router.use('/departments', authMiddleware.verifyToken, departmentRoutes);
 router.use('/boarding-cage', authMiddleware.verifyToken, boardingCageRoutes);
 router.use('/boarding-booking', authMiddleware.verifyToken, boardingBookingRoutes);
+router.use('/dashboard', authMiddleware.verifyToken, dashboardRoutes);
 
 export default router;
