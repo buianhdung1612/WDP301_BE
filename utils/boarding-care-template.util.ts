@@ -58,9 +58,9 @@ const buildDogFeedingTemplate = (dogs: PetLite[]): FeedingItem[] => {
     return [
         {
             time: "06:30",
-            food: "Hạt hoặc pate",
-            amount: "40-50% khẩu phần ngày",
-            note: `${amountHint}. Sau ăn nghỉ 20-30 phút`,
+            food: "Hạt (Royal Canin)",
+            amount: "50% khẩu phần ngày",
+            note: `${amountHint}. Sau ăn nghỉ 30 phút`,
             status: "pending",
             petType: "dog",
             staffId: null,
@@ -69,9 +69,9 @@ const buildDogFeedingTemplate = (dogs: PetLite[]): FeedingItem[] => {
         },
         {
             time: "12:00",
-            food: "Bữa phụ (snack/trái cây an toàn)",
-            amount: "Nhỏ",
-            note: "Không bắt buộc với chó trưởng thành",
+            food: "Snack nhẹ / Bánh thưởng",
+            amount: "10-20g",
+            note: "Bữa phụ nhẹ nhàng",
             status: "pending",
             petType: "dog",
             staffId: null,
@@ -80,9 +80,9 @@ const buildDogFeedingTemplate = (dogs: PetLite[]): FeedingItem[] => {
         },
         {
             time: "17:30",
-            food: "Hạt + thịt luộc hoặc pate",
-            amount: "50-60% khẩu phần ngày",
-            note: "Có thể điều chỉnh theo khẩu vị và hướng dẫn của chủ nuôi",
+            food: "Hạt + Pate hoặc Thịt luộc",
+            amount: "50% khẩu phần ngày",
+            note: "Điều chỉnh theo khẩu vị thú cưng",
             status: "pending",
             petType: "dog",
             staffId: null,
