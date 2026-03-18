@@ -43,19 +43,31 @@ const schema = new mongoose.Schema(
             default: 0
         },
         total: Number,
+        depositAmount: {
+            type: Number,
+            default: 0
+        },
+        remainingAmount: {
+            type: Number,
+            default: 0
+        },
         paymentMethod: {
             type: String,
             enum: ["money", "vnpay", "zalopay"],
             default: "money"
         },
+        depositMethod: {
+            type: String,
+            enum: ["vnpay", "zalopay"]
+        },
         paymentStatus: {
             type: String,
-            enum: ["unpaid", "paid", "refunded"],
+            enum: ["unpaid", "partially_paid", "paid", "refunded"],
             default: "unpaid"
         },
         bookingStatus: {
             type: String,
-            enum: ["pending", "confirmed", "delayed", "in-progress", "completed", "cancelled", "returned"],
+            enum: ["pending", "confirmed", "delayed", "in-progress", "completed", "cancelled", "returned", "request_cancel"],
             default: "pending"
         },
         actualStart: Date, // Thời điểm thực tế nhân viên bắt đầu làm

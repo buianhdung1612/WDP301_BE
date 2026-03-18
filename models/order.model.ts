@@ -57,6 +57,7 @@ const schema = new mongoose.Schema(
                 "completed",    // Giao thành công
                 "cancelled",    // Hủy
                 "returned",     // Trả hàng
+                "request_cancel", // Yêu cầu hủy (Chờ hoàn tiền)
             ],
             default: "pending",
         },
@@ -84,6 +85,9 @@ const schema = new mongoose.Schema(
             type: Number,
             default: 0 // số điểm tích được từ đơn này
         },
+        cancelledReason: String,
+        cancelledAt: Date,
+        cancelledBy: String,
         deletedBy: String,
         deletedAt: Date
     },
