@@ -40,6 +40,8 @@ router.patch(
     productController.editPatch
 );
 router.patch('/delete/:id', checkPermission("product_delete"), productController.deletePatch);
+router.get('/expired/list', checkPermission("product_view"), productController.expiredList);
+router.post('/expired/scan', checkPermission("product_edit"), productController.scanExpiredProducts);
 
 // Thuộc tính
 router.get('/attribute/list', checkPermission("product_attribute_view"), productController.getAttributeList);

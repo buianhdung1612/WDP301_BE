@@ -6,6 +6,8 @@ import Product from '../../models/product.model';
 import { generateRandomString } from '../../helpers/generate.helper';
 import { convertToSlug } from '../../helpers/slug.helper';
 import Brand from '../../models/brand.model';
+import ExpiredProduct from '../../models/expired-product.model';
+import { handleProductExpiry } from '../../helpers/expiry.helper';
 
 // Danh mục sản phẩm
 export const category = async (req: Request, res: Response) => {
@@ -441,6 +443,17 @@ export const createPost = async (req: Request, res: Response) => {
 
         req.body.sku = generateRandomString(10).toUpperCase();
 
+        // Handle food and expiry
+        if (req.body.isFood === 'true' || req.body.isFood === true) {
+            req.body.isFood = true;
+            if (req.body.expiryDate) {
+                req.body.expiryDate = new Date(req.body.expiryDate);
+            }
+        } else {
+            req.body.isFood = false;
+            req.body.expiryDate = null;
+        }
+
         const newRecord = new Product(req.body);
         await newRecord.save();
 
@@ -586,6 +599,19 @@ export const editPatch = async (req: Request, res: Response) => {
 
         if (!productDetail.sku && !req.body.sku) {
             req.body.sku = generateRandomString(10).toUpperCase();
+        }
+
+        // Handle food and expiry
+        if (req.body.isFood !== undefined) {
+            if (req.body.isFood === 'true' || req.body.isFood === true) {
+                req.body.isFood = true;
+                if (req.body.expiryDate) {
+                    req.body.expiryDate = new Date(req.body.expiryDate);
+                }
+            } else {
+                req.body.isFood = false;
+                req.body.expiryDate = null;
+            }
         }
 
         await Product.updateOne({
@@ -771,6 +797,60 @@ export const deleteAttribute = async (req: Request, res: Response) => {
         return res.status(400).json({
             success: false,
             message: "Id không hợp lệ!"
+        });
+    }
+}
+
+export const expiredList = async (req: Request, res: Response) => {
+    try {
+        const page = Math.max(1, parseInt(`${req.query.page}`) || 1);
+        const limitItems = 20;
+        const skip = (page - 1) * limitItems;
+
+        const [records, totalRecords] = await Promise.all([
+            ExpiredProduct.find({})
+                .sort({ discardedAt: -1 })
+                .limit(limitItems)
+                .skip(skip)
+                .lean(),
+            ExpiredProduct.countDocuments({})
+        ]);
+
+        return res.json({
+            success: true,
+            message: "Lấy danh sách sản phẩm hết hạn thành công",
+            data: {
+                recordList: records,
+                pagination: {
+                    totalRecords,
+                    totalPages: Math.ceil(totalRecords / limitItems),
+                    currentPage: page,
+                    limit: limitItems
+                }
+            }
+        });
+    } catch (error) {
+        console.error(error);
+        return res.status(500).json({
+            success: false,
+            message: "Lỗi hệ thống khi lấy danh sách sản phẩm hết hạn"
+        });
+    }
+}
+
+export const scanExpiredProducts = async (req: Request, res: Response) => {
+    try {
+        const results = await handleProductExpiry();
+        return res.json({
+            success: true,
+            message: `Quét sản phẩm hoàn tất. Đã phát hiện ${results.totalFound ?? 0} sản phẩm hết hạn.`,
+            data: results
+        });
+    } catch (error) {
+        console.error(error);
+        return res.status(500).json({
+            success: false,
+            message: "Lỗi hệ thống khi quét sản phẩm hết hạn"
         });
     }
 }
