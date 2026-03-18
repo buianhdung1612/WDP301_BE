@@ -419,7 +419,7 @@ export const createBooking = async (req: Request, res: Response) => {
         let totalPrice = 0;
         const petPrices: { [key: string]: number } = {};
 
-        if (service.pricingType === "fixed") {
+        if (service.pricingType === "fixed" || !service.pricingType) {
             const price = service.basePrice || 0;
             totalPrice = price * numPets;
             pets.forEach(p => petPrices[p._id.toString()] = price);
@@ -441,6 +441,10 @@ export const createBooking = async (req: Request, res: Response) => {
                 totalPrice += price;
                 petPrices[pet._id.toString()] = price;
             }
+        } else {
+            const fallbackPrice = service.basePrice || 0;
+            totalPrice = fallbackPrice * numPets;
+            pets.forEach(p => petPrices[p._id.toString()] = fallbackPrice);
         }
 
         // 5. Tạo lịch đặt
