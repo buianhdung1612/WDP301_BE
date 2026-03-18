@@ -9,4 +9,7 @@ router.post('/roles-and-staff', seedController.seedRolesAndStaff);
 // POST /api/v1/admin/seed/breeds
 router.post('/breeds', seedController.seedBreeds);
 
+// POST /api/v1/admin/seed/reviews
+router.post('/reviews', seedController.seedReviews);
+
 export default router;

@@ -27,10 +27,14 @@ const schema = new mongoose.Schema(
         },
         comment: String,
         images: [String],
+        isEdited: {
+            type: Boolean,
+            default: false
+        },
         status: {
             type: String,
-            enum: ["approved", "rejected"], // approved – Đã duyệt, rejected – Từ chối
-            default: null
+            enum: ["pending", "approved", "rejected"], // pending - Chờ duyệt, approved – Đã duyệt, rejected – Từ chối
+            default: "pending"
         }
     },
     {

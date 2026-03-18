@@ -11,6 +11,7 @@ import cageRoutes from "./boarding-cages.route"
 import articleRoutes from "./article.route";
 import breedRoutes from "./breed.route";
 import couponRoutes from "./coupon.route";
+import reviewRoutes from "./review.route";
 
 const router = Router();
 
@@ -26,5 +27,6 @@ router.use('/cage', cageRoutes);
 router.use('/article', articleRoutes);
 router.use('/breed', breedRoutes);
 router.use('/coupon', couponRoutes);
+router.use('/review', reviewRoutes);
 
 export default router;

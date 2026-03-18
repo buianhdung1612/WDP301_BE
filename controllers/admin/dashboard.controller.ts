@@ -34,6 +34,7 @@ export const getEcommerceStats = async (req: Request, res: Response) => {
             thisMonthOrders, lastMonthOrders,
             totalProducts, totalOrders, totalUsers,
             totalServiceBookings, totalBoardingBookings,
+            totalPendingReviews,
             recentOrders, recentProducts, topProducts,
             topCustomersRes, revenueByMonthRes, topCategoriesRes
         ] = await Promise.all([
@@ -50,6 +51,14 @@ export const getEcommerceStats = async (req: Request, res: Response) => {
             AccountUser.countDocuments({ deleted: false }),
             Booking.countDocuments({ deleted: false }),
             BoardingBooking.countDocuments({ deleted: false }),
+            (async () => {
+                try {
+                    const Review = (await import("../../models/review.model")).default;
+                    return await Review.countDocuments({ status: "pending", deleted: false });
+                } catch (e) {
+                    return 0;
+                }
+            })(),
             Order.find({ deleted: false }).sort({ createdAt: -1 }).limit(5).populate('userId', 'fullName avatar'),
             Product.find({ deleted: false }).sort({ createdAt: -1 }).limit(5),
             Order.aggregate([
@@ -155,6 +164,7 @@ export const getEcommerceStats = async (req: Request, res: Response) => {
                     totalUsers,
                     totalServiceBookings,
                     totalBoardingBookings,
+                    totalPendingReviews,
                     monthlyRevenue: thisMonthRevenue,
                     revenueTodayPercent,
                     revenueMonthPercent,

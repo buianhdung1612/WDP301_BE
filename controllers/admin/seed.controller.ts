@@ -4,6 +4,10 @@ import Service from '../../models/service.model';
 import CategoryService from '../../models/category-service.model';
 import AccountAdmin from '../../models/account-admin.model';
 import Breed from '../../models/breed.model';
+import Review from '../../models/review.model';
+import Product from '../../models/product.model';
+import User from '../../models/account-user.model';
+import Order from '../../models/order.model';
 import bcrypt from 'bcryptjs';
 
 // [POST] /api/v1/admin/seed/roles-and-staff
@@ -244,6 +248,66 @@ export const seedBreeds = async (req: Request, res: Response) => {
         res.status(500).json({
             code: 500,
             message: "Lỗi khi seed giống thú cưng"
+        });
+    }
+};
+
+export const seedReviews = async (req: Request, res: Response) => {
+    try {
+        const products = await Product.find({ deleted: false }).limit(5).lean();
+        const users = await User.find({ status: "active" }).limit(3).lean();
+
+        if (products.length === 0 || users.length === 0) {
+            return res.status(400).json({
+                success: false,
+                message: "Cần có ít nhất 1 sản phẩm và 1 người dùng để seed reviews"
+            });
+        }
+
+        const comments = [
+            "Sản phẩm rất tốt, shop phục vụ nhiệt tình!",
+            "Chất lượng sản phẩm tuyệt vời, sẽ ủng hộ dài dài.",
+            "Giao hàng nhanh, đóng gói cẩn thận.",
+            "Sản phẩm hơi đắt nhưng chất lượng xứng đáng.",
+            "Bé nhà mình rất thích sản phẩm này!",
+            "Cảm ơn shop, hàng dùng rất thích.",
+            "Màu sắc đẹp, đúng như mô tả.",
+            "Dùng một thời gian thấy hiệu quả rõ rệt."
+        ];
+
+        const reviewsToCreate: any[] = [];
+
+        for (const product of products) {
+            for (let i = 0; i < 3; i++) {
+                const user = users[Math.floor(Math.random() * users.length)];
+                reviewsToCreate.push({
+                    userId: user._id.toString(),
+                    productId: product._id.toString(),
+                    orderId: "SEED_ORDER_ID",
+                    orderItemId: `SEED_ITEM_ID_${Math.random()}`,
+                    rating: Math.floor(Math.random() * 2) + 4, // 4 or 5 stars
+                    comment: comments[Math.floor(Math.random() * comments.length)],
+                    status: i === 0 ? "pending" : "approved",
+                    createdAt: new Date(Date.now() - Math.random() * 1000000000)
+                });
+            }
+        }
+
+        await Review.deleteMany({});
+        const createdReviews = await Review.insertMany(reviewsToCreate);
+
+        return res.json({
+            success: true,
+            message: "Seed reviews thành công!",
+            data: {
+                total: createdReviews.length
+            }
+        });
+    } catch (error) {
+        console.error("Error seeding reviews:", error);
+        return res.status(500).json({
+            success: false,
+            message: "Lỗi khi seed reviews"
         });
     }
 };
