@@ -341,6 +341,10 @@ export const initiateBoardingPayment = async (req: Request, res: Response) => {
         }
 
         booking.paymentGateway = gateway;
+        if (gateway === "zalopay") {
+            const transID = Math.floor(Math.random() * 1000000);
+            booking.appTransId = `${moment().format("YYMMDD")}_${transID}`;
+        }
         await booking.save();
 
         const paymentSettings = await getApiPayment();
@@ -352,19 +356,17 @@ export const initiateBoardingPayment = async (req: Request, res: Response) => {
                 endpoint: `${paymentSettings.zaloDomain}/v2/create`
             };
 
-            const domainWebsite = String(process.env.DOMAIN_WEBSITE || "").replace(/\/+$/, "");
-            const frontendSuccessUrl = domainWebsite
-                ? `${domainWebsite}/hotels/success?bookingId=${booking._id}`
-                : `${process.env.BACKEND_URL}/api/v1/client/boarding/payment-zalopay-return?bookingId=${booking._id}`;
+            const host = req.get("host") || "localhost:3000";
+            const protocol = req.protocol || "http";
+            const backendReturnUrl = `${protocol}://${host}/api/v1/client/boarding/payment-zalopay-return?bookingId=${booking._id}`;
 
             const embed_data = {
-                redirecturl: frontendSuccessUrl
+                redirecturl: backendReturnUrl
             };
             const items = [{}];
-            const transID = Math.floor(Math.random() * 1000000);
             const order = {
                 app_id: config.app_id,
-                app_trans_id: `${moment().format("YYMMDD")}_${transID}`,
+                app_trans_id: booking.appTransId,
                 app_user: `${booking._id}`,
                 app_time: Date.now(),
                 item: JSON.stringify(items),
@@ -435,6 +437,54 @@ export const initiateBoardingPayment = async (req: Request, res: Response) => {
         vnpUrl += "?" + querystring.stringify(vnpParams, { encode: false });
 
         return res.json({ code: "success", paymentUrl: vnpUrl });
+    } catch (error: any) {
+        return res.status(500).json({ message: error.message });
+    }
+};
+
+export const checkBoardingPaymentStatus = async (req: Request, res: Response) => {
+    try {
+        const { id } = req.params;
+        const booking = await BoardingBooking.findById(id);
+        if (!booking || booking.deleted) {
+            return res.status(404).json({ message: "Booking not found" });
+        }
+
+        if (booking.paymentStatus === "paid" || booking.paymentStatus === "partial") {
+            return res.json({ code: "success", paymentStatus: booking.paymentStatus });
+        }
+
+        if (booking.paymentGateway === "zalopay" && booking.appTransId) {
+            const paymentSettings = await getApiPayment();
+            const config = {
+                app_id: `${paymentSettings.zaloAppId}`,
+                key1: `${paymentSettings.zaloKey1}`,
+                endpoint: `${paymentSettings.zaloDomain}/v2/query`
+            };
+
+            const data = `${config.app_id}|${booking.appTransId}|${config.key1}`;
+            const mac = hmacSHA256(data, config.key1).toString();
+
+            const response = await axios.post(config.endpoint, null, {
+                params: {
+                    app_id: config.app_id,
+                    app_trans_id: booking.appTransId,
+                    mac
+                }
+            });
+
+            const returnCode = Number(response.data?.return_code);
+            // ZaloPay return_code 1 means success
+            if (returnCode === 1) {
+                await BoardingBooking.updateOne(
+                    { _id: booking._id },
+                    { $set: buildSuccessfulPaymentUpdate(booking) }
+                );
+                return res.json({ code: "success", paymentStatus: "paid" });
+            }
+        }
+
+        return res.json({ code: "pending", paymentStatus: booking.paymentStatus });
     } catch (error: any) {
         return res.status(500).json({ message: error.message });
     }
