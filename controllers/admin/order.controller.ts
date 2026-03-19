@@ -48,7 +48,9 @@ export const list = async (req: Request, res: Response) => {
             confirmed: 0,
             shipping: 0,
             completed: 0,
-            cancelled: 0
+            cancelled: 0,
+            returned: 0,
+            request_cancel: 0
         };
 
         counts.forEach((item: any) => {
@@ -202,6 +204,16 @@ export const editPatch = async (req: Request, res: Response) => {
 
         if (orderStatus) order.orderStatus = orderStatus;
         if (paymentStatus) order.paymentStatus = paymentStatus;
+
+        // Tự động hủy đơn nếu đã hoàn tiền (refunded) và chưa bị hủy trước đó
+        if (order.paymentStatus === "refunded" && order.orderStatus !== "cancelled") {
+            order.orderStatus = "cancelled";
+            // Hoàn lại tài nguyên cho đơn hàng nếu chuyển sang trạng thái hủy
+            if (order.code) {
+                await refundOrderResources(order.code);
+            }
+        }
+
         if (note !== undefined) order.note = note;
 
         await order.save();
