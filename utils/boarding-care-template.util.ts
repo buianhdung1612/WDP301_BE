@@ -57,52 +57,12 @@ const buildDogFeedingTemplate = (dogs: PetLite[]): FeedingItem[] => {
     const weight = avgWeight(dogs);
     const isSmallDog = weight > 0 && weight < 10;
     const amountHint = getDogAmountHint(dogs);
-
-    if (isSmallDog) {
-        return [
-            {
-                time: "06:30",
-                food: "Hạt (Royal Canin)",
-                amount: "40g",
-                note: `Chế độ chó nhỏ. ${amountHint}`,
-                status: "pending",
-                petType: "dog",
-                staffId: null,
-                staffName: "",
-                doneAt: null,
-            },
-            {
-                time: "12:00",
-                food: "Snack nhẹ / Bánh thưởng",
-                amount: "1-2 miếng",
-                note: "Bữa phụ nhẹ giữa ngày",
-                status: "pending",
-                petType: "dog",
-                staffId: null,
-                staffName: "",
-                doneAt: null,
-            },
-            {
-                time: "18:00",
-                food: "Hạt + Pate",
-                amount: "50g",
-                note: "Bữa tối cân bằng dinh dưỡng",
-                status: "pending",
-                petType: "dog",
-                staffId: null,
-                staffName: "",
-                doneAt: null,
-            },
-        ];
-    }
-
-    // Default or Large Dog (>= 10kg or unknown)
     return [
         {
-            time: "07:00",
+            time: "06:30",
             food: "Hạt (Royal Canin)",
-            amount: weight > 0 ? `${Math.round(weight * 10)}g` : "150g",
-            note: `Chế độ chó lớn. ${amountHint}`,
+            amount: "50% khẩu phần ngày",
+            note: `${amountHint}. Sau ăn nghỉ 30 phút`,
             status: "pending",
             petType: "dog",
             staffId: null,
@@ -110,10 +70,21 @@ const buildDogFeedingTemplate = (dogs: PetLite[]): FeedingItem[] => {
             doneAt: null,
         },
         {
-            time: "17:00",
-            food: "Hạt + Thịt luộc",
-            amount: weight > 0 ? `${Math.round(weight * 15)}g` : "200g",
-            note: "Bữa chính cuối ngày",
+            time: "12:00",
+            food: "Snack nhẹ / Bánh thưởng",
+            amount: "10-20g",
+            note: "Bữa phụ nhẹ nhàng",
+            status: "pending",
+            petType: "dog",
+            staffId: null,
+            staffName: "",
+            doneAt: null,
+        },
+        {
+            time: "17:30",
+            food: "Hạt + Pate hoặc Thịt luộc",
+            amount: "50% khẩu phần ngày",
+            note: "Điều chỉnh theo khẩu vị thú cưng",
             status: "pending",
             petType: "dog",
             staffId: null,
