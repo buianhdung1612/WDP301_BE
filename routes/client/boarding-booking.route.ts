@@ -22,6 +22,7 @@ router.use(requireAuth);
 router.get("/boarding-bookings", boardingBookingController.listMyBoardingBookings);
 router.get("/boarding-bookings/:id", boardingBookingController.getMyBoardingBookingDetail);
 router.post("/boarding-bookings", boardingBookingController.createBoardingBooking);
+router.get("/boarding-bookings/:id/check-payment", boardingBookingController.checkBoardingPaymentStatus);
 router.post("/boarding-bookings/:id/pay", boardingBookingController.initiateBoardingPayment);
 router.patch("/boarding-bookings/:id/cancel", boardingBookingController.cancelBoardingBooking);
 

@@ -54,13 +54,55 @@ const getDogAmountHint = (dogs: PetLite[]): string => {
 };
 
 const buildDogFeedingTemplate = (dogs: PetLite[]): FeedingItem[] => {
+    const weight = avgWeight(dogs);
+    const isSmallDog = weight > 0 && weight < 10;
     const amountHint = getDogAmountHint(dogs);
+
+    if (isSmallDog) {
+        return [
+            {
+                time: "06:30",
+                food: "Hạt (Royal Canin)",
+                amount: "40g",
+                note: `Chế độ chó nhỏ. ${amountHint}`,
+                status: "pending",
+                petType: "dog",
+                staffId: null,
+                staffName: "",
+                doneAt: null,
+            },
+            {
+                time: "12:00",
+                food: "Snack nhẹ / Bánh thưởng",
+                amount: "1-2 miếng",
+                note: "Bữa phụ nhẹ giữa ngày",
+                status: "pending",
+                petType: "dog",
+                staffId: null,
+                staffName: "",
+                doneAt: null,
+            },
+            {
+                time: "18:00",
+                food: "Hạt + Pate",
+                amount: "50g",
+                note: "Bữa tối cân bằng dinh dưỡng",
+                status: "pending",
+                petType: "dog",
+                staffId: null,
+                staffName: "",
+                doneAt: null,
+            },
+        ];
+    }
+
+    // Default or Large Dog (>= 10kg or unknown)
     return [
         {
-            time: "06:30",
-            food: "Hạt hoặc pate",
-            amount: "40-50% khẩu phần ngày",
-            note: `${amountHint}. Sau ăn nghỉ 20-30 phút`,
+            time: "07:00",
+            food: "Hạt (Royal Canin)",
+            amount: weight > 0 ? `${Math.round(weight * 10)}g` : "150g",
+            note: `Chế độ chó lớn. ${amountHint}`,
             status: "pending",
             petType: "dog",
             staffId: null,
@@ -68,21 +110,10 @@ const buildDogFeedingTemplate = (dogs: PetLite[]): FeedingItem[] => {
             doneAt: null,
         },
         {
-            time: "12:00",
-            food: "Bữa phụ (snack/trái cây an toàn)",
-            amount: "Nhỏ",
-            note: "Không bắt buộc với chó trưởng thành",
-            status: "pending",
-            petType: "dog",
-            staffId: null,
-            staffName: "",
-            doneAt: null,
-        },
-        {
-            time: "17:30",
-            food: "Hạt + thịt luộc hoặc pate",
-            amount: "50-60% khẩu phần ngày",
-            note: "Có thể điều chỉnh theo khẩu vị và hướng dẫn của chủ nuôi",
+            time: "17:00",
+            food: "Hạt + Thịt luộc",
+            amount: weight > 0 ? `${Math.round(weight * 15)}g` : "200g",
+            note: "Bữa chính cuối ngày",
             status: "pending",
             petType: "dog",
             staffId: null,
@@ -119,13 +150,13 @@ const buildDogExerciseTemplate = (): ExerciseItem[] => {
     ];
 };
 
-const buildCatFeedingTemplate = (): FeedingItem[] => {
+const buildCatFeedingTemplate = (cats: PetLite[]): FeedingItem[] => {
     return [
         {
-            time: "06:30",
-            food: "Hạt hoặc pate",
-            amount: "Khoảng 30% khẩu phần ngày",
-            note: "Mèo ăn ít nhưng nhiều bữa",
+            time: "07:00",
+            food: "Hạt (Royal Canin)",
+            amount: "30-40g",
+            note: "Bữa sáng cho mèo. Thay nước sạch.",
             status: "pending",
             petType: "cat",
             staffId: null,
@@ -133,10 +164,10 @@ const buildCatFeedingTemplate = (): FeedingItem[] => {
             doneAt: null,
         },
         {
-            time: "12:30",
-            food: "Bữa phụ hạt/pate",
-            amount: "Khoảng 20% khẩu phần ngày",
-            note: "Theo dõi khả năng ăn hết khẩu phần",
+            time: "14:00",
+            food: "Súp thưởng (Churu)",
+            amount: "1 thanh",
+            note: "Bổ sung nước và khoáng",
             status: "pending",
             petType: "cat",
             staffId: null,
@@ -144,21 +175,10 @@ const buildCatFeedingTemplate = (): FeedingItem[] => {
             doneAt: null,
         },
         {
-            time: "17:30",
-            food: "Bữa chính",
-            amount: "Khoảng 40-50% khẩu phần ngày",
-            note: "Mèo trưởng thành tham khảo 40-60g hạt/ngày hoặc 2-3 gói pate",
-            status: "pending",
-            petType: "cat",
-            staffId: null,
-            staffName: "",
-            doneAt: null,
-        },
-        {
-            time: "21:00",
-            food: "Snack nhẹ",
-            amount: "Nhỏ",
-            note: "Có thể bổ sung ít hạt hoặc snack mèo",
+            time: "19:00",
+            food: "Pate (Gói/Lon)",
+            amount: "1 gói",
+            note: "Bữa tối dinh dưỡng cao",
             status: "pending",
             petType: "cat",
             staffId: null,
@@ -208,7 +228,7 @@ export const buildDefaultBoardingCareSchedule = (pets: PetLite[]) => {
     }
 
     if (includeCat) {
-        feedingSchedule = feedingSchedule.concat(buildCatFeedingTemplate());
+        feedingSchedule = feedingSchedule.concat(buildCatFeedingTemplate(cats));
         exerciseSchedule = exerciseSchedule.concat(buildCatExerciseTemplate());
     }
 

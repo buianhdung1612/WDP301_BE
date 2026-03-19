@@ -146,6 +146,7 @@ const schema = new mongoose.Schema(
             default: "unpaid"
         },
         paymentGateway: String,
+        appTransId: String,
         holdExpiresAt: Date,
 
         notes: String,

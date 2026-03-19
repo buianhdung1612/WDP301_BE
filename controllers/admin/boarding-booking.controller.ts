@@ -150,10 +150,15 @@ const getBoardingHotelDepartmentIds = async () => {
             const code = normalizeLookupText(item?.code);
             return (
                 name.includes("khach san") ||
+                name.includes("cham soc") ||
+                name.includes("boarding") ||
+                name.includes("hotel") ||
                 code.includes("hotel") ||
                 code.includes("boarding") ||
                 code.includes("khachsan") ||
-                code.includes("khach-san")
+                code.includes("khach-san") ||
+                code.includes("cs") ||
+                code.includes("ks")
             );
         })
         .map((item: any) => item._id);
@@ -161,13 +166,21 @@ const getBoardingHotelDepartmentIds = async () => {
 
 const getBoardingHotelStaffRoleIds = async () => {
     const departmentIds = await getBoardingHotelDepartmentIds();
-    if (!departmentIds.length) return [];
 
-    const roles = await Role.find({
+    const filter: any = {
         deleted: false,
         status: "active",
-        departmentId: { $in: departmentIds },
-    }).select("_id");
+    };
+
+    // Nếu tìm thấy phòng ban chuyên trách thì ưu tiên, 
+    // nếu không lấy tất cả các vai trò được đánh dấu là nhân viên (isStaff: true)
+    if (departmentIds.length > 0) {
+        filter.departmentId = { $in: departmentIds };
+    } else {
+        filter.isStaff = true;
+    }
+
+    const roles = await Role.find(filter).select("_id");
 
     return roles.map((item) => item._id);
 };
@@ -403,7 +416,11 @@ export const listBoardingHotelStaffs = async (_req: Request, res: Response) => {
             }
         }
 
-        const staffs = await getBoardingHotelStaffAccounts(scheduledStaffIds);
+        // Nếu có danh sách nhân viên trực ca thì lấy theo ca, 
+        // nếu không có ai trực (có thể do chưa phân ca) thì lấy tất cả nhân viên thuộc bộ phận
+        const staffs = await getBoardingHotelStaffAccounts(
+            scheduledStaffIds && scheduledStaffIds.length > 0 ? scheduledStaffIds : undefined
+        );
 
         return res.json({ code: 200, data: staffs });
     } catch (error: any) {
