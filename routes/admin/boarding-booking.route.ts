@@ -6,6 +6,7 @@ const router = Router();
 
 router.get("/hotel-staffs", checkPermission("boarding_booking_view"), controller.listBoardingHotelStaffs);
 router.get("/", checkPermission("boarding_booking_view"), controller.listBoardingBookings);
+router.post("/batch-create", checkPermission("boarding_booking_create"), controller.batchCreateBoardingBooking);
 router.post("/create", checkPermission("boarding_booking_create"), controller.createBoardingBooking);
 router.get("/:id", checkPermission("boarding_booking_view"), controller.getBoardingBookingDetail);
 router.patch("/:id/status", checkPermission("boarding_booking_edit"), controller.updateBoardingBookingStatus);

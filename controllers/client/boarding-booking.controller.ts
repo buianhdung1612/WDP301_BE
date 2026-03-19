@@ -9,7 +9,7 @@ import BoardingCage from "../../models/boarding-cage.model";
 import Pet from "../../models/pet.model";
 import { buildDefaultBoardingCareSchedule } from "../../utils/boarding-care-template.util";
 
-const DEFAULT_HOLD_MINUTES = Number(process.env.BOARDING_HOLD_MINUTES || 15);
+const DEFAULT_HOLD_MINUTES = Number(process.env.BOARDING_HOLD_MINUTES || 5);
 const MAX_ROOMS_PER_CAGE = Math.max(1, Number(process.env.BOARDING_CAGE_CAPACITY || 4));
 const BOOKING_LOCK_MS = Math.max(3000, Number(process.env.BOARDING_BOOKING_LOCK_MS || 8000));
 const COUNTER_DEPOSIT_MIN_DAYS = 2;
@@ -50,6 +50,33 @@ const pickFirstQueryValue = (value: unknown): string | undefined => {
         return typeof first === "string" ? first : undefined;
     }
     return undefined;
+};
+
+const trimTrailingSlash = (value: string) => value.replace(/\/+$/, "");
+
+const isLocalHost = (host: string) => /^(localhost|127\.0\.0\.1)(:\d+)?$/i.test(host.trim());
+
+const resolvePublicBackendUrl = (req: Request) => {
+    const paymentConfigured = String(process.env.PAYMENT_PUBLIC_BACKEND_URL || "").trim();
+    const configured = String(process.env.BACKEND_URL || "").trim();
+    const forwardedHost = String(req.get("x-forwarded-host") || "").split(",")[0].trim();
+    const forwardedProto = String(req.get("x-forwarded-proto") || "").split(",")[0].trim();
+    const host = forwardedHost || String(req.get("host") || "").trim();
+    const proto = forwardedProto || req.protocol || "http";
+
+    if (paymentConfigured) {
+        return trimTrailingSlash(paymentConfigured);
+    }
+
+    if (host && !isLocalHost(host)) {
+        return trimTrailingSlash(`${proto}://${host}`);
+    }
+
+    if (configured) {
+        return trimTrailingSlash(configured);
+    }
+
+    return trimTrailingSlash(`${proto}://${host || "localhost:3000"}`);
 };
 
 const getBookingQuantity = (booking: any): number => {
@@ -356,9 +383,8 @@ export const initiateBoardingPayment = async (req: Request, res: Response) => {
                 endpoint: `${paymentSettings.zaloDomain}/v2/create`
             };
 
-            const host = req.get("host") || "localhost:3000";
-            const protocol = req.protocol || "http";
-            const backendReturnUrl = `${protocol}://${host}/api/v1/client/boarding/payment-zalopay-return?bookingId=${booking._id}`;
+            const publicBackendUrl = resolvePublicBackendUrl(req);
+            const backendReturnUrl = `${publicBackendUrl}/api/v1/client/boarding/payment-zalopay-return?bookingId=${booking._id}`;
 
             const embed_data = {
                 redirecturl: backendReturnUrl
@@ -375,7 +401,7 @@ export const initiateBoardingPayment = async (req: Request, res: Response) => {
                 description: Number(booking.depositAmount || 0) > 0 ? `Dat coc boarding ${booking.code}` : `Thanh toan boarding ${booking.code}`,
                 bank_code: "",
                 mac: "",
-                callback_url: `${process.env.BACKEND_URL}/api/v1/client/boarding/payment-zalopay-result`
+                callback_url: `${publicBackendUrl}/api/v1/client/boarding/payment-zalopay-result`
             };
 
             const data =
@@ -408,7 +434,7 @@ export const initiateBoardingPayment = async (req: Request, res: Response) => {
         const tmnCode = `${paymentSettings.vnpTmnCode}`;
         const secretKey = `${paymentSettings.vnpHashSecret}`;
         let vnpUrl = `${paymentSettings.vnpUrl}`;
-        const returnUrl = `${process.env.BACKEND_URL}/api/v1/client/boarding/payment-vnpay-result`;
+        const returnUrl = `${resolvePublicBackendUrl(req)}/api/v1/client/boarding/payment-vnpay-result`;
         const orderId = `${booking._id}_${Date.now()}`;
         const amount = Number(booking.depositAmount || 0) > 0 ? Number(booking.depositAmount || 0) : Number(booking.total || 0);
 
