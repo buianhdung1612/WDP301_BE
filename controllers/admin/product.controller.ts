@@ -7,6 +7,7 @@ import { generateRandomString } from '../../helpers/generate.helper';
 import { convertToSlug } from '../../helpers/slug.helper';
 import Brand from '../../models/brand.model';
 import ExpiredProduct from '../../models/expired-product.model';
+import Order from '../../models/order.model';
 import { handleProductExpiry } from '../../helpers/expiry.helper';
 
 // Danh mục sản phẩm
@@ -229,6 +230,32 @@ export const editCategory = async (req: Request, res: Response) => {
 export const deleteCategory = async (req: Request, res: Response) => {
     try {
         const id = req.params.id;
+
+        // Kiểm tra xem có danh mục con không
+        const hasChildCategory = await CategoryProduct.exists({
+            parent: id,
+            deleted: false
+        });
+
+        if (hasChildCategory) {
+            return res.status(400).json({
+                success: false,
+                message: "Không thể xóa danh mục này vì vẫn còn danh mục con bên trong!"
+            });
+        }
+
+        // Kiểm tra xem có sản phẩm nào thuộc danh mục này không
+        const hasProduct = await Product.exists({
+            category: id,
+            deleted: false
+        });
+
+        if (hasProduct) {
+            return res.status(400).json({
+                success: false,
+                message: "Không thể xóa danh mục này vì vẫn còn sản phẩm đang thuộc danh mục!"
+            });
+        }
 
         await CategoryProduct.updateOne({
             _id: id,
@@ -638,6 +665,19 @@ export const deletePatch = async (req: Request, res: Response) => {
     try {
         const id = req.params.id;
 
+        // Kiểm tra xem sản phẩm có nằm trong đơn hàng nào không
+        const isInOrder = await Order.exists({
+            "items.productId": id,
+            deleted: false
+        });
+
+        if (isInOrder) {
+            return res.status(400).json({
+                success: false,
+                message: "Không thể xóa sản phẩm này vì đã có trong đơn hàng của khách!"
+            });
+        }
+
         await Product.updateOne({
             _id: id
         }, {
@@ -780,6 +820,19 @@ export const updateAttribute = async (req: Request, res: Response) => {
 export const deleteAttribute = async (req: Request, res: Response) => {
     try {
         const id = req.params.id;
+
+        // Kiểm tra xem có sản phẩm nào dùng thuộc tính này không
+        const isUsed = await Product.exists({
+            attributes: id,
+            deleted: false
+        });
+
+        if (isUsed) {
+            return res.status(400).json({
+                success: false,
+                message: "Không thể xóa thuộc tính này vì đang có sản phẩm sử dụng!"
+            });
+        }
 
         await AttributeProduct.updateOne({
             _id: id

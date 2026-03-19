@@ -236,6 +236,19 @@ export const deleteCategory = async (req: Request, res: Response) => {
     try {
         const id = req.params.id;
 
+        // Kiểm tra xem có bài viết nào thuộc danh mục này không
+        const hasBlog = await Blog.exists({
+            category: id,
+            deleted: false
+        });
+
+        if (hasBlog) {
+            return res.status(400).json({
+                success: false,
+                message: "Không thể xóa danh mục này vì vẫn còn bài viết đang sử dụng!"
+            });
+        }
+
         await CategoryBlog.updateOne({
             _id: id,
         }, {

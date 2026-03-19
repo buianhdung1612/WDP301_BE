@@ -1,6 +1,8 @@
 import { Request, Response } from "express";
 import Department from "../../models/department.model";
 import AccountAdmin from "../../models/account-admin.model";
+import Role from "../../models/role.model";
+import Service from "../../models/service.model";
 
 // [GET] /api/v1/admin/hr/departments
 export const index = async (req: Request, res: Response) => {
@@ -144,12 +146,30 @@ export const remove = async (req: Request, res: Response) => {
     try {
         const departmentId = req.params.id;
 
-        // Check if any staff is assigned to this department
-        const staffCount = await AccountAdmin.countDocuments({ departmentId: departmentId });
+        // Kiểm tra xem có nhân viên nào thuộc phòng ban này không
+        const staffCount = await AccountAdmin.countDocuments({ departmentId: departmentId, deleted: false });
         if (staffCount > 0) {
             return res.status(400).json({
                 code: 400,
                 message: `Không thể xóa phòng ban này vì đang có ${staffCount} nhân viên thuộc phòng ban. Hãy chuyển nhân viên sang phòng ban khác trước.`
+            });
+        }
+
+        // Kiểm tra xem có nhóm quyền (Role) nào thuộc phòng ban này không
+        const hasRole = await Role.exists({ departmentId: departmentId, deleted: false });
+        if (hasRole) {
+            return res.status(400).json({
+                code: 400,
+                message: "Không thể xóa phòng ban này vì vẫn còn nhóm quyền (Role) trực thuộc!"
+            });
+        }
+
+        // Kiểm tra xem có dịch vụ (Service) nào thuộc phòng ban này không
+        const hasService = await Service.exists({ departmentId: departmentId, deleted: false });
+        if (hasService) {
+            return res.status(400).json({
+                code: 400,
+                message: "Không thể xóa phòng ban này vì vẫn còn dịch vụ (Service) trực thuộc!"
             });
         }
 

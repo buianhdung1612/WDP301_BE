@@ -49,32 +49,53 @@ const normalizeAddress = async (city: string, district: string, ward: string) =>
     return dataFinal;
 }
 
+const geocodeCache = new Map<string, any>();
+
 export const getInfoAddress = async (latitude: number, longitude: number) => {
-    const geoRes = await axios.get(`https://mapapis.openmap.vn/v1/geocode/reverse?latlng=${latitude},${longitude}&apikey=${process.env.OPENMAP_KEY}`);
-
-    let city = "";
-    let district = "";
-    let ward = "";
-
-    const addressArray = geoRes.data.results[0].address_components;
-
-    for (const item of addressArray) {
-        const name = item.long_name.toLowerCase();
-
-        if (name.includes("thành phố") || name.includes("tỉnh")) {
-            city = item.short_name;
-        }
-
-        if (name.includes("quận") || name.includes("huyện") || name.includes("thị xã")) {
-            district = item.short_name;
-        }
-
-        if (name.includes("phường") || name.includes("xã")) {
-            ward = item.short_name;
-        }
+    const cacheKey = `${latitude.toFixed(6)},${longitude.toFixed(6)}`;
+    if (geocodeCache.has(cacheKey)) {
+        return geocodeCache.get(cacheKey);
     }
 
-    const result = await normalizeAddress(city, district, ward);
+    try {
+        const geoRes = await axios.get(`https://mapapis.openmap.vn/v1/geocode/reverse?latlng=${latitude},${longitude}&apikey=${process.env.OPENMAP_KEY}`);
 
-    return result;
+        if (!geoRes.data || !geoRes.data.results || geoRes.data.results.length === 0) {
+            throw new Error("Không thể định vị địa chỉ từ tọa độ cung cấp.");
+        }
+
+        let city = "";
+        let district = "";
+        let ward = "";
+
+        const addressArray = geoRes.data.results[0].address_components;
+
+        for (const item of addressArray) {
+            const name = item.long_name.toLowerCase();
+
+            if (name.includes("thành phố") || name.includes("tỉnh")) {
+                city = item.short_name;
+            }
+
+            if (name.includes("quận") || name.includes("huyện") || name.includes("thị xã")) {
+                district = item.short_name;
+            }
+
+            if (name.includes("phường") || name.includes("xã")) {
+                ward = item.short_name;
+            }
+        }
+
+        const result = await normalizeAddress(city, district, ward);
+        geocodeCache.set(cacheKey, result);
+
+        return result;
+    } catch (error: any) {
+        if (error.response?.status === 429) {
+            console.error("LỖI RATE LIMIT OPENMAP:", error.message);
+            // Nếu là lỗi 429, có thể trả về thông báo cụ thể
+            throw new Error("Hệ thống bản đồ đang bận, vui lòng thử lại sau giây lát.");
+        }
+        throw error;
+    }
 }

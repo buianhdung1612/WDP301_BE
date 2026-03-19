@@ -3,6 +3,7 @@ import Service from "../../models/service.model";
 import ServiceCategory from "../../models/category-service.model";
 import { buildCategoryTree } from "../../helpers/category.helper";
 import { convertToSlug } from "../../helpers/slug.helper";
+import Booking from "../../models/booking.model";
 
 // --- CATEGORY CONTROLLERS ---
 
@@ -198,7 +199,35 @@ export const categoryEdit = async (req: Request, res: Response) => {
 // [DELETE] /api/v1/admin/services/categories/:id
 export const categoryDelete = async (req: Request, res: Response) => {
     try {
-        await ServiceCategory.updateOne({ _id: req.params.id }, {
+        const id = req.params.id;
+
+        // Kiểm tra xem có danh mục con không
+        const hasChildCategory = await ServiceCategory.exists({
+            parentId: id,
+            deleted: false
+        });
+
+        if (hasChildCategory) {
+            return res.status(400).json({
+                code: 400,
+                message: "Không thể xóa danh mục này vì vẫn còn danh mục con bên trong!"
+            });
+        }
+
+        // Kiểm tra xem có dịch vụ nào thuộc danh mục này không
+        const hasService = await Service.exists({
+            categoryId: id,
+            deleted: false
+        });
+
+        if (hasService) {
+            return res.status(400).json({
+                code: 400,
+                message: "Không thể xóa danh mục này vì vẫn còn dịch vụ đang thuộc danh mục!"
+            });
+        }
+
+        await ServiceCategory.updateOne({ _id: id }, {
             deleted: true,
             deletedAt: new Date()
         });
@@ -437,7 +466,22 @@ export const serviceEdit = async (req: Request, res: Response) => {
 // [DELETE] /api/v1/admin/services/delete/:id
 export const serviceDelete = async (req: Request, res: Response) => {
     try {
-        await Service.updateOne({ _id: req.params.id }, {
+        const id = req.params.id;
+
+        // Kiểm tra xem có lịch đặt nào dùng dịch vụ này không
+        const hasBooking = await Booking.exists({
+            serviceId: id,
+            deleted: false
+        });
+
+        if (hasBooking) {
+            return res.status(400).json({
+                code: 400,
+                message: "Không thể xóa dịch vụ này vì đang có khách đặt lịch sử dụng!"
+            });
+        }
+
+        await Service.updateOne({ _id: id }, {
             deleted: true,
             deletedAt: new Date()
         });

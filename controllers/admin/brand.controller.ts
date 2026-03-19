@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import Brand from '../../models/brand.model';
+import Product from '../../models/product.model';
 import { convertToSlug } from '../../helpers/slug.helper';
 
 export const create = async (req: Request, res: Response) => {
@@ -202,6 +203,19 @@ export const edit = async (req: Request, res: Response) => {
 export const deletePatch = async (req: Request, res: Response) => {
     try {
         const id = req.params.id;
+
+        // Kiểm tra xem có sản phẩm nào thuộc thương hiệu này không
+        const hasProduct = await Product.exists({
+            brandId: id,
+            deleted: false
+        });
+
+        if (hasProduct) {
+            return res.status(400).json({
+                success: false,
+                message: "Không thể xóa thương hiệu này vì vẫn còn sản phẩm đang sử dụng thương hiệu!"
+            });
+        }
 
         const isExist = await Brand.exists({
             _id: id,

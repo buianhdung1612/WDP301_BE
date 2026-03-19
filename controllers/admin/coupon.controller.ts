@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import Coupon from '../../models/coupon.model';
 import moment from 'moment';
+import mongoose from 'mongoose';
 import { convertToSlug } from '../../helpers/slug.helper';
 
 export const create = async (req: Request, res: Response) => {
@@ -131,7 +132,14 @@ export const list = async (req: Request, res: Response) => {
 
 export const detail = async (req: Request, res: Response) => {
     try {
-        const { id } = req.params;
+        const { id } = req.params as any;
+
+        if (!mongoose.Types.ObjectId.isValid(id)) {
+            return res.status(400).json({
+                success: false,
+                message: "Id không hợp lệ"
+            });
+        }
 
         const record = await Coupon.findOne({
             _id: id,
@@ -172,7 +180,14 @@ export const detail = async (req: Request, res: Response) => {
 
 export const edit = async (req: Request, res: Response) => {
     try {
-        const { id } = req.params;
+        const { id } = req.params as any;
+
+        if (!mongoose.Types.ObjectId.isValid(id)) {
+            return res.status(400).json({
+                success: false,
+                message: "Id không hợp lệ"
+            });
+        }
 
         const {
             code,
@@ -255,7 +270,14 @@ export const edit = async (req: Request, res: Response) => {
 
 export const deletePatch = async (req: Request, res: Response) => {
     try {
-        const id = req.params.id;
+        const id = req.params.id as string;
+
+        if (!mongoose.Types.ObjectId.isValid(id)) {
+            return res.status(400).json({
+                success: false,
+                message: "Id không hợp lệ"
+            });
+        }
 
         const isExist = await Coupon.exists({
             _id: id,

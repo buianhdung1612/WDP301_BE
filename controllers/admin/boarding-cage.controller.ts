@@ -1,6 +1,7 @@
 import { Request, Response } from "express";
 import mongoose from "mongoose";
 import BoardingCage from "../../models/boarding-cage.model";
+import BoardingBooking from "../../models/boarding-booking.model";
 
 const pickParam = (value: unknown): string | undefined => {
     if (typeof value === "string") return value;
@@ -202,6 +203,19 @@ export const deleteBoardingCage = async (req: Request, res: Response) => {
         const id = pickParam(req.params.id);
         if (!id || !mongoose.Types.ObjectId.isValid(id)) {
             return res.status(400).json({ code: 400, message: "ID không hợp lệ" });
+        }
+
+        // Kiểm tra xem chuồng có đang được sử dụng trong lịch lưu trú nào không
+        const hasBooking = await BoardingBooking.exists({
+            cageId: id,
+            deleted: false
+        });
+
+        if (hasBooking) {
+            return res.status(400).json({
+                code: 400,
+                message: "Không thể xóa chuồng này vì đang có lịch lưu trú liên quan!"
+            });
         }
 
         const deleted = await BoardingCage.findOneAndUpdate(
