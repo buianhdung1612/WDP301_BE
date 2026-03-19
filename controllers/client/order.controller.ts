@@ -439,13 +439,19 @@ export const paymentZaloPay = async (req: Request, res: Response) => {
         endpoint: `${paymentSettings.zaloDomain}/v2/create`
     };
 
-    const successPath = orderCode ? `/order/success?orderCode=${orderCode}&phone=${phone}` : `/booking/list`; // Admin might want to go back to list
+    const successPath = orderCode ? `/order/success?orderCode=${orderCode}&phone=${phone}` : `/booking/success`; // Admin might want to go back to list
     const embed_data = {
         redirecturl: `${process.env.DOMAIN_WEBSITE}${successPath}`
     };
 
     const items = [{}];
     const transID = Math.floor(Math.random() * 1000000);
+
+    let amount = target.total;
+    if (bookingCode && target.depositAmount > 0 && target.paymentStatus === "unpaid") {
+        amount = target.depositAmount;
+    }
+
     const order = {
         app_id: config.app_id,
         app_trans_id: `${moment().format('YYMMDD')}_${transID}`,
@@ -453,7 +459,7 @@ export const paymentZaloPay = async (req: Request, res: Response) => {
         app_time: Date.now(), // miliseconds
         item: JSON.stringify(items),
         embed_data: JSON.stringify(embed_data),
-        amount: target.total,
+        amount: amount,
         description: `Thanh toán ${orderCode ? 'đơn hàng' : 'lịch đặt'} ${code}`,
         bank_code: "",
         mac: "",
@@ -498,13 +504,18 @@ export const paymentZalopayResult = async (req: Request, res: Response) => {
 
             // Thanh toán thành công
             if (code.startsWith("BK")) {
-                await Booking.updateOne({
-                    customerPhone: phone,
-                    code: code,
-                    deleted: false
-                }, {
-                    paymentStatus: "paid"
-                });
+                const booking = await Booking.findOne({ code, customerPhone: phone, deleted: false });
+                if (booking) {
+                    let updateData: any = {};
+                    if (booking.depositAmount > 0 && booking.paymentStatus === "unpaid") {
+                        updateData.paymentStatus = "partially_paid";
+                        updateData.depositMethod = "zalopay";
+                        updateData.bookingStatus = "confirmed";
+                    } else {
+                        updateData.paymentStatus = "paid";
+                    }
+                    await Booking.updateOne({ _id: booking._id }, updateData);
+                }
             } else {
                 await Order.updateOne({
                     phone: phone,
@@ -565,6 +576,9 @@ export const paymentVNPay = async (req: Request, res: Response) => {
     let returnUrl = `http://localhost:3000/api/v1/client/order/payment-vnpay-result`;
     let orderId = `${phone}-${code}-${Date.now()}`;
     let amount = target.total || 0;
+    if (bookingCode && target.depositAmount > 0 && target.paymentStatus === "unpaid") {
+        amount = target.depositAmount;
+    }
     let bankCode = "";
 
     let locale = 'vn';
@@ -624,13 +638,18 @@ export const paymentVNPayResult = async (req: Request, res: Response) => {
 
         if (vnp_Params['vnp_ResponseCode'] === '00') {
             if (code.startsWith("BK")) {
-                await Booking.findOneAndUpdate({
-                    customerPhone: phone,
-                    code: code,
-                    deleted: false
-                }, {
-                    paymentStatus: 'paid'
-                });
+                const booking = await Booking.findOne({ code, customerPhone: phone, deleted: false });
+                if (booking) {
+                    let updateData: any = {};
+                    if (booking.depositAmount > 0 && booking.paymentStatus === "unpaid") {
+                        updateData.paymentStatus = "partially_paid";
+                        updateData.depositMethod = "vnpay";
+                        updateData.bookingStatus = "confirmed";
+                    } else {
+                        updateData.paymentStatus = "paid";
+                    }
+                    await Booking.updateOne({ _id: booking._id }, updateData);
+                }
             } else {
                 await Order.findOneAndUpdate({
                     phone: phone,
@@ -831,7 +850,7 @@ export const exportPdf = async (req: Request, res: Response) => {
 
     <div class="header">
       <div>
-        <h2>MAIKA.SHOP</h2>
+        <h2>TEDDYPET</h2>
         <p>Hóa đơn bán hàng</p>
       </div>
       <div>
@@ -914,6 +933,73 @@ export const exportPdf = async (req: Request, res: Response) => {
     res.setHeader('Content-Type', 'application/pdf'); // Thiết lập header để trình duyệt nhận biết đây là file PDF
     res.setHeader('Content-Disposition', `attachment; filename=invoice_${orderCode}.pdf`); // Thiết lập tên file khi tải về
     res.send(pdfBuffer); // Gửi buffer PDF về client
+};
+
+
+// [PATCH] /api/v1/client/order/:id/cancel
+export const cancelMyOrder = async (req: Request, res: Response) => {
+    try {
+        const id = req.params.id;
+        const userId = res.locals.accountUser.id;
+        const { reason } = req.body;
+
+        const order = await Order.findOne({
+            _id: id,
+            userId: userId,
+            deleted: false
+        });
+
+        if (!order) {
+            return res.json({
+                code: "error",
+                message: "Đơn hàng không tồn tại!"
+            });
+        }
+
+        if (order.orderStatus !== "pending" && order.orderStatus !== "confirmed") {
+            return res.json({
+                code: "error",
+                message: "Chỉ có thể hủy đơn hàng đang chờ xác nhận hoặc đã xác nhận!"
+            });
+        }
+
+        if (order.paymentStatus === "paid") {
+            await Order.updateOne({ _id: id }, {
+                orderStatus: "request_cancel",
+                cancelledReason: reason || "Yêu cầu hủy đơn đã thanh toán",
+                cancelledAt: new Date(),
+                cancelledBy: "customer"
+            });
+
+            return res.json({
+                code: "success",
+                message: "Yêu cầu hủy đã được gửi! Admin sẽ kiểm tra và hoàn tiền sớm nhất."
+            });
+        }
+
+        // Hoàn lại tài nguyên (stock, point) - chỉ thực hiện khi hủy luôn đơn chưa thanh toán
+        await refundOrderResources(order.code as string);
+
+        // Cập nhật trạng thái đơn hàng (Hủy ngay đơn chưa thanh toán)
+        await Order.updateOne({ _id: id }, {
+            orderStatus: "cancelled",
+            cancelledReason: reason || "Khách hàng hủy",
+            cancelledAt: new Date(),
+            cancelledBy: "customer"
+        });
+
+        res.json({
+            code: "success",
+            message: "Hủy đơn hàng thành công!"
+        });
+
+    } catch (error) {
+        console.error("Cancel Order Error:", error);
+        res.json({
+            code: "error",
+            message: "Lỗi hệ thống!"
+        });
+    }
 };
 
 

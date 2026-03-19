@@ -6,6 +6,7 @@ import Service from "../../models/service.model";
 import Pet from "../../models/pet.model";
 import Role from "../../models/role.model";
 import BookingConfig from "../../models/booking-config.model";
+import AccountAdmin from "../../models/account-admin.model";
 import dayjs from "dayjs";
 import puppeteer from 'puppeteer';
 import moment from "moment";
@@ -15,6 +16,26 @@ import { findBestStaffForBooking, autoAssignPetsToStaff } from "../../helpers/bo
 const isOverlap = (start1: Date, end1: Date, start2: Date, end2: Date) => {
     return start1 < end2 && start2 < end1;
 };
+
+// [GET] /api/v1/client/booking/config
+export const getBookingConfig = async (req: Request, res: Response) => {
+    try {
+        const config = await BookingConfig.findOne({});
+        res.json({
+            code: 200,
+            data: config || {
+                bookingGracePeriod: 15,
+                bookingCancelPeriod: 60,
+                allowEarlyStartMinutes: 30,
+                autoCancelEnabled: false,
+                autoConfirmEnabled: false,
+                depositPercentage: 0
+            }
+        });
+    } catch (error) {
+        res.status(500).json({ code: 500, message: "Lỗi hệ thống" });
+    }
+}
 
 // [GET] /api/v1/client/time-slots
 export const getAvailableTimeSlots = async (req: Request, res: Response) => {
@@ -316,7 +337,8 @@ export const createBooking = async (req: Request, res: Response) => {
             serviceId,
             startTime,
             petIds = [],
-            notes
+            notes,
+            paymentMethod
         } = req.body;
 
         const userId = res.locals.accountUser?._id?.toString();
@@ -397,7 +419,7 @@ export const createBooking = async (req: Request, res: Response) => {
         let totalPrice = 0;
         const petPrices: { [key: string]: number } = {};
 
-        if (service.pricingType === "fixed") {
+        if (service.pricingType === "fixed" || !service.pricingType) {
             const price = service.basePrice || 0;
             totalPrice = price * numPets;
             pets.forEach(p => petPrices[p._id.toString()] = price);
@@ -419,6 +441,10 @@ export const createBooking = async (req: Request, res: Response) => {
                 totalPrice += price;
                 petPrices[pet._id.toString()] = price;
             }
+        } else {
+            const fallbackPrice = service.basePrice || 0;
+            totalPrice = fallbackPrice * numPets;
+            pets.forEach(p => petPrices[p._id.toString()] = fallbackPrice);
         }
 
         // 5. Tạo lịch đặt
@@ -428,6 +454,11 @@ export const createBooking = async (req: Request, res: Response) => {
             ...item,
             price: petPrices[item.petId.toString()] || 0
         }));
+
+        // Tính tiền cọc nếu có cấu hình
+        const depositPercentage = config?.depositPercentage || 0;
+        const depositAmount = Math.round((totalPrice * depositPercentage) / 100);
+        const remainingAmount = totalPrice - depositAmount;
 
         const newBooking = new Booking({
             code: bookingCode,
@@ -443,7 +474,10 @@ export const createBooking = async (req: Request, res: Response) => {
             notes,
             subTotal: totalPrice,
             total: totalPrice,
+            depositAmount,
+            remainingAmount,
             bookingStatus: autoConfirm ? "confirmed" : "pending",
+            paymentMethod: paymentMethod || "money",
             paymentStatus: "unpaid"
         });
 
@@ -490,6 +524,21 @@ export const cancelMyBooking = async (req: Request, res: Response) => {
             return res.status(400).json({
                 code: 400,
                 message: "Không thể hủy lịch đặt này"
+            });
+        }
+
+        if (["paid", "partially_paid"].includes(booking.paymentStatus)) {
+            booking.bookingStatus = "request_cancel";
+            booking.cancelledReason = reason || "Yêu cầu hủy lịch đã thanh toán";
+            booking.cancelledAt = new Date();
+            booking.cancelledBy = "customer";
+
+            await booking.save();
+
+            return res.json({
+                code: 200,
+                message: "Yêu cầu hủy đã được gửi! Admin sẽ kiểm tra và hoàn tiền sớm nhất",
+                data: booking
             });
         }
 
@@ -570,71 +619,71 @@ export const exportBookingPdf = async (req: Request, res: Response) => {
         }
 
         const html = `
-<!DOCTYPE html>
-<html lang="vi">
-<head>
-  <meta charset="UTF-8" />
-  <title>Phiếu dịch vụ ${booking.code}</title>
-  <style>
-    * { box-sizing: border-box; font-family: "Segoe UI", Arial, sans-serif; }
-    body { padding: 40px; background: #fff; color: #333; }
-    .header { display: flex; justify-content: space-between; border-bottom: 2px solid #f0f0f0; padding-bottom: 20px; }
-    .logo { color: #f97316; font-size: 24px; font-weight: bold; }
-    .info-section { margin-top: 30px; }
-    .info-title { font-size: 16px; font-weight: bold; color: #f97316; margin-bottom: 10px; border-bottom: 1px solid #f0f0f0; }
-    table { width: 100%; border-collapse: collapse; margin-top: 20px; }
-    th { background: #fafafa; padding: 12px; border: 1px solid #eee; text-align: left; }
-    td { padding: 12px; border: 1px solid #eee; }
-    .total-row { font-weight: bold; font-size: 18px; color: #f97316; }
-    .footer { margin-top: 50px; text-align: center; color: #888; font-size: 12px; }
-  </style>
-</head>
-<body>
-  <div class="header">
-    <div class="logo">TeddyPet Spa</div>
-    <div>
-      <p><strong>Mã:</strong> ${booking.code}</p>
-      <p><strong>Ngày đặt:</strong> ${dayjs(booking.createdAt).format("DD/MM/YYYY HH:mm")}</p>
-    </div>
-  </div>
-  <div class="info-section">
-    <div class="info-title">THÔNG TIN KHÁCH HÀNG</div>
-    <p><strong>Khách hàng:</strong> ${(booking.userId as any)?.fullName || "N/A"}</p>
-    <p><strong>Điện thoại:</strong> ${(booking.userId as any)?.phone || "N/A"}</p>
-  </div>
-  <div class="info-section">
-    <div class="info-title">CHI TIẾT DỊCH VỤ</div>
-    <table>
-      <thead>
-        <tr>
-          <th>Dịch vụ</th>
-          <th>Ngày hẹn</th>
-          <th>Giờ hẹn</th>
-          <th>Thú cưng</th>
-          <th>Giá tiền</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td>${(booking.serviceId as any)?.name || "N/A"}</td>
-          <td>${dayjs(booking.start).format("DD/MM/YYYY")}</td>
-          <td>${dayjs(booking.start).format("HH:mm")}</td>
-          <td>${(booking.petIds as any[]).map((p: any) => p?.name || "N/A").join(", ")}</td>
-          <td>${(booking.total || 0).toLocaleString("vi-VN")} đ</td>
-        </tr>
-      </tbody>
-    </table>
-  </div>
-  <div style="margin-top: 20px; text-align: right;">
-    <p class="total-row">Tổng cộng: ${(booking.total || 0).toLocaleString("vi-VN")} đ</p>
-  </div>
-  <div class="footer">
-    <p>Cảm ơn quý khách đã tin tưởng TeddyPet!</p>
-    <p>Địa chỉ: 123 Đường ABC, Quận X, TP. HCM</p>
-  </div>
-</body>
-</html>
-`;
+    <!DOCTYPE html>
+    <html lang="vi">
+    <head>
+        <meta charset="UTF-8" />
+        <title>Phiếu dịch vụ ${booking.code}</title>
+        <style>
+            * { box-sizing: border-box; font-family: "Segoe UI", Arial, sans-serif; }
+            body { padding: 40px; background: #fff; color: #333; }
+            .header { display: flex; justify-content: space-between; border-bottom: 2px solid #f0f0f0; padding-bottom: 20px; }
+            .logo { color: #f97316; font-size: 24px; font-weight: bold; }
+            .info-section { margin-top: 30px; }
+            .info-title { font-size: 16px; font-weight: bold; color: #f97316; margin-bottom: 10px; border-bottom: 1px solid #f0f0f0; }
+            table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+            th { background: #fafafa; padding: 12px; border: 1px solid #eee; text-align: left; }
+            td { padding: 12px; border: 1px solid #eee; }
+            .total-row { font-weight: bold; font-size: 18px; color: #f97316; }
+            .footer { margin-top: 50px; text-align: center; color: #888; font-size: 12px; }
+        </style>
+    </head>
+    <body>
+        <div class="header">
+            <div class="logo">TeddyPet Spa</div>
+            <div>
+                <p><strong>Mã:</strong> ${booking.code}</p>
+                <p><strong>Ngày đặt:</strong> ${dayjs(booking.createdAt).format("DD/MM/YYYY HH:mm")}</p>
+            </div>
+        </div>
+        <div class="info-section">
+            <div class="info-title">THÔNG TIN KHÁCH HÀNG</div>
+            <p><strong>Khách hàng:</strong> ${(booking.userId as any)?.fullName || "N/A"}</p>
+            <p><strong>Điện thoại:</strong> ${(booking.userId as any)?.phone || "N/A"}</p>
+        </div>
+        <div class="info-section">
+            <div class="info-title">CHI TIẾT DỊCH VỤ</div>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Dịch vụ</th>
+                        <th>Ngày hẹn</th>
+                        <th>Giờ hẹn</th>
+                        <th>Thú cưng</th>
+                        <th>Giá tiền</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>${(booking.serviceId as any)?.name || "N/A"}</td>
+                        <td>${dayjs(booking.start).format("DD/MM/YYYY")}</td>
+                        <td>${dayjs(booking.start).format("HH:mm")}</td>
+                        <td>${(booking.petIds as any[]).map((p: any) => p?.name || "N/A").join(", ")}</td>
+                        <td>${(booking.total || 0).toLocaleString("vi-VN")} đ</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+        <div style="margin-top: 20px; text-align: right;">
+            <p class="total-row">Tổng cộng: ${(booking.total || 0).toLocaleString("vi-VN")} đ</p>
+        </div>
+        <div class="footer">
+            <p>Cảm ơn quý khách đã tin tưởng TeddyPet!</p>
+            <p>Địa chỉ: 123 Đường ABC, Quận X, TP.HCM</p>
+        </div>
+    </body>
+    </html>
+    `;
         const browser = await puppeteer.launch();
         const page = await browser.newPage();
         await page.setContent(html, { waitUntil: 'networkidle0' });

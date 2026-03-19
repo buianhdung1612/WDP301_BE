@@ -21,6 +21,10 @@ const schema = new mongoose.Schema(
         autoConfirmEnabled: {
             type: Boolean,
             default: false
+        },
+        depositPercentage: {
+            type: Number,
+            default: 0
         }
     },
     {

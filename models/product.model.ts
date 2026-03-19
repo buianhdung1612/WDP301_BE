@@ -36,6 +36,11 @@ const schema = new mongoose.Schema(
             default: 0
         },
         search: String,
+        isFood: {
+            type: Boolean,
+            default: false
+        },
+        expiryDate: Date,
         deleted: {
             type: Boolean,
             default: false

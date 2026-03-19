@@ -391,7 +391,7 @@ export const orderDetail = async (req: Request, res: Response) => {
             _id: orderId,
             userId: userId,
             deleted: false
-        });
+        }).lean();
 
         if (!orderDetail) {
             return res.json({
@@ -400,11 +400,31 @@ export const orderDetail = async (req: Request, res: Response) => {
             });
         }
 
+        // Fetch reviews for this order
+        const Review = (await import("../../models/review.model")).default;
+        const reviews = await Review.find({
+            userId: userId,
+            orderId: orderId
+        }).select("orderItemId status");
+
+        const itemsWithReviewStatus = orderDetail.items.map((item: any) => {
+            const review = reviews.find(r => r.orderItemId.toString() === item._id.toString());
+            return {
+                ...item,
+                reviewed: !!review,
+                reviewStatus: review?.status || null
+            };
+        });
+
         return res.json({
             success: true,
-            order: orderDetail
+            order: {
+                ...orderDetail,
+                items: itemsWithReviewStatus
+            }
         });
     } catch (error) {
+        console.error(error);
         return res.status(500).json({
             success: false,
             message: "Lỗi hệ thống!"

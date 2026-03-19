@@ -7,6 +7,7 @@ import clientRoutes from "./routes/client/index.route";
 import { connectDB } from './configs/database.config';
 import { autoUpdateBookingStatuses } from './helpers/booking-job.helper';
 import { startCancellationTask } from './helpers/cancellation.task';
+import { startExpiryTask } from './helpers/expiry.task';
 
 // Load biến môi trường
 dotenv.config();
@@ -28,8 +29,7 @@ app.use(cookieParser());
 app.use(cors({
     origin: [
         'http://localhost:5173',
-        'http://127.0.0.1:5173',
-        'https://hyperdolichocephalic-aerodynamic-ashlee.ngrok-free.dev'
+        'http://127.0.0.1:5173'
     ],
     credentials: true
 }));
@@ -40,6 +40,6 @@ app.use('/api/v1/client', clientRoutes);
 
 app.listen(port, () => {
     startCancellationTask();
+    startExpiryTask();
     console.log(`Website đang chạy trên cổng ${port}`);
-    console.log(`Updated at ${new Date().toISOString()}`);
 })

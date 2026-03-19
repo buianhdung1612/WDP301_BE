@@ -20,9 +20,13 @@ export const index = async (req: Request, res: Response) => {
                 status: "active"
             }).lean();
             if (categoryRecord) {
-                // Tìm cả danh mục con nếu có (tùy chọn)
                 find.category = { $in: [categoryRecord._id] };
             }
+        } else if (req.query.category) {
+            const categoryIds = Array.isArray(req.query.category)
+                ? req.query.category
+                : [req.query.category];
+            find.category = { $in: categoryIds };
         }
 
         // 2. Lọc theo thương hiệu

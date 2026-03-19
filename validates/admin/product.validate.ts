@@ -13,7 +13,7 @@ export const createCategory = (req: Request, res: Response, next: NextFunction) 
         status: Joi.string().allow(''),
         avatar: Joi.string().allow(''),
         description: Joi.string().allow(''),
-    })
+    }).unknown(true)
 
     const { error } = schema.validate(req.body);
 
@@ -50,7 +50,9 @@ export const createPost = (req: Request, res: Response, next: NextFunction) => {
         stock: Joi.string().allow(''),
         attributes: Joi.string().allow(''),
         variants: Joi.string().allow(''),
-    });
+        isFood: Joi.any().allow('', true, false, 'true', 'false'),
+        expiryDate: Joi.any().allow(null, ''),
+    }).unknown(true);
 
     const { error } = schema.validate(req.body);
 

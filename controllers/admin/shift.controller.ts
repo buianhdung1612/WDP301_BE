@@ -19,14 +19,36 @@ export const index = async (req: Request, res: Response) => {
             ];
         }
 
-        const shifts = await Shift.find(filter)
-            .populate("departmentId")
-            .sort({ startTime: 1 });
+        if (req.query.keyword) {
+            filter.name = new RegExp(req.query.keyword as string, "i");
+        }
+
+        // Pagination
+        const limitItems = parseInt(req.query.limit as string) || 20;
+        const page = Math.max(1, parseInt(req.query.page as string) || 1);
+        const skip = (page - 1) * limitItems;
+
+        const [recordList, totalRecords] = await Promise.all([
+            Shift.find(filter)
+                .populate("departmentId")
+                .sort({ startTime: 1 })
+                .limit(limitItems)
+                .skip(skip),
+            Shift.countDocuments(filter)
+        ]);
 
         res.json({
             code: 200,
             message: "Danh sách ca làm việc",
-            data: shifts
+            data: {
+                recordList: recordList,
+                pagination: {
+                    totalRecords,
+                    totalPages: Math.ceil(totalRecords / limitItems),
+                    currentPage: page,
+                    limit: limitItems
+                }
+            }
         });
     } catch (error: any) {
         res.status(500).json({

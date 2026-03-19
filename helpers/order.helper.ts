@@ -27,17 +27,30 @@ export const refundOrderResources = async (orderCode: string) => {
                 if (product && product.variants && product.variants.length > 0) {
                     const variants = [...product.variants];
 
-                    // Tìm variant khớp dựa trên nhãn (label) hoặc giá trị
-                    // Trong Order model, variant được lưu là mảng chuỗi: ["Tên: Giá trị"]
+                    // Tìm variant khớp dựa trên nhãn (label)
+                    // Trong Order model, item.variant là mảng chuỗi: ["Tên thuộc tính: Nhãn"] (VD: ["Kích cỡ: M", "Màu sắc: Đỏ"])
                     const vIndex = variants.findIndex((v: any) => {
-                        return v.attributeValue.every((attr: any) => {
-                            const labelPair = `${attr.name}: ${attr.value}`;
-                            return item.variant.includes(labelPair);
+                        if (!v.attributeValue || v.attributeValue.length === 0) return false;
+
+                        // Tách lấy phần "Nhãn" từ item.variant để so sánh
+                        // VD: "Kích cỡ: M" -> ["Kích cỡ", "M"] -> lấy "M"
+                        const itemLabels = item.variant.map((str: string) => {
+                            const parts = str.split(": ");
+                            return parts.length > 1 ? parts[1] : str;
+                        });
+
+                        // Kiểm tra xem tất cả các nhãn của variant này có nằm trong danh sách nhãn của item không
+                        return v.attributeValue.length === itemLabels.length && v.attributeValue.every((attr: any) => {
+                            // attr.label là nhãn hiển thị trong DB (VD: "M", "Đỏ")
+                            return itemLabels.includes(attr.label);
                         });
                     });
 
                     if (vIndex !== -1) {
-                        variants[vIndex].stock = (parseInt(variants[vIndex].stock) || 0) + (item.quantity || 0);
+                        // Tăng stock của variant
+                        const currentStock = parseInt(variants[vIndex].stock) || 0;
+                        variants[vIndex].stock = currentStock + (item.quantity || 0);
+
                         await Product.updateOne({ _id: item.productId }, { variants });
                         refundedVariant = true;
                     }

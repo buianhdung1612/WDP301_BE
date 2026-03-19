@@ -454,7 +454,9 @@ export const listBookings = async (req: Request, res: Response) => {
             "in-progress": 0,
             completed: 0,
             cancelled: 0,
-            delayed: 0
+            delayed: 0,
+            returned: 0,
+            request_cancel: 0
         };
 
         counts.forEach((item: any) => {
@@ -1096,6 +1098,14 @@ export const updateBooking = async (req: Request, res: Response) => {
             }
         }
 
+        // Kiểm tra không cho chuyển từ paid/partially_paid sang unpaid
+        if (["paid", "partially_paid"].includes(booking.paymentStatus) && req.body.paymentStatus === "unpaid") {
+            return res.status(400).json({
+                code: 400,
+                message: "Không thể chuyển đơn đã thanh toán (toàn bộ hoặc một phần) về chưa thanh toán!"
+            });
+        }
+
         const allowedUpdates = [
             "serviceId", "userId", "petIds", "notes",
             "start", "end", "staffIds", "petStaffMap", "discount",
@@ -1107,6 +1117,14 @@ export const updateBooking = async (req: Request, res: Response) => {
                 (booking as any)[update] = req.body[update];
             }
         });
+
+        // Tự động hủy lịch nếu đã hoàn tiền (refunded) và chưa bị hủy trước đó
+        if (booking.paymentStatus === "refunded" && booking.bookingStatus !== "cancelled") {
+            booking.bookingStatus = "cancelled";
+            booking.cancelledReason = "Hủy tự động do hoàn tiền";
+            booking.cancelledAt = new Date();
+            booking.cancelledBy = "system";
+        }
 
         // Sync staffId if staffIds updated
         if (req.body.staffId && (!req.body.staffIds || req.body.staffIds.length === 0)) {
