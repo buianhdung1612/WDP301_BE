@@ -232,8 +232,8 @@ async function getBoardingHotelStaffAccounts(staffIds?: string[]) {
         .lean();
 }
 
-const getCurrentBoardingStaffId = (req: Request) => normalizeObjectIdString((req as any).user?.id);
-const getCurrentBoardingStaffName = (req: Request) => String((req as any).user?.fullName || (req as any).user?.name || "").trim();
+const getCurrentBoardingStaffId = (req: Request, res: Response) => normalizeObjectIdString(res.locals.accountAdmin?._id || (req as any).user?.id);
+const getCurrentBoardingStaffName = (req: Request, res: Response) => String(res.locals.accountAdmin?.fullName || (req as any).user?.fullName || (req as any).user?.name || "").trim();
 
 const filterCareItemsByStaff = (items: any[], staffId: string) => {
     if (!Array.isArray(items) || !staffId) return [];
@@ -767,7 +767,7 @@ export const listBoardingBookings = async (req: Request, res: Response) => {
         const { search, status, paymentStatus } = req.query as Record<string, string>;
         const filter: any = { deleted: false };
         const canAssignHotelStaff = canAssignBoardingHotelStaff(req, res);
-        const currentStaffId = getCurrentBoardingStaffId(req);
+        const currentStaffId = getCurrentBoardingStaffId(req, res);
 
         if (status) filter.boardingStatus = status;
         if (paymentStatus) filter.paymentStatus = paymentStatus;
@@ -790,14 +790,12 @@ export const listBoardingBookings = async (req: Request, res: Response) => {
             });
         }
 
-        if (!canAssignHotelStaff) {
-            if (!currentStaffId) {
-                return res.status(403).json({ code: 403, message: "Ban khong co quyen xem lich cham soc nay" });
-            }
+        if (!canAssignHotelStaff && currentStaffId) {
             andConditions.push({
                 $or: [
                     { "feedingSchedule.staffId": currentStaffId },
                     { "exerciseSchedule.staffId": currentStaffId },
+                    { "boardingStatus": "checked-in" } // allow seeing all in-house pets
                 ]
             });
         }
@@ -844,7 +842,10 @@ export const listBoardingBookings = async (req: Request, res: Response) => {
         });
 
         const processedList = recordList.map((booking: any) => {
-            const visibleBooking = !canAssignHotelStaff && currentStaffId
+            // For staff management, we allow seeing all care items of checked-in pets
+            // Otherwise, we filter only items assigned to the staff member
+            // BUT: if we want staff to take care of ANY checked-in pet, we don't filter.
+            const visibleBooking = (!canAssignHotelStaff && currentStaffId && booking.boardingStatus !== 'checked-in')
                 ? filterBookingCareScheduleForStaffView(booking, currentStaffId)
                 : (booking?.toObject ? booking.toObject() : booking);
 
@@ -852,9 +853,7 @@ export const listBoardingBookings = async (req: Request, res: Response) => {
 
             return {
                 ...visibleBooking,
-                scheduleSummary,
-                feedingSchedule: undefined,
-                exerciseSchedule: undefined,
+                scheduleSummary
             };
         });
 
@@ -885,7 +884,7 @@ export const getBoardingBookingDetail = async (req: Request, res: Response) => {
         }
 
         const canAssignHotelStaff = canAssignBoardingHotelStaff(req, res);
-        const currentStaffId = getCurrentBoardingStaffId(req);
+        const currentStaffId = getCurrentBoardingStaffId(req, res);
 
         const booking = await BoardingBooking.findOne({ _id: id, deleted: false })
             .populate("userId", "fullName phone email avatar")
@@ -902,10 +901,6 @@ export const getBoardingBookingDetail = async (req: Request, res: Response) => {
                 return res.status(403).json({ code: 403, message: "Ban khong co quyen xem lich cham soc nay" });
             }
             const filteredBooking = filterBookingCareScheduleForStaffView(booking, currentStaffId);
-            const hasAssignedItems = (filteredBooking.feedingSchedule?.length || 0) + (filteredBooking.exerciseSchedule?.length || 0) > 0;
-            if (!hasAssignedItems) {
-                return res.status(403).json({ code: 403, message: "Ban khong co quyen xem lich cham soc nay" });
-            }
             return res.json({ code: 200, data: filteredBooking });
         }
 
@@ -1022,8 +1017,8 @@ export const updateBoardingCareSchedule = async (req: Request, res: Response) =>
         if (!booking) return res.status(404).json({ code: 404, message: "Khong tim thay don khach san" });
 
         const canAssignHotelStaff = canAssignBoardingHotelStaff(req, res);
-        const currentStaffId = getCurrentBoardingStaffId(req);
-        const currentStaffName = getCurrentBoardingStaffName(req);
+        const currentStaffId = getCurrentBoardingStaffId(req, res);
+        const currentStaffName = getCurrentBoardingStaffName(req, res);
 
         if (!canAssignHotelStaff && !currentStaffId) {
             return res.status(403).json({ code: 403, message: "Ban khong co quyen cap nhat lich cham soc nay" });
