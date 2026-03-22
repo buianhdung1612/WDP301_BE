@@ -67,7 +67,7 @@ export const create = async (req: Request, res: Response) => {
 export const list = async (req: Request, res: Response) => {
     try {
         const find: any = {
-            deleted: false
+            deleted: req.query.is_trash === "true" ? true : false
         };
 
         const keyword = req.query.keyword || req.query.q;
@@ -89,13 +89,14 @@ export const list = async (req: Request, res: Response) => {
         const page = Math.max(1, parseInt(req.query.page as string) || 1);
         const skip = (page - 1) * limitItems;
 
-        const [recordList, totalRecords] = await Promise.all([
+        const [recordList, totalRecords, deletedCount] = await Promise.all([
             Coupon.find(find)
                 .sort({ createdAt: -1 })
                 .limit(limitItems)
                 .skip(skip)
                 .lean(),
-            Coupon.countDocuments(find)
+            Coupon.countDocuments(find),
+            Coupon.countDocuments({ deleted: true })
         ]);
 
         const formattedList = recordList.map(item => ({
@@ -117,7 +118,8 @@ export const list = async (req: Request, res: Response) => {
                     totalRecords,
                     totalPages: Math.ceil(totalRecords / limitItems),
                     currentPage: page,
-                    limit: limitItems
+                    limit: limitItems,
+                    deletedCount
                 }
             }
         });
@@ -310,3 +312,23 @@ export const deletePatch = async (req: Request, res: Response) => {
         });
     }
 }
+
+export const restore = async (req: Request, res: Response) => {
+    try {
+        const id = req.params.id;
+        await Coupon.updateOne({ _id: id }, { $set: { deleted: false }, $unset: { deletedAt: 1 } });
+        res.json({ success: true, message: "Khôi phục mã giảm giá thành công!" });
+    } catch (e) {
+        res.status(500).json({ success: false, message: "Lỗi hệ thống!" });
+    }
+};
+
+export const forceDelete = async (req: Request, res: Response) => {
+    try {
+        const id = req.params.id;
+        await Coupon.deleteOne({ _id: id });
+        res.json({ success: true, message: "Xóa vĩnh viễn mã giảm giá thành công!" });
+    } catch (e) {
+        res.status(500).json({ success: false, message: "Lỗi hệ thống!" });
+    }
+};

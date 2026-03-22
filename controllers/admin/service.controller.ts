@@ -14,7 +14,7 @@ export const categoryList = async (req: Request, res: Response) => {
         const limit = parseInt(req.query.limit as string) || 20;
         const skip = (page - 1) * limit;
 
-        const find: any = { deleted: false };
+        const find: any = { deleted: req.query.is_trash === "true" ? true : false };
 
         if (req.query.keyword) {
             const keyword = convertToSlug(`${req.query.keyword}`).replace(/-/g, " ");
@@ -25,12 +25,13 @@ export const categoryList = async (req: Request, res: Response) => {
             find.status = req.query.status;
         }
 
-        const [categories, total] = await Promise.all([
+        const [categories, total, deletedCount] = await Promise.all([
             ServiceCategory.find(find)
                 .sort({ createdAt: -1 })
                 .skip(skip)
                 .limit(limit),
-            ServiceCategory.countDocuments(find)
+            ServiceCategory.countDocuments(find),
+            ServiceCategory.countDocuments({ deleted: true })
         ]);
 
         res.json({
@@ -42,7 +43,8 @@ export const categoryList = async (req: Request, res: Response) => {
                     currentPage: page,
                     limit,
                     total,
-                    totalPages: Math.ceil(total / limit)
+                    totalPages: Math.ceil(total / limit),
+                    deletedCount
                 }
             }
         });
@@ -244,6 +246,24 @@ export const categoryDelete = async (req: Request, res: Response) => {
     }
 };
 
+export const categoryRestore = async (req: Request, res: Response) => {
+    try {
+        await ServiceCategory.updateOne({ _id: req.params.id }, { $set: { deleted: false }, $unset: { deletedAt: 1 } });
+        res.json({ code: 200, message: "Khôi phục danh mục thành công!" });
+    } catch (e) {
+        res.status(500).json({ code: 500, message: "Lỗi hệ thống!" });
+    }
+};
+
+export const categoryForceDelete = async (req: Request, res: Response) => {
+    try {
+        await ServiceCategory.deleteOne({ _id: req.params.id });
+        res.json({ code: 200, message: "Xóa vĩnh viễn danh mục thành công!" });
+    } catch (e) {
+        res.status(500).json({ code: 500, message: "Lỗi hệ thống!" });
+    }
+};
+
 
 // --- SERVICE CONTROLLERS ---
 
@@ -254,7 +274,7 @@ export const serviceList = async (req: Request, res: Response) => {
         const limit = parseInt(req.query.limit as string) || 10;
         const skip = (page - 1) * limit;
 
-        const find: any = { deleted: false };
+        const find: any = { deleted: req.query.is_trash === "true" ? true : false };
 
         const keyword = req.query.keyword || req.query.q;
         if (keyword) {
@@ -271,13 +291,14 @@ export const serviceList = async (req: Request, res: Response) => {
             find.status = req.query.status;
         }
 
-        const [services, total] = await Promise.all([
+        const [services, total, deletedCount] = await Promise.all([
             Service.find(find)
                 .populate("categoryId", "name")
                 .skip(skip)
                 .limit(limit)
                 .sort({ createdAt: -1 }),
-            Service.countDocuments(find)
+            Service.countDocuments(find),
+            Service.countDocuments({ deleted: true })
         ]);
 
         res.json({
@@ -289,7 +310,8 @@ export const serviceList = async (req: Request, res: Response) => {
                     currentPage: page,
                     limit,
                     total,
-                    totalPages: Math.ceil(total / limit)
+                    totalPages: Math.ceil(total / limit),
+                    deletedCount
                 }
             }
         });
@@ -495,5 +517,23 @@ export const serviceDelete = async (req: Request, res: Response) => {
             code: 500,
             message: "Lỗi khi xóa dịch vụ"
         });
+    }
+};
+
+export const serviceRestore = async (req: Request, res: Response) => {
+    try {
+        await Service.updateOne({ _id: req.params.id }, { $set: { deleted: false }, $unset: { deletedAt: 1 } });
+        res.json({ code: 200, message: "Khôi phục dịch vụ thành công!" });
+    } catch (e) {
+        res.status(500).json({ code: 500, message: "Lỗi hệ thống!" });
+    }
+};
+
+export const serviceForceDelete = async (req: Request, res: Response) => {
+    try {
+        await Service.deleteOne({ _id: req.params.id });
+        res.json({ code: 200, message: "Xóa vĩnh viễn dịch vụ thành công!" });
+    } catch (e) {
+        res.status(500).json({ code: 500, message: "Lỗi hệ thống!" });
     }
 };

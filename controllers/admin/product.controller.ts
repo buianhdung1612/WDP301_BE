@@ -14,13 +14,23 @@ import { handleProductExpiry } from '../../helpers/expiry.helper';
 export const category = async (req: Request, res: Response) => {
     try {
         const find: any = {
-            deleted: false
+            deleted: req.query.is_trash === "true" ? true : false
         };
 
         // Tìm kiếm
         if (req.query.keyword) {
-            const keyword = convertToSlug(`${req.query.keyword}`).replace(/-/g, " ");
-            find.search = new RegExp(keyword, "i");
+            const keyword = String(req.query.keyword);
+            const slugKeyword = convertToSlug(keyword).replace(/-/g, " ");
+            const regex = new RegExp(keyword, "i");
+            find.$or = [
+                { search: new RegExp(slugKeyword, "i") },
+                { name: regex }
+            ];
+        }
+
+        if (req.query.status) {
+            const statusArr = (req.query.status as string).split(',');
+            find.status = { $in: statusArr };
         }
 
         // Phân trang
@@ -28,13 +38,14 @@ export const category = async (req: Request, res: Response) => {
         const page = Math.max(1, parseInt(`${req.query.page}`) || 1);
         const skip = (page - 1) * limitItems;
 
-        const [recordList, totalRecords] = await Promise.all([
+        const [recordList, totalRecords, deletedCount] = await Promise.all([
             CategoryProduct.find(find)
                 .sort({ createdAt: "desc" })
                 .limit(limitItems)
                 .skip(skip)
                 .lean(),
-            CategoryProduct.countDocuments(find)
+            CategoryProduct.countDocuments(find),
+            CategoryProduct.countDocuments({ deleted: true })
         ]);
 
         const parentIds = recordList
@@ -68,7 +79,8 @@ export const category = async (req: Request, res: Response) => {
                     totalRecords,
                     totalPages: Math.ceil(totalRecords / limitItems),
                     currentPage: page,
-                    limit: limitItems
+                    limit: limitItems,
+                    deletedCount
                 }
             }
         });
@@ -105,32 +117,25 @@ export const getCategoryTree = async (req: Request, res: Response) => {
 
 export const createCategory = async (req: Request, res: Response) => {
     try {
+        // 1. Generate slug
         let slug = req.body.slug || convertToSlug(req.body.name);
-
-        let slugCheck = await CategoryProduct.findOne({
-            slug: slug,
-            deleted: false
-        });
-
+        let slugCheck = await CategoryProduct.findOne({ slug, deleted: false });
         let count = 1;
+
         const originalSlug = slug;
         while (slugCheck) {
             slug = `${originalSlug}-${count}`;
-            slugCheck = await CategoryProduct.findOne({
-                slug: slug,
-                deleted: false
-            });
+            slugCheck = await CategoryProduct.findOne({ slug, deleted: false });
             count++;
         }
+
+        req.body.slug = slug;
+        req.body.search = convertToSlug(req.body.name).replace(/-/g, " ");
 
         // Nếu parent là chuỗi rỗng hoặc "null", chuyển về undefined/null để database nhận diện đúng là cấp cha
         if (!req.body.parent || req.body.parent === "") {
             delete req.body.parent;
         }
-
-        req.body.search = convertToSlug(req.body.name).replace(/-/g, " ");
-
-        req.body.slug = slug;
 
         const newRecord = new CategoryProduct(req.body);
         await newRecord.save();
@@ -188,27 +193,20 @@ export const editCategory = async (req: Request, res: Response) => {
 
         if (req.body.slug) {
             let slug = req.body.slug;
-            let slugCheck = await CategoryProduct.findOne({
-                _id: { $ne: id },
-                slug: slug,
-                deleted: false
-            });
-
+            let slugCheck = await CategoryProduct.findOne({ _id: { $ne: id }, slug: slug, deleted: false }).lean();
             let count = 1;
             const originalSlug = slug;
             while (slugCheck) {
                 slug = `${originalSlug}-${count}`;
-                slugCheck = await CategoryProduct.findOne({
-                    _id: { $ne: id },
-                    slug: slug,
-                    deleted: false
-                });
+                slugCheck = await CategoryProduct.findOne({ _id: { $ne: id }, slug: slug, deleted: false }).lean();
                 count++;
             }
             req.body.slug = slug;
         }
 
-        req.body.search = convertToSlug(req.body.name || "").replace(/-/g, " ");
+        if (req.body.name) {
+            req.body.search = convertToSlug(req.body.name).replace(/-/g, " ");
+        }
 
         await CategoryProduct.updateOne({
             _id: id,
@@ -253,7 +251,7 @@ export const deleteCategory = async (req: Request, res: Response) => {
         if (hasProduct) {
             return res.status(400).json({
                 success: false,
-                message: "Không thể xóa danh mục này vì vẫn còn sản phẩm đang thuộc danh mục!"
+                message: "Không thể xóa danh mục này vì vẫn còn sản phẩm thuộc danh mục!"
             });
         }
 
@@ -261,26 +259,46 @@ export const deleteCategory = async (req: Request, res: Response) => {
             _id: id,
         }, {
             deleted: true,
-            deletedAt: Date.now()
-        })
+            deletedAt: Date.now(),
+            status: 'inactive'
+        });
 
         return res.json({
             success: true,
             message: "Xóa danh mục thành công!"
-        })
+        });
     } catch (error) {
         return res.status(400).json({
             success: false,
             message: "Id không hợp lệ!"
-        })
+        });
     }
-}
+};
+
+export const restoreCategory = async (req: Request, res: Response) => {
+    try {
+        await CategoryProduct.updateOne({ _id: req.params.id }, { $set: { deleted: false }, $unset: { deletedAt: 1 } });
+        res.json({ success: true, message: "Khôi phục danh mục thành công!" });
+    } catch (e) {
+        res.status(500).json({ success: false, message: "Lỗi hệ thống!" });
+    }
+};
+
+export const forceDeleteCategory = async (req: Request, res: Response) => {
+    try {
+        // Có thể cần kiểm tra guard ở đây nếu yêu cầu an toàn tuyệt đối
+        await CategoryProduct.deleteOne({ _id: req.params.id });
+        res.json({ success: true, message: "Xóa vĩnh viễn danh mục thành công!" });
+    } catch (e) {
+        res.status(500).json({ success: false, message: "Lỗi hệ thống!" });
+    }
+};
 
 // Sản phẩm
 export const list = async (req: Request, res: Response) => {
     try {
         const find: any = {
-            deleted: false
+            deleted: req.query.is_trash === "true" ? true : false
         };
 
         if (req.query.status && req.query.status !== 'all') {
@@ -294,13 +312,10 @@ export const list = async (req: Request, res: Response) => {
         const keyword = req.query.keyword || req.query.q;
         if (keyword) {
             const slugKeyword = convertToSlug(`${keyword}`).replace(/-/g, " ");
-            const cleanCode = String(keyword).replace(/^#/, "");
             const keywordRegex = new RegExp(String(keyword), "i");
-            const codeRegex = new RegExp(cleanCode, "i");
             find.$or = [
                 { search: new RegExp(slugKeyword, "i") },
-                { title: keywordRegex },
-                { code: codeRegex },
+                { name: keywordRegex },
                 { sku: keywordRegex }
             ];
         }
@@ -309,13 +324,24 @@ export const list = async (req: Request, res: Response) => {
         const page = Math.max(1, parseInt(`${req.query.page}`) || 1);
         const skip = (page - 1) * limitItems;
 
-        const [recordList, totalRecord] = await Promise.all([
+        const [
+            recordList,
+            totalRecord,
+            activeCount,
+            draftCount,
+            inactiveCount,
+            deletedCount
+        ] = await Promise.all([
             Product.find(find)
                 .sort({ position: "desc" })
                 .limit(limitItems)
                 .skip(skip)
                 .lean(),
-            Product.countDocuments(find)
+            Product.countDocuments(find),
+            Product.countDocuments({ status: 'active', deleted: false }),
+            Product.countDocuments({ status: 'draft', deleted: false }),
+            Product.countDocuments({ status: 'inactive', deleted: false }),
+            Product.countDocuments({ deleted: true })
         ]);
 
         // Get category names
@@ -352,7 +378,11 @@ export const list = async (req: Request, res: Response) => {
                     totalRecords: totalRecord,
                     totalPages: Math.ceil(totalRecord / limitItems),
                     currentPage: page,
-                    limit: limitItems
+                    limit: limitItems,
+                    activeCount,
+                    draftCount,
+                    inactiveCount,
+                    deletedCount
                 }
             }
         });
@@ -479,6 +509,10 @@ export const createPost = async (req: Request, res: Response) => {
         } else {
             req.body.isFood = false;
             req.body.expiryDate = null;
+        }
+
+        if (req.body.name) {
+            req.body.search = convertToSlug(req.body.name).replace(/-/g, " ");
         }
 
         const newRecord = new Product(req.body);
@@ -683,6 +717,7 @@ export const deletePatch = async (req: Request, res: Response) => {
         }, {
             deleted: true,
             deletedAt: new Date(),
+            status: 'inactive'
         });
 
         return res.json({
@@ -699,28 +734,55 @@ export const deletePatch = async (req: Request, res: Response) => {
     }
 }
 
+export const restoreProduct = async (req: Request, res: Response) => {
+    try {
+        await Product.updateOne({ _id: req.params.id }, { $set: { deleted: false }, $unset: { deletedAt: 1 } });
+        res.json({ success: true, message: "Khôi phục sản phẩm thành công!" });
+    } catch (e) {
+        res.status(500).json({ success: false, message: "Lỗi hệ thống!" });
+    }
+};
+
+export const forceDeleteProduct = async (req: Request, res: Response) => {
+    try {
+        await Product.deleteOne({ _id: req.params.id });
+        res.json({ success: true, message: "Xóa vĩnh viễn sản phẩm thành công!" });
+    } catch (e) {
+        res.status(500).json({ success: false, message: "Lỗi hệ thống!" });
+    }
+};
+
 // Thuộc tính
 export const getAttributeList = async (req: Request, res: Response) => {
     try {
+        const isTrash = req.query.is_trash === "true";
         const find: any = {
-            deleted: false
+            deleted: isTrash
         };
 
         if (req.query.keyword) {
-            const keyword = convertToSlug(`${req.query.keyword}`).replace(/-/g, " ");
-            find.search = new RegExp(keyword, "i");
+            const keyword = String(req.query.keyword).trim();
+            const slugKeyword = convertToSlug(keyword).replace(/-/g, " ");
+            const keywordRegex = new RegExp(keyword, "i");
+            const slugRegex = new RegExp(slugKeyword, "i");
+
+            find.$or = [
+                { name: keywordRegex },
+                { search: slugRegex }
+            ];
         }
 
-        const limitItems = 20;
+        const limitItems = parseInt(`${req.query.limit}`) || 20;
         const page = Math.max(1, parseInt(`${req.query.page}`) || 1);
         const skip = (page - 1) * limitItems;
 
-        const [recordList, totalRecords] = await Promise.all([
+        const [recordList, totalRecords, deletedCount] = await Promise.all([
             AttributeProduct.find(find)
                 .sort({ createdAt: "desc" })
                 .limit(limitItems)
                 .skip(skip),
-            AttributeProduct.countDocuments(find)
+            AttributeProduct.countDocuments(find),
+            AttributeProduct.countDocuments({ deleted: true })
         ]);
 
         return res.json({
@@ -732,7 +794,8 @@ export const getAttributeList = async (req: Request, res: Response) => {
                     totalRecords,
                     totalPages: Math.ceil(totalRecords / limitItems),
                     currentPage: page,
-                    limit: limitItems
+                    limit: limitItems,
+                    deletedCount
                 }
             }
         });
@@ -746,7 +809,7 @@ export const getAttributeList = async (req: Request, res: Response) => {
 
 export const createAttribute = async (req: Request, res: Response) => {
     try {
-        req.body.search = convertToSlug(`${req.body.name}`).replace(/-/g, " ");
+        req.body.search = convertToSlug(req.body.name).replace(/-/g, " ");
 
         const newRecord = new AttributeProduct(req.body);
         await newRecord.save();
@@ -850,6 +913,40 @@ export const deleteAttribute = async (req: Request, res: Response) => {
         return res.status(400).json({
             success: false,
             message: "Id không hợp lệ!"
+        });
+    }
+}
+
+export const restoreAttribute = async (req: Request, res: Response) => {
+    try {
+        const id = req.params.id;
+        await AttributeProduct.updateOne({ _id: id }, { deleted: false });
+
+        return res.json({
+            success: true,
+            message: "Khôi phục thuộc tính thành công!"
+        });
+    } catch (error) {
+        return res.status(400).json({
+            success: false,
+            message: "Lỗi khôi phục thuộc tính!"
+        });
+    }
+}
+
+export const forceDeleteAttribute = async (req: Request, res: Response) => {
+    try {
+        const id = req.params.id;
+        await AttributeProduct.deleteOne({ _id: id });
+
+        return res.json({
+            success: true,
+            message: "Xóa vĩnh viễn thuộc tính thành công!"
+        });
+    } catch (error) {
+        return res.status(400).json({
+            success: false,
+            message: "Lỗi xóa vĩnh viễn thuộc tính!"
         });
     }
 }

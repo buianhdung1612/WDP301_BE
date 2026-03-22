@@ -22,6 +22,8 @@ router.patch(
     articleController.editCategory
 );
 router.patch('/category/delete/:id', checkPermission("blog_category_delete"), articleController.deleteCategory);
+router.patch('/category/restore/:id', checkPermission("blog_category_delete"), articleController.restoreCategory);
+router.delete('/category/force-delete/:id', checkPermission("blog_category_delete"), articleController.forceDeleteCategory);
 
 // Bài viết
 router.get('/list', checkPermission("blog_view"), articleController.list);
@@ -40,5 +42,7 @@ router.patch(
     articleController.edit
 );
 router.patch('/delete/:id', checkPermission("blog_delete"), articleController.deleteBlog);
+router.patch('/restore/:id', checkPermission("blog_delete"), articleController.restoreBlog);
+router.delete('/force-delete/:id', checkPermission("blog_delete"), articleController.forceDeleteBlog);
 
 export default router;

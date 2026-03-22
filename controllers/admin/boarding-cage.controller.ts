@@ -74,8 +74,8 @@ const normalizeImageList = (value: unknown): string[] => {
 // [GET] /api/v1/admin/boarding-cage
 export const listBoardingCages = async (req: Request, res: Response) => {
     try {
-        const { search, type, size, status } = req.query as Record<string, string>;
-        const filter: any = { deleted: false };
+        const { search, type, size, status, is_trash } = req.query as Record<string, string>;
+        const filter: any = { deleted: is_trash === "true" ? true : false };
 
         if (type) filter.type = type;
         if (size) {
@@ -94,12 +94,13 @@ export const listBoardingCages = async (req: Request, res: Response) => {
         const limit = parseInt(req.query.limit as string) || 20;
         const skip = (page - 1) * limit;
 
-        const [recordList, totalRecords] = await Promise.all([
+        const [recordList, totalRecords, deletedCount] = await Promise.all([
             BoardingCage.find(filter)
                 .sort({ createdAt: -1 })
                 .skip(skip)
                 .limit(limit),
-            BoardingCage.countDocuments(filter)
+            BoardingCage.countDocuments(filter),
+            BoardingCage.countDocuments({ deleted: true })
         ]);
 
         return res.json({
@@ -110,7 +111,8 @@ export const listBoardingCages = async (req: Request, res: Response) => {
                     totalRecords,
                     totalPages: Math.ceil(totalRecords / limit),
                     currentPage: page,
-                    limit
+                    limit,
+                    deletedCount
                 }
             }
         });
@@ -228,5 +230,25 @@ export const deleteBoardingCage = async (req: Request, res: Response) => {
         return res.json({ code: 200, message: "Xóa chuồng thành công" });
     } catch (error: any) {
         return res.status(500).json({ code: 500, message: error.message || "Lỗi hệ thống" });
+    }
+};
+
+export const restoreBoardingCage = async (req: Request, res: Response) => {
+    try {
+        const id = pickParam(req.params.id);
+        await BoardingCage.updateOne({ _id: id }, { $set: { deleted: false }, $unset: { deletedAt: 1 } });
+        res.json({ code: 200, message: "Khôi phục chuồng thành công!" });
+    } catch (e: any) {
+        res.status(500).json({ code: 500, message: e.message || "Lỗi hệ thống!" });
+    }
+};
+
+export const forceDeleteBoardingCage = async (req: Request, res: Response) => {
+    try {
+        const id = pickParam(req.params.id);
+        await BoardingCage.deleteOne({ _id: id });
+        res.json({ code: 200, message: "Xóa vĩnh viễn chuồng thành công!" });
+    } catch (e: any) {
+        res.status(500).json({ code: 500, message: e.message || "Lỗi hệ thống!" });
     }
 };

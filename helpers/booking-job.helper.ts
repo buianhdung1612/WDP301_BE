@@ -1,5 +1,6 @@
 import Booking from "../models/booking.model";
 import BookingConfig from "../models/booking-config.model";
+import Notification from "../models/notification.model";
 
 export const autoUpdateBookingStatuses = async () => {
     try {
@@ -36,35 +37,66 @@ export const autoUpdateBookingStatuses = async () => {
             );
         }
 
-        // 3. Tự động hoàn thành nếu đang in-progress và quá maxDuration
+        // 3. Tự động hoàn thành nếu quá maxDuration (HOẶC flagged OVERRUN)
         const inProgressBookings = await Booking.find({
             bookingStatus: "in-progress",
             deleted: false
-        }).populate("serviceId");
+        }).populate('serviceId');
 
         for (const booking of inProgressBookings) {
-            const service = booking.serviceId as any;
-            const maxDuration = (service?.maxDuration && service.maxDuration > 0) ? service.maxDuration : (service?.duration || 60);
-            const actualStart = booking.actualStart ? new Date(booking.actualStart) : null;
+            const b = booking as any;
+            const now = new Date();
+            const service = b.serviceId as any;
 
-            if (actualStart) {
-                const deadline = new Date(actualStart.getTime() + maxDuration * 60000);
-                if (now > deadline) {
-                    await Booking.updateOne(
-                        { _id: booking._id },
-                        {
-                            $set: {
-                                bookingStatus: "completed",
-                                completedAt: now,
-                                "petStaffMap.$[elem].status": "completed",
-                                "petStaffMap.$[elem].completedAt": now
-                            }
-                        },
-                        {
-                            arrayFilters: [{ "elem.status": { $ne: "completed" } }]
-                        }
-                    );
+            // Lấy maxDuration từ service hoặc mặc định 120p
+            const maxDuration = (service?.maxDuration && service.maxDuration > 0)
+                ? service.maxDuration
+                : (service?.duration || 60);
+
+            const startVal = b.actualStart || b.start;
+            if (!startVal) continue;
+
+            const startTime = new Date(startVal);
+            const deadline = new Date(startTime.getTime() + maxDuration * 60 * 1000);
+
+            // Nếu quá deadline (maxDuration), hệ thống đánh dấu Overrun
+            if (now > deadline && !b.isOverrun) {
+                await Booking.updateOne(
+                    { _id: b._id },
+                    { $set: { isOverrun: true } }
+                );
+
+                // Gửi thông báo socket & Lưu Database
+                const notificationContent = `Lịch đặt ${booking.code} đã bị quá giờ!`;
+
+                await Notification.create({
+                    title: "Cảnh báo quá giờ",
+                    content: notificationContent,
+                    type: "overrun",
+                    link: `/admin/booking/edit/${booking._id}`,
+                    metadata: {
+                        bookingId: booking._id,
+                        bookingCode: booking.code
+                    }
+                });
+
+                if ((global as any).io) {
+                    (global as any).io.to('admin').emit('overrun-alert', {
+                        bookingId: booking._id,
+                        bookingCode: booking.code,
+                        staffIds: booking.staffIds,
+                        message: notificationContent
+                    });
                 }
+
+                // Cập nhật expectedFinish mới để giữ slot bận (đẩy 10p)
+                const newExpectedFinish = new Date(now.getTime() + 10 * 60 * 1000);
+                await Booking.updateOne(
+                    { _id: booking._id },
+                    { $set: { expectedFinish: newExpectedFinish } }
+                );
+
+                console.log(`[JOB] Flagged Overrun for booking ${booking.code}`);
             }
         }
     } catch (error) {

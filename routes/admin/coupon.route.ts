@@ -21,5 +21,7 @@ router.patch(
     couponController.edit
 );
 router.patch('/delete/:id', checkPermission("coupon_delete"), couponController.deletePatch);
+router.patch('/restore/:id', checkPermission("coupon_delete"), couponController.restore);
+router.delete('/force-delete/:id', checkPermission("coupon_delete"), couponController.forceDelete);
 
 export default router;

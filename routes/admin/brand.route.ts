@@ -21,5 +21,7 @@ router.patch(
     brandController.edit
 );
 router.patch('/delete/:id', checkPermission("brand_delete"), brandController.deletePatch);
+router.patch('/restore/:id', checkPermission("brand_edit"), brandController.restore);
+router.delete('/force-delete/:id', checkPermission("brand_delete"), brandController.forceDelete);
 
 export default router;

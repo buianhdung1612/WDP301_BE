@@ -39,6 +39,11 @@ export const createPost = async (req: Request, res: Response) => {
         dataFinal.code = code;
 
         // Thêm các trường có sẵn
+        // The provided code edit includes React hooks (useNotifications, useMarkAsRead, etc.)
+        // which are not valid in an Express backend file.
+        // To maintain syntactical correctness and avoid breaking the application,
+        // these lines are not inserted.
+        // The original fields are kept as they are essential for order creation.
         dataFinal.fullName = req.body.fullName;
         dataFinal.phone = req.body.phone;
         dataFinal.address = req.body.address;
@@ -71,7 +76,37 @@ export const createPost = async (req: Request, res: Response) => {
                 const variantArr = [];
 
                 if (item.variant && item.variant.length > 0) {
-                    // Tìm đúng biến thể khớp trong danh sách
+                    // ── BIẾN THỂ: Atomic update ──
+                    // Xây điều kiện $all match từng cặp attrId+value trong attributeValue
+                    const elemsMatch = item.variant.map((v: any) => ({
+                        $elemMatch: { attrId: v.attrId, value: v.value }
+                    }));
+
+                    const variantUpdateResult = await Product.updateOne(
+                        {
+                            _id: item.productId,
+                            deleted: false,
+                            status: "active",
+                            variants: {
+                                $elemMatch: {
+                                    // Tìm đúng biến thể có đủ các giá trị attrId+value VÀ còn đủ stock
+                                    attributeValue: { $all: elemsMatch, $size: item.variant.length },
+                                    stock: { $gte: item.quantity }
+                                }
+                            }
+                        },
+                        { $inc: { "variants.$.stock": -item.quantity } } // Trừ nguyên tử
+                    );
+
+                    if (variantUpdateResult.modifiedCount === 0) {
+                        // Không match = biến thể không tồn tại HOẶC không đủ tồn kho
+                        return res.json({
+                            code: "error",
+                            message: `Sản phẩm "${productDetail.name}" (biến thể) không đủ số lượng tồn kho!`
+                        });
+                    }
+
+                    // Lấy price từ snapshot đã đọc trước đó (tránh query thêm)
                     const variantMatchedIndex = (productDetail.variants || []).findIndex((variantItem: any) => {
                         return (
                             variantItem.attributeValue.length === item.variant.length &&
@@ -81,64 +116,37 @@ export const createPost = async (req: Request, res: Response) => {
                             })
                         );
                     });
-
                     if (variantMatchedIndex !== -1) {
-                        const variantMatched = productDetail.variants[variantMatchedIndex];
+                        price = productDetail.variants[variantMatchedIndex].priceNew || 0;
+                    }
 
-                        // Kiểm tra stock biến thể
-                        if (variantMatched.stock < item.quantity) {
-                            return res.json({
-                                code: "error",
-                                message: `Sản phẩm "${productDetail.name}" (biến thể) không đủ số lượng tồn kho!`
-                            });
+                    for (const v of item.variant) {
+                        const attribute: any = await AttributeProduct
+                            .findOne({ _id: v.attrId })
+                            .select("name")
+                            .lean();
+                        if (attribute) {
+                            variantArr.push(`${attribute.name}: ${v.label}`);
                         }
-
-                        // Trừ stock biến thể
-                        const updatedVariants = [...productDetail.variants];
-                        updatedVariants[variantMatchedIndex].stock -= item.quantity;
-                        await Product.updateOne(
-                            { _id: item.productId },
-                            { variants: updatedVariants }
-                        );
-
-                        price = variantMatched.priceNew || 0;
-                        for (const v of item.variant) {
-                            const attribute: any = await AttributeProduct
-                                .findOne({
-                                    _id: v.attrId
-                                })
-                                .select("name")
-                                .lean();
-                            if (attribute) {
-                                variantArr.push(`${attribute.name}: ${v.label}`);
-                            }
-                        };
-                    } else {
-                        // Nếu không tìm thấy biến thể khớp, dùng giá gốc và trừ stock gốc
-                        if ((productDetail.stock || 0) < item.quantity) {
-                            return res.json({
-                                code: "error",
-                                message: `Sản phẩm "${productDetail.name}" không đủ số lượng tồn kho!`
-                            });
-                        }
-                        await Product.updateOne(
-                            { _id: item.productId },
-                            { $inc: { stock: -item.quantity } }
-                        );
-                        price = productDetail.priceNew || 0;
                     }
                 } else {
-                    // Không có biến thể
-                    if ((productDetail.stock || 0) < item.quantity) {
+                    // ── KHÔNG BIẾN THỂ: Atomic update ──
+                    const stockUpdateResult = await Product.updateOne(
+                        {
+                            _id: item.productId,
+                            deleted: false,
+                            status: "active",
+                            stock: { $gte: item.quantity } // Chỉ update nếu còn đủ hàng
+                        },
+                        { $inc: { stock: -item.quantity } } // Trừ nguyên tử
+                    );
+
+                    if (stockUpdateResult.modifiedCount === 0) {
                         return res.json({
                             code: "error",
                             message: `Sản phẩm "${productDetail.name}" không đủ số lượng tồn kho!`
                         });
                     }
-                    await Product.updateOne(
-                        { _id: item.productId },
-                        { $inc: { stock: -item.quantity } }
-                    );
                     price = productDetail.priceNew || 0;
                 }
 
@@ -330,6 +338,24 @@ export const createPost = async (req: Request, res: Response) => {
         // Lưu dữ liệu vào CSDL
         const newRecord = new Order(dataFinal);
         await newRecord.save();
+
+        // Tạo thông báo mới cho Admin
+        try {
+            const Notification = (await import("../../models/notification.model")).default;
+            await Notification.create({
+                senderId: dataFinal.userId || null,
+                type: "order",
+                title: "Đơn hàng sản phẩm mới",
+                content: `Đơn hàng mới ${dataFinal.code} từ ${dataFinal.fullName} - Tổng: ${dataFinal.total.toLocaleString("vi-VN")}đ`,
+                metadata: {
+                    orderId: newRecord._id,
+                    orderCode: dataFinal.code
+                },
+                status: "unread"
+            });
+        } catch (notifError) {
+            console.error("Lỗi tạo thông báo đơn hàng:", notifError);
+        }
 
         res.json({
             code: "success",
@@ -642,7 +668,7 @@ export const paymentVNPayResult = async (req: Request, res: Response) => {
                 if (booking) {
                     let updateData: any = {};
                     if (booking.depositAmount > 0 && booking.paymentStatus === "unpaid") {
-                        updateData.paymentStatus = "partially_paid";
+                        updateData.paymentStatus = (booking.depositAmount || 0) >= (booking.total || 0) ? "paid" : "partially_paid";
                         updateData.depositMethod = "vnpay";
                         updateData.bookingStatus = "confirmed";
                     } else {
