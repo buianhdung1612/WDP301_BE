@@ -11,7 +11,7 @@ type FeedingItem = {
     note: string;
     status: "pending";
     petType: "dog" | "cat" | "all";
-    staffId: null;
+    staffId: string | null;
     staffName: string;
     doneAt: null;
 };
@@ -23,7 +23,7 @@ type ExerciseItem = {
     note: string;
     status: "pending";
     petType: "dog" | "cat" | "all";
-    staffId: null;
+    staffId: string | null;
     staffName: string;
     doneAt: null;
 };
@@ -182,7 +182,9 @@ const appendHydrationNote = (feeding: FeedingItem[]): FeedingItem[] => {
     }));
 };
 
-export const buildDefaultBoardingCareSchedule = (pets: PetLite[]) => {
+export const buildDefaultBoardingCareSchedule = (pets: PetLite[], staff?: { staffId: string; staffName: string }) => {
+    const staffId = staff?.staffId || null;
+    const staffName = staff?.staffName || "";
     const safePets = Array.isArray(pets) ? pets : [];
     const dogs = safePets.filter((pet) => normalizePetType(pet?.type) === "dog");
     const cats = safePets.filter((pet) => normalizePetType(pet?.type) === "cat");
@@ -203,8 +205,8 @@ export const buildDefaultBoardingCareSchedule = (pets: PetLite[]) => {
         exerciseSchedule = exerciseSchedule.concat(buildCatExerciseTemplate());
     }
 
-    feedingSchedule = appendHydrationNote(feedingSchedule).slice(0, 30);
-    exerciseSchedule = exerciseSchedule.slice(0, 30);
+    feedingSchedule = appendHydrationNote(feedingSchedule).slice(0, 30).map((item) => ({ ...item, staffId, staffName }));
+    exerciseSchedule = exerciseSchedule.slice(0, 30).map((item) => ({ ...item, staffId: staffId as any, staffName }));
 
     return {
         feedingSchedule,
