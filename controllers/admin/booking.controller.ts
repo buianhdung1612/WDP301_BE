@@ -10,7 +10,7 @@ import BookingConfig from "../../models/booking-config.model";
 import BookingReview from "../../models/booking-review.model";
 import dayjs from "dayjs";
 import puppeteer from "puppeteer";
-import { autoUpdateBookingStatuses } from "../../helpers/booking-job.helper";
+import { autoUpdateBookingStatuses } from "../../jobs/booking.job";
 import { findBestStaffForBooking, autoAssignPetsToStaff } from "../../helpers/booking-assignment.helper";
 import { convertToSlug } from "../../helpers/slug.helper";
 

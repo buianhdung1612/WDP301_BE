@@ -7,9 +7,9 @@ import { Server } from 'socket.io';
 import adminRoutes from "./routes/admin/index.route";
 import clientRoutes from "./routes/client/index.route";
 import { connectDB } from './configs/database.config';
-import { startCancellationTask } from './helpers/cancellation.task';
-import { startExpiryTask } from './helpers/expiry.task';
-import { startNotificationTask } from './helpers/notification-job.helper';
+import { startCancellationTask } from './jobs/cancellation.job';
+import { startExpiryTask } from './jobs/expiry.job';
+import { startNotificationTask } from './jobs/notification.job';
 import { initSocket } from './sockets/index.socket';
 
 // Load biến môi trường

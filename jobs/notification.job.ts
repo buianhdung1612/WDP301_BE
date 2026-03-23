@@ -8,7 +8,7 @@ import cron from "node-cron";
  */
 export const scanProductsForNotifications = async () => {
     try {
-        console.log("[Job] Đang quét sản phẩm để tạo thông báo...");
+        console.log("[JOB-THÔNG BÁO] Đang quét sản phẩm để tạo thông báo...");
 
         // 1. Kiểm tra sản phẩm sắp hết hàng (Stock < 10)
         const lowStockProducts = await Product.find({
@@ -69,9 +69,9 @@ export const scanProductsForNotifications = async () => {
             }
         }
 
-        console.log("[Job] Hoàn tất quét sản phẩm.");
+        console.log("[JOB-THÔNG BÁO] Hoàn tất quét sản phẩm.");
     } catch (error) {
-        console.error("[Job] Lỗi quét sản phẩm:", error);
+        console.error("[JOB-THÔNG BÁO] Lỗi khi quét sản phẩm:", error);
     }
 };
 

@@ -1,10 +1,11 @@
+import cron from 'node-cron';
 import Product from '../models/product.model';
 import ExpiredProduct from '../models/expired-product.model';
 
 export const handleProductExpiry = async () => {
     try {
         const now = new Date();
-        console.log(`[EXPIRY-HELPER] Starting product expiry check at ${now.toISOString()}`);
+        console.log(`[JOB-HẾT HẠN] Bắt đầu kiểm tra sản phẩm hết hạn lúc ${now.toISOString()}`);
 
         // Tìm các sản phẩm thực phẩm đã hết hạn và đang hoạt động
         const expiredProducts = await Product.find({
@@ -44,11 +45,24 @@ export const handleProductExpiry = async () => {
             }
         }
 
-        console.log(`[EXPIRY-HELPER] Finished check. Found: ${results.totalFound}, Logged: ${results.logged}, Deactivated: ${results.deactivated}`);
+        console.log(`[JOB-HẾT HẠN] Hoàn tất. Tìm thấy: ${results.totalFound}, Đã log: ${results.logged}, Đã vô hiệu: ${results.deactivated}`);
         return results;
 
     } catch (error) {
-        console.error("[EXPIRY-HELPER] Error:", error);
+        console.error("[JOB-HẾT HẠN] Lỗi:", error);
         throw error;
     }
+};
+
+export const startExpiryTask = () => {
+    // Chạy mỗi 4 tiếng (vào phút 0 của các giờ 0, 4, 8, 12, 16, 20)
+    cron.schedule('0 */4 * * *', async () => {
+        try {
+            await handleProductExpiry();
+        } catch (error) {
+            console.error("[JOB-HẾT HẠN] Lỗi khi chạy cron:", error);
+        }
+    });
+
+    console.log("[JOB-HẾT HẠN] Đã lên lịch chạy mỗi 4 tiếng");
 };

@@ -8,7 +8,7 @@ import { convertToSlug } from '../../helpers/slug.helper';
 import Brand from '../../models/brand.model';
 import ExpiredProduct from '../../models/expired-product.model';
 import Order from '../../models/order.model';
-import { handleProductExpiry } from '../../helpers/expiry.helper';
+import { handleProductExpiry } from '../../jobs/expiry.job';
 
 // Danh mục sản phẩm
 export const category = async (req: Request, res: Response) => {
