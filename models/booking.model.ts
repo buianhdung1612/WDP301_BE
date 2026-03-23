@@ -82,6 +82,7 @@ const schema = new mongoose.Schema(
         cancelledAt: Date,
         cancelledBy: String,
         completedAt: Date,
+        checkedInAt: Date, // Thời điểm khách đến check-in
         search: String,
         paymentExpireAt: Date,
         deleted: {

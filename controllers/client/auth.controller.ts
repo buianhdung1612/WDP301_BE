@@ -5,6 +5,7 @@ import bcrypt from "bcryptjs";
 import slugify from "slugify";
 import jwt from "jsonwebtoken";
 import * as generateHelper from "../../helpers/generate.helper";
+import * as authMiddleware from "../../middlewares/client/auth.middleware";
 
 // [POST] /api/v1/client/auth/register
 export const registerPost = async (req: Request, res: Response) => {
@@ -278,6 +279,86 @@ export const resetPasswordPost = async (req: Request, res: Response) => {
         res.json({
             success: false,
             message: "Đổi mật khẩu thất bại!"
+        });
+    }
+}
+
+
+export const callbackGoogle = async (req: Request, res: Response) => {
+    const user = req.user as any;
+
+    const tokenUser = jwt.sign(
+        {
+            id: user.id,
+            email: user.email
+        },
+        `${process.env.JWT_SECRET}`,
+        {
+            expiresIn: "7d"
+        }
+    );
+
+    res.cookie("tokenUser", tokenUser, {
+        httpOnly: true,
+        maxAge: 7 * 24 * 60 * 60 * 1000,
+        sameSite: "lax",
+        secure: process.env.NODE_ENV === 'production'
+    });
+
+    res.redirect(`${process.env.CLIENT_URL || 'http://localhost:5173'}`);
+}
+
+export const callbackFacebook = async (req: Request, res: Response) => {
+    const user = req.user as any;
+
+    const tokenUser = jwt.sign(
+        {
+            id: user.id,
+            email: user.email
+        },
+        `${process.env.JWT_SECRET}`,
+        {
+            expiresIn: "7d"
+        }
+    );
+
+    res.cookie("tokenUser", tokenUser, {
+        httpOnly: true,
+        maxAge: 7 * 24 * 60 * 60 * 1000,
+        sameSite: "lax",
+        secure: process.env.NODE_ENV === 'production'
+    });
+
+    res.redirect(`${process.env.CLIENT_URL || 'http://localhost:5173'}`);
+}
+
+// [GET] /api/v1/client/auth/me
+export const getMe = async (req: Request, res: Response) => {
+    try {
+        const user = res.locals.accountUser;
+        if (!user) {
+            return res.json({
+                success: false,
+                message: "Không tìm thấy người dùng!"
+            });
+        }
+
+        res.json({
+            success: true,
+            user: {
+                id: user.id,
+                fullName: user.fullName,
+                email: user.email,
+                phone: user.phone,
+                avatar: user.avatar,
+                totalPoint: user.totalPoint || 0,
+                usedPoint: user.usedPoint || 0
+            }
+        });
+    } catch (error) {
+        res.json({
+            success: false,
+            message: "Lỗi hệ thống!"
         });
     }
 }

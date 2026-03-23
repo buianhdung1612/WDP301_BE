@@ -13,6 +13,8 @@ router.get("/bookings/export-staff-schedule", checkPermission("booking_export"),
 router.get("/bookings/:id", checkPermission("booking_view"), bookingController.getBooking);
 router.post("/bookings/create", checkPermission("booking_create"), bookingController.createBooking);
 router.patch("/bookings/:id/confirm", checkPermission("booking_edit"), bookingController.confirmBooking);
+router.patch("/bookings/:id/check-in", checkPermission("booking_edit"), bookingController.checkInBooking);
+router.patch("/bookings/:id/check-out", checkPermission("booking_edit"), bookingController.checkoutBooking);
 router.patch("/bookings/:id/cancel", checkPermission("booking_edit"), bookingController.cancelBooking);
 router.patch("/bookings/:id/complete", bookingController.completeBooking);
 router.patch("/bookings/:id/start", bookingController.startInProgress);
