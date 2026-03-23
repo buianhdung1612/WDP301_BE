@@ -11,7 +11,6 @@ import accountUserRoutes from "./account-user.route"
 import petRoutes from "./pet.route"
 import breedRoutes from "./breed.route"
 import settingRoutes from "./setting.route"
-import seedRoutes from "./seed.route"
 import shiftRoutes from "./shift.route"
 import workScheduleRoutes from "./work-schedule.route"
 import departmentRoutes from "./department.route"
@@ -47,7 +46,6 @@ router.use('/breed', authMiddleware.verifyToken, breedRoutes);
 router.use('/setting', authMiddleware.verifyToken, settingRoutes);
 router.use('/booking', authMiddleware.verifyToken, bookingRoutes);
 router.use('/booking-config', authMiddleware.verifyToken, bookingConfigRoutes);
-router.use('/seed', authMiddleware.verifyToken, seedRoutes);
 router.use('/shifts', authMiddleware.verifyToken, shiftRoutes);
 router.use('/schedules', authMiddleware.verifyToken, workScheduleRoutes);
 router.use('/departments', authMiddleware.verifyToken, departmentRoutes);
