@@ -152,6 +152,12 @@ const schema = new mongoose.Schema(
         notes: String,
         specialCare: String,
 
+        surcharge: {
+            type: Number,
+            default: 0
+        },
+        surchargeReason: String,
+
         // Boarding care management
         feedingSchedule: [feedingScheduleSchema],
         exerciseSchedule: [exerciseScheduleSchema],

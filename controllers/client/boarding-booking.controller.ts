@@ -8,6 +8,7 @@ import BoardingBooking from "../../models/boarding-booking.model";
 import BoardingCage from "../../models/boarding-cage.model";
 import Pet from "../../models/pet.model";
 import { buildDefaultBoardingCareSchedule } from "../../utils/boarding-care-template.util";
+import { getFreestBoardingStaffForDate } from "../../helpers/boarding-staff-assignment.helper";
 
 const DEFAULT_HOLD_MINUTES = Number(process.env.BOARDING_HOLD_MINUTES || 5);
 const MAX_ROOMS_PER_CAGE = Math.max(1, Number(process.env.BOARDING_CAGE_CAPACITY || 4));
@@ -169,7 +170,9 @@ export const createBoardingBooking = async (req: Request, res: Response) => {
             discountAmount = 0,
             appliedCoupon,
             paymentMethod = "pay_at_site",
-            paymentGateway
+            paymentGateway,
+            customFeeding,
+            customExercise
         } = req.body;
 
         if (!mongoose.Types.ObjectId.isValid(cageId)) {
@@ -280,7 +283,9 @@ export const createBoardingBooking = async (req: Request, res: Response) => {
         const basePrice = pricePerDay * totalDays * requestedQuantity;
         const totalPrice = Math.max(basePrice - discountAmount, 0);
         const bookingCode = `BRD${new Date().toISOString().replace(/\D/g, "").slice(0, 14)}`;
-        const defaultCareSchedule = buildDefaultBoardingCareSchedule(pets as any[]);
+
+        const freestStaff = await getFreestBoardingStaffForDate(start);
+        const defaultCareSchedule = buildDefaultBoardingCareSchedule(pets as any[], freestStaff, customFeeding, customExercise);
 
         const depositAmount = getDepositAmount(totalPrice, paymentMethod, totalDays);
         const depositPercent = depositAmount > 0 ? COUNTER_DEPOSIT_PERCENT : 0;
@@ -687,7 +692,49 @@ export const checkOutBoarding = async (req: Request, res: Response) => {
         }
 
         booking.boardingStatus = "checked-out";
-        booking.actualCheckOutDate = new Date();
+        const actualOut = new Date();
+        booking.actualCheckOutDate = actualOut;
+
+        // Logic phụ thu: quá 30p so với checkOutDate
+        const scheduledOut = new Date(booking.checkOutDate || "");
+        const diffMs = actualOut.getTime() - (scheduledOut.getTime() || 0);
+        const diffMins = Math.floor(diffMs / (1000 * 60));
+
+        if (diffMins > 30) {
+            // Tầng phụ thu: <= 6 tiếng (nửa buổi) = 100k, > 6 tiếng (1 ngày) = 200k
+            if (diffMins <= 360) {
+                booking.surcharge = 100000;
+                booking.surchargeReason = `Trả chuồng trễ ${diffMins} phút (quá giới hạn 30 phút - Phụ thu nửa buổi)`;
+            } else {
+                booking.surcharge = 200000;
+                booking.surchargeReason = `Trả chuồng trễ ${diffMins} phút (Phụ thu trọn 1 ngày)`;
+            }
+
+            // Gửi thông báo cho khách hàng
+            try {
+                const Notification = (await import("../../models/notification.model")).default;
+                await Notification.create({
+                    receiverId: booking.userId,
+                    title: "Thông báo phụ thu trả chuồng trễ",
+                    content: `Bạn đã trả chuồng trễ ${diffMins} phút. Phí phụ thu phát sinh là ${booking.surcharge.toLocaleString("vi-VN")}đ. Lý do: ${booking.surchargeReason}`,
+                    type: "boarding",
+                    metadata: {
+                        boardingId: booking._id,
+                        surcharge: booking.surcharge,
+                        diffMins
+                    },
+                    status: "unread"
+                });
+            } catch (notifError) {
+                console.error("Lỗi gửi thông báo phụ thu:", notifError);
+            }
+        } else {
+            booking.surcharge = 0;
+            booking.surchargeReason = "";
+        }
+        // Luôn cập nhật lại total
+        booking.total = Math.max(0, (booking.subTotal || 0) - (booking.discount || 0) + (booking.surcharge || 0));
+
         await booking.save({ session });
         await BoardingCage.findByIdAndUpdate(booking.cageId, { status: "available" }, { session });
         await session.commitTransaction();
