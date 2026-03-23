@@ -19,6 +19,7 @@ import authRoutes from "./auth.route"
 import bookingConfigRoutes from "./booking-config.route"
 import boardingCageRoutes from "./boarding-cage.route";
 import boardingBookingRoutes from "./boarding-booking.route";
+import petCareTemplateRoutes from "./pet-care-template.route";
 
 import orderRoutes from "./order.route"
 import dashboardRoutes from "./dashboard.route";
@@ -53,6 +54,7 @@ router.use('/schedules', authMiddleware.verifyToken, workScheduleRoutes);
 router.use('/departments', authMiddleware.verifyToken, departmentRoutes);
 router.use('/boarding-cage', authMiddleware.verifyToken, boardingCageRoutes);
 router.use('/boarding-booking', authMiddleware.verifyToken, boardingBookingRoutes);
+router.use('/pet-care-template', authMiddleware.verifyToken, petCareTemplateRoutes);
 router.use('/dashboard', authMiddleware.verifyToken, dashboardRoutes);
 router.use('/review', authMiddleware.verifyToken, reviewRoutes);
 router.use('/notifications', authMiddleware.verifyToken, notificationRoutes);
