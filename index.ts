@@ -5,6 +5,13 @@ import dotenv from "dotenv";
 import http from 'http';
 import session from 'express-session';
 import passport from 'passport';
+import dns from 'dns';
+
+// Fix lỗi DNS ECONNREFUSED cho MongoDB Atlas trên một số nhà mạng/máy tính
+dns.setServers(['8.8.8.8', '8.8.4.4', '1.1.1.1']);
+if (dns.setDefaultResultOrder) {
+    dns.setDefaultResultOrder('ipv4first');
+}
 import { Server } from 'socket.io';
 import adminRoutes from "./routes/admin/index.route";
 import clientRoutes from "./routes/client/index.route";

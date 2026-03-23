@@ -14,32 +14,11 @@ import { convertToSlug } from "../../helpers/slug.helper";
 const MAX_ROOMS_PER_CAGE = Math.max(1, Number(process.env.BOARDING_CAGE_CAPACITY || 4));
 const DEFAULT_HOLD_MINUTES = Number(process.env.BOARDING_HOLD_MINUTES || 5);
 
-async function getDefaultBoardingStaffForDate(dateVal: string | Date | undefined) {
-    if (!dateVal) return undefined;
-    const dateObj = new Date(dateVal);
-    if (Number.isNaN(dateObj.getTime())) return undefined;
+import {
+    getFreestBoardingStaffForDate,
+    getBoardingHotelStaffAccounts
+} from "../../helpers/boarding-staff-assignment.helper";
 
-    const startOfDay = new Date(dateObj);
-    startOfDay.setHours(0, 0, 0, 0);
-    const endOfDay = new Date(dateObj);
-    endOfDay.setHours(23, 59, 59, 999);
-
-    const scheduledStaffIds = await WorkSchedule.distinct("staffId", {
-        date: { $gte: startOfDay, $lte: endOfDay },
-        status: { $in: ["scheduled", "checked-in", "checked-out"] },
-    });
-
-    if (Array.isArray(scheduledStaffIds) && scheduledStaffIds.length > 0) {
-        const staffs = await getBoardingHotelStaffAccounts(scheduledStaffIds.map((id) => String(id)));
-        if (staffs.length > 0) {
-            return {
-                staffId: String(staffs[0]._id),
-                staffName: String(staffs[0].fullName || "")
-            };
-        }
-    }
-    return undefined;
-}
 const BOOKING_LOCK_MS = Math.max(3000, Number(process.env.BOARDING_BOOKING_LOCK_MS || 8000));
 const COUNTER_DEPOSIT_MIN_DAYS = 2;
 const COUNTER_DEPOSIT_PERCENT = 20;
@@ -165,72 +144,6 @@ const normalizeLookupText = (value: unknown) => String(value || "")
     .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase()
     .trim();
-
-async function getBoardingHotelDepartmentIds() {
-    const departments = await Department.find({
-        deleted: false,
-        status: "active",
-    }).select("_id name code").lean();
-
-    return departments
-        .filter((item: any) => {
-            const name = normalizeLookupText(item?.name);
-            const code = normalizeLookupText(item?.code);
-            return (
-                name.includes("khach san") ||
-                name.includes("cham soc") ||
-                name.includes("boarding") ||
-                name.includes("hotel") ||
-                code.includes("hotel") ||
-                code.includes("boarding") ||
-                code.includes("khachsan") ||
-                code.includes("khach-san") ||
-                code.includes("cs") ||
-                code.includes("ks")
-            );
-        })
-        .map((item: any) => item._id);
-}
-
-async function getBoardingHotelStaffRoleIds() {
-    const departmentIds = await getBoardingHotelDepartmentIds();
-
-    const filter: any = {
-        deleted: false,
-        status: "active",
-    };
-
-    if (departmentIds.length > 0) {
-        filter.departmentId = { $in: departmentIds };
-    } else {
-        filter.isStaff = true;
-    }
-
-    const roles = await Role.find(filter).select("_id");
-
-    return roles.map((item) => item._id);
-}
-
-async function getBoardingHotelStaffAccounts(staffIds?: string[]) {
-    const roleIds = await getBoardingHotelStaffRoleIds();
-    if (!roleIds.length) return [];
-
-    const filter: any = {
-        deleted: false,
-        status: "active",
-        roles: { $in: roleIds },
-    };
-
-    if (staffIds !== undefined) {
-        if (staffIds.length === 0) return [];
-        filter._id = { $in: staffIds };
-    }
-
-    return AccountAdmin.find(filter)
-        .select("fullName phone email avatar employeeCode")
-        .sort({ fullName: 1 })
-        .lean();
-}
 
 const getCurrentBoardingStaffId = (req: Request, res: Response) => normalizeObjectIdString(res.locals.accountAdmin?._id || (req as any).user?.id);
 const getCurrentBoardingStaffName = (req: Request, res: Response) => String(res.locals.accountAdmin?.fullName || (req as any).user?.fullName || (req as any).user?.name || "").trim();
@@ -450,13 +363,33 @@ export const listBoardingHotelStaffs = async (_req: Request, res: Response) => {
             }
         }
 
-        // Nếu có danh sách nhân viên trực ca thì lấy theo ca, 
-        // nếu không có ai trực (có thể do chưa phân ca) thì lấy tất cả nhân viên thuộc bộ phận
+        // 2. Lấy thông tin tài khoản của các nhân viên này
         const staffs = await getBoardingHotelStaffAccounts(
             scheduledStaffIds && scheduledStaffIds.length > 0 ? scheduledStaffIds : undefined
         );
 
-        return res.json({ code: 200, data: staffs });
+        if (staffs.length === 0) {
+            return res.json({ code: 200, data: [] });
+        }
+
+        // 3. Tính toán "tải trọng" (workload) để sắp xếp người rảnh lên đầu
+        const staffWorkloads = await Promise.all(staffs.map(async (staff) => {
+            const staffIdStr = String(staff._id);
+            const bookingCount = await BoardingBooking.countDocuments({
+                deleted: false,
+                boardingStatus: { $in: ["confirmed", "checked-in"] },
+                $or: [
+                    { "feedingSchedule.staffId": staffIdStr },
+                    { "exerciseSchedule.staffId": staffIdStr }
+                ]
+            });
+            return { ...staff, workload: bookingCount };
+        }));
+
+        // Sắp xếp: workload thấp nhất lên đầu
+        staffWorkloads.sort((a, b) => a.workload - b.workload);
+
+        return res.json({ code: 200, data: staffWorkloads });
     } catch (error: any) {
         return res.status(500).json({ code: 500, message: error.message || "Loi he thong" });
     }
@@ -506,7 +439,7 @@ export const batchCreateBoardingBooking = async (req: Request, res: Response) =>
         const petIds = items.map(i => i.petId);
         const cageIds = items.map(i => i.cageId);
 
-        const pets = await Pet.find({ _id: { $in: petIds }, userId, deleted: false }).lean();
+        const pets = await Pet.find({ _id: { $in: petIds }, userId, deleted: false }).select("name type breed weight age avatar").lean();
         const cages = await BoardingCage.find({ _id: { $in: cageIds }, deleted: false }).lean();
 
         for (const item of items) {
@@ -538,7 +471,7 @@ export const batchCreateBoardingBooking = async (req: Request, res: Response) =>
             const finalDiscount = Math.max(Number(item.discount || 0), 0);
             const total = Math.max(subTotal - finalDiscount, 0);
 
-            const defaultStaff = await getDefaultBoardingStaffForDate(checkIn);
+            const defaultStaff = await getFreestBoardingStaffForDate(checkIn);
             const defaultCareSchedule = buildDefaultBoardingCareSchedule([pet as any], defaultStaff);
 
             const depositAmount = getDepositAmount(total, paymentMethod, totalDays);
@@ -632,7 +565,7 @@ export const createBoardingBooking = async (req: Request, res: Response) => {
             return res.status(404).json({ code: 404, message: "Khong tim thay khach hang" });
         }
 
-        const pet = await Pet.findOne({ _id: petId, userId, deleted: false }).lean();
+        const pet = await Pet.findOne({ _id: petId, userId, deleted: false }).select("name type breed weight age avatar").lean();
         if (!pet) {
             return res.status(400).json({ code: 400, message: "Thu cung khong thuoc khach hang da chon" });
         }
@@ -676,7 +609,7 @@ export const createBoardingBooking = async (req: Request, res: Response) => {
         const finalDiscount = Math.max(Number(discount || 0), 0);
         const total = Math.max(subTotal - finalDiscount, 0);
 
-        const defaultStaff = await getDefaultBoardingStaffForDate(checkIn);
+        const defaultStaff = await getFreestBoardingStaffForDate(checkIn);
         const defaultCareSchedule = buildDefaultBoardingCareSchedule([pet as any], defaultStaff);
 
         const depositAmount = getDepositAmount(total, paymentMethod, totalDays);
@@ -740,7 +673,7 @@ export const createBoardingBooking = async (req: Request, res: Response) => {
 
         const created = await BoardingBooking.findById(booking._id)
             .populate("userId", "fullName phone email avatar")
-            .populate("petIds", "name type breed avatar weight")
+            .populate("petIds", "name type breed avatar weight age")
             .populate("cageId", "cageCode type size dailyPrice status");
 
         return res.json({
@@ -811,7 +744,7 @@ export const listBoardingBookings = async (req: Request, res: Response) => {
         const [recordList, totalRecords, counts] = await Promise.all([
             BoardingBooking.find(filter)
                 .populate("userId", "fullName phone email avatar")
-                .populate("petIds", "name type breed avatar weight")
+                .populate("petIds", "name type breed avatar weight age")
                 .populate("cageId", "cageCode type size dailyPrice status")
                 .populate("feedingSchedule.staffId", "fullName phone employeeCode")
                 .populate("exerciseSchedule.staffId", "fullName phone employeeCode")
@@ -888,7 +821,7 @@ export const getBoardingBookingDetail = async (req: Request, res: Response) => {
 
         const booking = await BoardingBooking.findOne({ _id: id, deleted: false })
             .populate("userId", "fullName phone email avatar")
-            .populate("petIds", "name type breed avatar weight")
+            .populate("petIds", "name type breed avatar weight age")
             .populate("cageId", "cageCode type size dailyPrice status description avatar amenities")
             .populate("feedingSchedule.staffId", "fullName phone employeeCode")
             .populate("exerciseSchedule.staffId", "fullName phone employeeCode")
@@ -932,19 +865,72 @@ export const updateBoardingBookingStatus = async (req: Request, res: Response) =
         }
 
         booking.boardingStatus = boardingStatus;
+
         if (boardingStatus === "checked-in") {
             booking.actualCheckInDate = new Date();
             await BoardingCage.findByIdAndUpdate(booking.cageId, { status: "occupied" });
-        }
-        if (boardingStatus === "checked-out") {
-            booking.actualCheckOutDate = new Date();
+        } else if (boardingStatus === "checked-out") {
+            const actualOut = new Date();
+            booking.actualCheckOutDate = actualOut;
+
+            // Logic phụ thu: quá 30p so với checkOutDate
+            const scheduledOut = new Date(booking.checkOutDate);
+            const diffMs = actualOut.getTime() - scheduledOut.getTime();
+            const diffMins = Math.floor(diffMs / (1000 * 60));
+
+            if (diffMins > 30) {
+                // Tầng phụ thu: <= 6 tiếng (nửa buổi) = 100k, > 6 tiếng (1 ngày) = 200k
+                if (diffMins <= 360) {
+                    booking.surcharge = 100000;
+                    booking.surchargeReason = `Trả chuồng trễ ${diffMins} phút (quá giới hạn 30 phút - Phụ thu nửa buổi)`;
+                } else {
+                    booking.surcharge = 200000;
+                    booking.surchargeReason = `Trả chuồng trễ ${diffMins} phút (Phụ thu trọn 1 ngày)`;
+                }
+
+                // Gửi thông báo cho khách hàng
+                try {
+                    const Notification = (await import("../../models/notification.model")).default;
+                    await Notification.create({
+                        receiverId: booking.userId,
+                        title: "Thông báo phụ thu trả chuồng trễ",
+                        content: `Bạn đã trả chuồng trễ ${diffMins} phút. Phí phụ thu phát sinh là ${booking.surcharge.toLocaleString("vi-VN")}đ. Lý do: ${booking.surchargeReason}`,
+                        type: "boarding",
+                        metadata: {
+                            boardingId: booking._id,
+                            surcharge: booking.surcharge,
+                            diffMins
+                        },
+                        status: "unread"
+                    });
+                } catch (notifError) {
+                    console.error("Lỗi gửi thông báo phụ thu:", notifError);
+                }
+            } else {
+                booking.surcharge = 0;
+                booking.surchargeReason = "";
+            }
+            // Luôn cập nhật lại total để tránh sai sót
+            booking.total = Math.max(0, (booking.subTotal || 0) - (booking.discount || 0) + (booking.surcharge || 0));
             await BoardingCage.findByIdAndUpdate(booking.cageId, { status: "available" });
-        }
-        if (boardingStatus === "cancelled") {
-            booking.cancelledAt = new Date();
-            booking.cancelledBy = "admin";
-            booking.cancelledReason = booking.cancelledReason || "Admin cap nhat";
-            await BoardingCage.findByIdAndUpdate(booking.cageId, { status: "available" });
+        } else {
+            // Nếu đổi sang trạng thái khác (Confirmed, Pending...) thì reset thông tin checkout/phụ phí
+            if (boardingStatus !== "cancelled") {
+                booking.surcharge = 0;
+                booking.surchargeReason = "";
+                booking.actualCheckOutDate = null;
+                booking.total = Math.max(0, (booking.subTotal || 0) - (booking.discount || 0));
+            }
+
+            if (boardingStatus === "cancelled") {
+                booking.cancelledAt = new Date();
+                booking.cancelledBy = "admin";
+                booking.cancelledReason = booking.cancelledReason || "Admin cap nhat";
+                await BoardingCage.findByIdAndUpdate(booking.cageId, { status: "available" });
+            } else if (boardingStatus !== "checked-in") {
+                // Ví dụ từ checked-in quay lại confirmed
+                await BoardingCage.findByIdAndUpdate(booking.cageId, { status: "available" });
+            }
         }
 
         await booking.save();
@@ -1031,11 +1017,11 @@ export const updateBoardingCareSchedule = async (req: Request, res: Response) =>
             const pets = await Pet.find({
                 _id: { $in: Array.isArray(booking.petIds) ? booking.petIds : [] },
                 deleted: false,
-            }).select("type weight name").lean();
+            }).select("type weight name age breed").lean();
 
             const template = buildDefaultBoardingCareSchedule(
                 pets as any[],
-                await getDefaultBoardingStaffForDate(careDate || booking.checkInDate)
+                await getFreestBoardingStaffForDate(careDate || booking.checkInDate)
             );
             booking.feedingSchedule = template.feedingSchedule;
             booking.exerciseSchedule = template.exerciseSchedule;
@@ -1043,7 +1029,7 @@ export const updateBoardingCareSchedule = async (req: Request, res: Response) =>
 
             const updatedBooking = await BoardingBooking.findById(booking._id)
                 .populate("userId", "fullName phone email avatar")
-                .populate("petIds", "name type breed avatar weight")
+                .populate("petIds", "name type breed avatar weight age")
                 .populate("cageId", "cageCode type size dailyPrice status description avatar amenities")
                 .populate("feedingSchedule.staffId", "fullName phone employeeCode")
                 .populate("exerciseSchedule.staffId", "fullName phone employeeCode");

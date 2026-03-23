@@ -13,6 +13,7 @@ import articleRoutes from "./article.route";
 import breedRoutes from "./breed.route";
 import couponRoutes from "./coupon.route";
 import reviewRoutes from "./review.route";
+import boardingCareTemplateRoutes from "./boarding-care-template.route";
 
 const router = Router();
 
@@ -30,5 +31,6 @@ router.use('/article', articleRoutes);
 router.use('/breed', breedRoutes);
 router.use('/coupon', couponRoutes);
 router.use('/review', reviewRoutes);
+router.use('/boarding-care-template', boardingCareTemplateRoutes);
 
 export default router;
