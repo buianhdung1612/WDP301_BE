@@ -1,6 +1,10 @@
 import { Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
 import AccountUser from '../../models/account-user.model';
+import Order from '../../models/order.model';
+import Booking from '../../models/booking.model';
+import BoardingBooking from '../../models/boarding-booking.model';
+import Pet from '../../models/pet.model';
 import { convertToSlug } from '../../helpers/slug.helper';
 
 // [GET] /api/v1/admin/accounts-user
@@ -226,6 +230,42 @@ export const changePassword = async (req: Request, res: Response) => {
 export const deleteAccount = async (req: Request, res: Response) => {
     try {
         const id = req.params.id;
+
+        // Kiểm tra xem khách hàng có đơn hàng nào không
+        const hasOrder = await Order.exists({ userId: id, deleted: false });
+        if (hasOrder) {
+            return res.status(400).json({
+                code: 400,
+                message: "Không thể xóa khách hàng này vì vẫn còn đơn hàng liên quan!"
+            });
+        }
+
+        // Kiểm tra xem khách hàng có lịch đặt dịch vụ nào không
+        const hasBooking = await Booking.exists({ userId: id, deleted: false });
+        if (hasBooking) {
+            return res.status(400).json({
+                code: 400,
+                message: "Không thể xóa khách hàng này vì vẫn còn lịch đặt dịch vụ liên quan!"
+            });
+        }
+
+        // Kiểm tra xem khách hàng có lịch đặt lưu trú nào không
+        const hasBoardingBooking = await BoardingBooking.exists({ userId: id, deleted: false });
+        if (hasBoardingBooking) {
+            return res.status(400).json({
+                code: 400,
+                message: "Không thể xóa khách hàng này vì vẫn còn lịch đặt lưu trú liên quan!"
+            });
+        }
+
+        // Kiểm tra xem khách hàng có thú cưng nào không
+        const hasPet = await Pet.exists({ userId: id, deleted: false });
+        if (hasPet) {
+            return res.status(400).json({
+                code: 400,
+                message: "Không thể xóa khách hàng này vì vẫn còn các thú cưng đang được quản lý!"
+            });
+        }
 
         await AccountUser.updateOne({
             _id: id

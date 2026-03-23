@@ -1607,3 +1607,57 @@ export const suggestSmartAssignment = async (req: Request, res: Response) => {
         res.status(500).json({ code: 500, message: "Lỗi khi gợi ý phân công" });
     }
 };
+
+// [GET] /api/v1/admin/booking/overrun-impact/:id
+export const getOverrunImpactAnalysis = async (req: Request, res: Response) => {
+    try {
+        const { id } = req.params;
+        const overrunBooking = await Booking.findById(id).populate('staffIds');
+        if (!overrunBooking || !overrunBooking.isOverrun) {
+            return res.status(404).json({ code: 404, message: "Không tìm thấy ca quá giờ hoặc ca này chưa bị đánh dấu quá giờ" });
+        }
+
+        // Tìm các ca tiếp theo bị ảnh hưởng (có ít nhất 1 staff đang kẹt trong ca overrun)
+        const impactedBookings = await Booking.find({
+            staffIds: { $in: overrunBooking.staffIds },
+            _id: { $ne: overrunBooking._id },
+            start: { $gte: overrunBooking.start },
+            bookingStatus: { $in: ["confirmed", "pending", "delayed"] },
+            deleted: false
+        }).populate('serviceId petIds');
+
+        // Phân tích từng ca bị ảnh hưởng
+        const analysis = await Promise.all(impactedBookings.map(async (bk: any) => {
+            // Tìm nhân viên thay thế (rảnh hoàn toàn trong khung giờ đó và có kỹ năng)
+            const suggestions = await findBestStaffForBooking(
+                bk.start,
+                bk.start,
+                bk.end,
+                bk.serviceId?._id?.toString() || bk.serviceId?.toString(),
+                bk.petIds?.length || 1,
+                bk._id?.toString(),
+                undefined, // restricted
+                overrunBooking.staffIds.map((s: any) => s._id?.toString()) // exclude busy staff
+            );
+
+            return {
+                booking: bk,
+                impactedStaffIds: bk.staffIds.filter((sId: any) =>
+                    overrunBooking.staffIds.some((os: any) => os._id.toString() === sId.toString())
+                ),
+                suggestedStaff: suggestions // suggest top matches
+            };
+        }));
+
+        res.json({
+            code: 200,
+            data: {
+                overrunBooking,
+                impactedBookings: analysis
+            }
+        });
+    } catch (error: any) {
+        console.error("Overrun Impact Error:", error);
+        res.status(500).json({ code: 500, message: "Lỗi hệ thống khi phân tích tác động quá giờ" });
+    }
+}

@@ -456,9 +456,18 @@ export const createBooking = async (req: Request, res: Response) => {
         }));
 
         // Tính tiền cọc nếu có cấu hình
-        const depositPercentage = config?.depositPercentage || 0;
-        const depositAmount = Math.round((totalPrice * depositPercentage) / 100);
-        const remainingAmount = totalPrice - depositAmount;
+        let depositAmount = 0;
+        let remainingAmount = totalPrice;
+
+        if (paymentMethod === "money") {
+            const depositPercentage = config?.depositPercentage || 0;
+            depositAmount = Math.round((totalPrice * depositPercentage) / 100);
+            remainingAmount = totalPrice - depositAmount;
+        } else {
+            // Thanh toán online thì mặc định thanh toán 100%
+            depositAmount = totalPrice;
+            remainingAmount = 0;
+        }
 
         const newBooking = new Booking({
             code: bookingCode,
@@ -483,6 +492,20 @@ export const createBooking = async (req: Request, res: Response) => {
 
         await newBooking.save();
         const populatedBooking = await Booking.findById(newBooking._id).populate("userId");
+
+        // Tạo thông báo mới cho Admin
+        const Notification = (await import("../../models/notification.model")).default;
+        await Notification.create({
+            senderId: userId,
+            type: "booking",
+            title: "Lịch đặt dịch vụ mới",
+            content: `Khách hàng ${res.locals.accountUser?.fullName || "mới"} vừa đặt lịch ${service.name} (Mã: ${bookingCode})`,
+            metadata: {
+                bookingId: newBooking._id,
+                bookingCode: bookingCode
+            },
+            status: "unread"
+        });
 
         res.status(201).json({
             code: 201,

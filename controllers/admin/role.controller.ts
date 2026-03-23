@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import Role from '../../models/role.model';
+import AccountAdmin from '../../models/account-admin.model';
 import { convertToSlug } from '../../helpers/slug.helper';
 
 // [GET] /api/v1/admin/roles
@@ -128,6 +129,15 @@ export const edit = async (req: Request, res: Response) => {
 export const deleteRole = async (req: Request, res: Response) => {
     try {
         const id = req.params.id;
+
+        // Kiểm tra xem quyền này có đang được gán cho tài khoản admin nào không
+        const hasAdmin = await AccountAdmin.exists({ roleId: id, deleted: false });
+        if (hasAdmin) {
+            return res.status(400).json({
+                code: 400,
+                message: "Không thể xóa quyền này vì đang được gán cho nhân viên!"
+            });
+        }
 
         await Role.updateOne({
             _id: id

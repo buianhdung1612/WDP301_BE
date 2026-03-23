@@ -22,6 +22,8 @@ router.patch(
     productController.editCategory
 );
 router.patch('/category/delete/:id', checkPermission("product_category_delete"), productController.deleteCategory);
+router.patch('/category/restore/:id', checkPermission("product_category_delete"), productController.restoreCategory);
+router.delete('/category/force-delete/:id', checkPermission("product_category_delete"), productController.forceDeleteCategory);
 
 // Sản phẩm
 router.get('/list', checkPermission("product_view"), productController.list);
@@ -40,6 +42,8 @@ router.patch(
     productController.editPatch
 );
 router.patch('/delete/:id', checkPermission("product_delete"), productController.deletePatch);
+router.patch('/restore/:id', checkPermission("product_delete"), productController.restoreProduct);
+router.delete('/force-delete/:id', checkPermission("product_delete"), productController.forceDeleteProduct);
 router.get('/expired/list', checkPermission("product_view"), productController.expiredList);
 router.post('/expired/scan', checkPermission("product_edit"), productController.scanExpiredProducts);
 
@@ -59,5 +63,7 @@ router.patch(
     productController.updateAttribute
 );
 router.patch('/attribute/delete/:id', checkPermission("product_attribute_delete"), productController.deleteAttribute);
+router.patch('/attribute/restore/:id', checkPermission("product_attribute_delete"), productController.restoreAttribute);
+router.delete('/attribute/force-delete/:id', checkPermission("product_attribute_delete"), productController.forceDeleteAttribute);
 
 export default router;

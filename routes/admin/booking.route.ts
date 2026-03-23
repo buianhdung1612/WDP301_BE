@@ -21,6 +21,7 @@ router.patch("/bookings/:id/update", checkPermission("booking_edit"), bookingCon
 router.patch("/bookings/:id/assign-staff", checkPermission("booking_assign"), bookingController.assignStaff);
 router.get("/bookings/:id/recommend-staff", checkPermission("booking_assign"), bookingController.getRecommendedStaff);
 router.post("/bookings/suggest-assignment", checkPermission("booking_create"), bookingController.suggestSmartAssignment);
+router.get("/bookings/:id/overrun-impact", checkPermission("booking_view"), bookingController.getOverrunImpactAnalysis);
 router.post("/bookings/auto-assign", checkPermission("booking_assign"), bookingController.autoAssignBookings);
 
 export default router;

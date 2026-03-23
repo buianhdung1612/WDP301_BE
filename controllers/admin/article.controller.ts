@@ -8,7 +8,7 @@ import { convertToSlug } from '../../helpers/slug.helper';
 export const category = async (req: Request, res: Response) => {
     try {
         const find: any = {
-            deleted: false
+            deleted: req.query.is_trash === "true" ? true : false
         };
 
         // Tìm kiếm
@@ -23,7 +23,8 @@ export const category = async (req: Request, res: Response) => {
         }
 
         if (req.query.status) {
-            find.status = req.query.status;
+            const statusArr = (req.query.status as string).split(',');
+            find.status = { $in: statusArr };
         }
 
         // Phân trang
@@ -33,20 +34,22 @@ export const category = async (req: Request, res: Response) => {
             page = parseInt(`${req.query.page}`);
         }
 
-        const [recordList, totalRecords] = await Promise.all([
+        const [recordList, totalRecords, deletedCount] = await Promise.all([
             CategoryBlog.find(find)
                 .sort({ createdAt: "desc" })
                 .limit(limitItems)
                 .skip((page - 1) * limitItems)
                 .lean(),
-            CategoryBlog.countDocuments(find)
+            CategoryBlog.countDocuments(find),
+            CategoryBlog.countDocuments({ deleted: true })
         ]);
 
         const pagination = {
             totalRecords,
             totalPages: Math.ceil(totalRecords / limitItems),
             currentPage: page,
-            limit: limitItems
+            limit: limitItems,
+            deletedCount
         };
         // Hết Phân trang
 
@@ -236,11 +239,25 @@ export const deleteCategory = async (req: Request, res: Response) => {
     try {
         const id = req.params.id;
 
+        // Kiểm tra xem có bài viết nào thuộc danh mục này không
+        const hasBlog = await Blog.exists({
+            category: id,
+            deleted: false
+        });
+
+        if (hasBlog) {
+            return res.status(400).json({
+                success: false,
+                message: "Không thể xóa danh mục này vì vẫn còn bài viết đang sử dụng!"
+            });
+        }
+
         await CategoryBlog.updateOne({
             _id: id,
         }, {
             deleted: true,
-            deletedAt: Date.now()
+            deletedAt: Date.now(),
+            status: 'inactive'
         })
 
         return res.status(200).json({
@@ -256,6 +273,24 @@ export const deleteCategory = async (req: Request, res: Response) => {
         });
     }
 }
+
+export const restoreCategory = async (req: Request, res: Response) => {
+    try {
+        await CategoryBlog.updateOne({ _id: req.params.id }, { $set: { deleted: false }, $unset: { deletedAt: 1 } });
+        res.status(200).json({ success: true, message: "Khôi phục danh mục thành công!" });
+    } catch (e) {
+        res.status(500).json({ success: false, message: "Lỗi hệ thống!" });
+    }
+};
+
+export const forceDeleteCategory = async (req: Request, res: Response) => {
+    try {
+        await CategoryBlog.deleteOne({ _id: req.params.id });
+        res.status(200).json({ success: true, message: "Xóa vĩnh viễn danh mục thành công!" });
+    } catch (e) {
+        res.status(500).json({ success: false, message: "Lỗi hệ thống!" });
+    }
+};
 
 // Bài viết
 export const create = async (req: Request, res: Response) => {
@@ -310,7 +345,7 @@ export const create = async (req: Request, res: Response) => {
 export const list = async (req: Request, res: Response) => {
     try {
         const find: any = {
-            deleted: false
+            deleted: req.query.is_trash === "true" ? true : false
         };
 
         // Tìm kiếm
@@ -326,7 +361,8 @@ export const list = async (req: Request, res: Response) => {
         }
 
         if (req.query.status) {
-            find.status = req.query.status;
+            const statusArr = (req.query.status as string).split(',');
+            find.status = { $in: statusArr };
         }
 
         // Phân trang
@@ -336,20 +372,22 @@ export const list = async (req: Request, res: Response) => {
             page = parseInt(`${req.query.page}`);
         }
 
-        const [recordList, totalRecords] = await Promise.all([
+        const [recordList, totalRecords, deletedCount] = await Promise.all([
             Blog.find(find)
                 .sort({ createdAt: "desc" })
                 .limit(limitItems)
                 .skip((page - 1) * limitItems)
                 .lean(),
-            Blog.countDocuments(find)
+            Blog.countDocuments(find),
+            Blog.countDocuments({ deleted: true })
         ]);
 
         const pagination = {
             totalRecords,
             totalPages: Math.ceil(totalRecords / limitItems),
             currentPage: page,
-            limit: limitItems
+            limit: limitItems,
+            deletedCount
         };
 
         return res.status(200).json({
@@ -515,7 +553,8 @@ export const deleteBlog = async (req: Request, res: Response) => {
             _id: id,
         }, {
             deleted: true,
-            deletedAt: Date.now()
+            deletedAt: Date.now(),
+            status: 'archived'
         })
 
         return res.status(200).json({
@@ -531,3 +570,21 @@ export const deleteBlog = async (req: Request, res: Response) => {
         });
     }
 }
+
+export const restoreBlog = async (req: Request, res: Response) => {
+    try {
+        await Blog.updateOne({ _id: req.params.id }, { $set: { deleted: false }, $unset: { deletedAt: 1 } });
+        res.status(200).json({ success: true, message: "Khôi phục bài viết thành công!" });
+    } catch (e) {
+        res.status(500).json({ success: false, message: "Lỗi hệ thống!" });
+    }
+};
+
+export const forceDeleteBlog = async (req: Request, res: Response) => {
+    try {
+        await Blog.deleteOne({ _id: req.params.id });
+        res.status(200).json({ success: true, message: "Xóa vĩnh viễn bài viết thành công!" });
+    } catch (e) {
+        res.status(500).json({ success: false, message: "Lỗi hệ thống!" });
+    }
+};

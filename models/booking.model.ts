@@ -70,6 +70,8 @@ const schema = new mongoose.Schema(
             enum: ["pending", "confirmed", "delayed", "in-progress", "completed", "cancelled", "returned", "request_cancel"],
             default: "pending"
         },
+        isOverrun: { type: Boolean, default: false },
+        impactedByOverrun: { type: Boolean, default: false },
         actualStart: Date, // Thời điểm thực tế nhân viên bắt đầu làm
         expectedFinish: Date, // Thời điểm dự kiến xong (actualStart + duration)
         rescheduledFrom: {

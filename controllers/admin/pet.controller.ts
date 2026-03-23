@@ -1,5 +1,7 @@
-import express, { Request, Response } from "express";
+import { Request, Response } from "express";
 import Pet from "../../models/pet.model";
+import Booking from "../../models/booking.model";
+import BoardingBooking from "../../models/boarding-booking.model";
 
 // [GET] /api/v1/admin/pets
 export const listPets = async (req: Request, res: Response) => {
@@ -161,7 +163,35 @@ export const updatePet = async (req: Request, res: Response) => {
 // [DELETE] /api/v1/admin/pets/:id
 export const deletePet = async (req: Request, res: Response) => {
     try {
-        const pet = await Pet.findById(req.params.id);
+        const id = req.params.id;
+
+        // Kiểm tra xem thú cưng có lịch đặt dịch vụ nào không
+        const hasBooking = await Booking.exists({
+            petIds: id,
+            deleted: false
+        });
+
+        if (hasBooking) {
+            return res.status(400).json({
+                code: 400,
+                message: "Không thể xóa thú cưng này vì vẫn còn lịch đặt dịch vụ liên quan!"
+            });
+        }
+
+        // Kiểm tra xem thú cưng có lịch đặt lưu trú nào không
+        const hasBoardingBooking = await BoardingBooking.exists({
+            petIds: id,
+            deleted: false
+        });
+
+        if (hasBoardingBooking) {
+            return res.status(400).json({
+                code: 400,
+                message: "Không thể xóa thú cưng này vì vẫn còn lịch đặt lưu trú liên quan!"
+            });
+        }
+
+        const pet = await Pet.findById(id);
 
         if (!pet || pet.deleted) {
             return res.status(404).json({

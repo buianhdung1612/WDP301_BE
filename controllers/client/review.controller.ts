@@ -126,6 +126,24 @@ export const createReview = async (req: Request, res: Response) => {
 
         await newReview.save();
 
+        // Tạo thông báo cho Admin
+        try {
+            const Notification = (await import("../../models/notification.model")).default;
+            await Notification.create({
+                senderId: userId,
+                type: "review",
+                title: "Đánh giá sản phẩm mới",
+                content: `Khách hàng vừa gửi đánh giá mới cho sản phẩm (Rating: ${rating})`,
+                metadata: {
+                    reviewId: newReview._id,
+                    productId: productId
+                },
+                status: "unread"
+            });
+        } catch (notifError) {
+            console.error("Lỗi tạo thông báo đánh giá:", notifError);
+        }
+
         return res.json({
             success: true,
             message: "Gửi đánh giá thành công! Chờ phê duyệt từ quản trị viên."

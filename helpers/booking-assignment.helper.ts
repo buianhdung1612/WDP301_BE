@@ -21,7 +21,8 @@ export const findBestStaffForBooking = async (
     serviceId: string,
     numPets: number = 1,
     excludeBookingId?: string,
-    restrictedStaffIds?: string[]
+    restrictedStaffIds?: string[],
+    excludeStaffIds?: string[]
 ) => {
     const dStart = dayjs(startTime);
     const dEnd = dayjs(endTime);
@@ -40,7 +41,11 @@ export const findBestStaffForBooking = async (
     };
 
     if (restrictedStaffIds && restrictedStaffIds.length > 0) {
-        query.staffId = { $in: restrictedStaffIds };
+        query.staffId = { ...query.staffId, $in: restrictedStaffIds };
+    }
+
+    if (excludeStaffIds && excludeStaffIds.length > 0) {
+        query.staffId = { ...query.staffId, $nin: excludeStaffIds };
     }
 
     const schedules = await WorkSchedule.find(query).populate("staffId").populate("shiftId");

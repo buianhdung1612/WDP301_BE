@@ -317,6 +317,24 @@ export const createBoardingBooking = async (req: Request, res: Response) => {
             boardingStatus: requiresOnlinePayment ? "held" : "confirmed"
         });
 
+        // Tạo thông báo cho Admin
+        try {
+            const Notification = (await import("../../models/notification.model")).default;
+            await Notification.create({
+                senderId: userId,
+                type: "boarding",
+                title: "Yêu cầu đặt phòng mới",
+                content: `Yêu cầu đặt phòng mới (${bookingCode}) từ ${fullName}`,
+                metadata: {
+                    boardingId: (booking as any)._id,
+                    bookingCode: bookingCode
+                },
+                status: "unread"
+            });
+        } catch (notifError) {
+            console.error("Lỗi tạo thông báo đặt phòng:", notifError);
+        }
+
         return res.status(201).json({
             message: requiresOnlinePayment
                 ? `Dat lich tam giu thanh cong trong ${DEFAULT_HOLD_MINUTES} phut`

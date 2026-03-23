@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import Brand from '../../models/brand.model';
+import Product from '../../models/product.model';
 import { convertToSlug } from '../../helpers/slug.helper';
 
 export const create = async (req: Request, res: Response) => {
@@ -46,8 +47,9 @@ export const create = async (req: Request, res: Response) => {
 
 export const list = async (req: Request, res: Response) => {
     try {
+        const isTrash = req.query.is_trash === "true";
         const find: any = {
-            deleted: false
+            deleted: isTrash
         };
 
         // Search
@@ -62,20 +64,22 @@ export const list = async (req: Request, res: Response) => {
         }
 
         if (req.query.status) {
-            find.status = req.query.status;
+            const statusArr = (req.query.status as string).split(',');
+            find.status = { $in: statusArr };
         }
 
         const limitItems = parseInt(`${req.query.limit}`) || 20;
         const page = Math.max(1, parseInt(`${req.query.page}`) || 1);
         const skip = (page - 1) * limitItems;
 
-        const [recordList, totalRecord] = await Promise.all([
+        const [recordList, totalRecord, deletedCount] = await Promise.all([
             Brand.find(find)
-                .sort({ createdAt: -1 })
+                .sort({ [isTrash ? 'deletedAt' : 'createdAt']: -1 })
                 .limit(limitItems)
                 .skip(skip)
                 .lean(),
-            Brand.countDocuments(find)
+            Brand.countDocuments(find),
+            Brand.countDocuments({ deleted: true })
         ]);
 
         return res.status(200).json({
@@ -87,7 +91,8 @@ export const list = async (req: Request, res: Response) => {
                     totalRecords: totalRecord,
                     totalPages: Math.ceil(totalRecord / limitItems),
                     currentPage: page,
-                    limit: limitItems
+                    limit: limitItems,
+                    deletedCount
                 }
             }
         });
@@ -96,6 +101,45 @@ export const list = async (req: Request, res: Response) => {
         return res.status(500).json({
             success: false,
             message: "Không thể lấy danh sách thương hiệu"
+        });
+    }
+};
+
+export const restore = async (req: Request, res: Response) => {
+    try {
+        const { id } = req.params;
+        await Brand.updateOne({ _id: id, deleted: true }, {
+            $set: { deleted: false },
+            $unset: { deletedAt: "" }
+        });
+
+        return res.status(200).json({
+            success: true,
+            message: "Khôi phục thương hiệu thành công"
+        });
+    } catch (error) {
+        console.error(error);
+        return res.status(500).json({
+            success: false,
+            message: "Lỗi hệ thống"
+        });
+    }
+};
+
+export const forceDelete = async (req: Request, res: Response) => {
+    try {
+        const { id } = req.params;
+        await Brand.deleteOne({ _id: id, deleted: true });
+
+        return res.status(200).json({
+            success: true,
+            message: "Xóa vĩnh viễn thương hiệu thành công"
+        });
+    } catch (error) {
+        console.error(error);
+        return res.status(500).json({
+            success: false,
+            message: "Lỗi hệ thống"
         });
     }
 };
@@ -203,6 +247,19 @@ export const deletePatch = async (req: Request, res: Response) => {
     try {
         const id = req.params.id;
 
+        // Kiểm tra xem có sản phẩm nào thuộc thương hiệu này không
+        const hasProduct = await Product.exists({
+            brandId: id,
+            deleted: false
+        });
+
+        if (hasProduct) {
+            return res.status(400).json({
+                success: false,
+                message: "Không thể xóa thương hiệu này vì vẫn còn sản phẩm đang sử dụng thương hiệu!"
+            });
+        }
+
         const isExist = await Brand.exists({
             _id: id,
             deleted: false
@@ -220,6 +277,7 @@ export const deletePatch = async (req: Request, res: Response) => {
         }, {
             deleted: true,
             deletedAt: Date.now(),
+            status: 'inactive'
         });
 
         return res.status(200).json({
