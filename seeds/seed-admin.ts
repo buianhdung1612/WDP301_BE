@@ -56,7 +56,7 @@ const seedAdminAccounts = async () => {
         const existingRoles = await Role.find({ name: { $in: rolesData.map(r => r.name) } });
         const rolesToInsert = rolesData.filter(r => !existingRoles.some(er => er.name === r.name));
 
-        let allRoles = [...existingRoles];
+        let allRoles: any[] = [...existingRoles];
         if (rolesToInsert.length > 0) {
             const insertedRoles = await Role.insertMany(rolesToInsert as any[]);
             allRoles = [...allRoles, ...insertedRoles];

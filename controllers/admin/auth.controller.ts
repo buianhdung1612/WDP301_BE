@@ -45,7 +45,7 @@ export const login = async (req: Request, res: Response) => {
         const admin = await AccountAdmin.findOne({
             email,
             deleted: false
-        }).populate("roles");
+        }).populate({ path: "roles", populate: { path: "departmentId", select: "name code" } });
 
         if (!admin) {
             return res.status(400).json({
@@ -125,17 +125,21 @@ export const logout = async (req: Request, res: Response) => {
 
 // [GET] /api/v1/admin/auth/me
 export const getMe = async (req: Request, res: Response) => {
-    const admin = res.locals.accountAdmin;
+    const adminId = res.locals.accountAdmin._id;
     const permissions = res.locals.permissions;
+
+    // Re-fetch with departmentId populated inside roles
+    const admin = await AccountAdmin.findById(adminId)
+        .populate({ path: "roles", populate: { path: "departmentId", select: "name code" } });
 
     res.json({
         code: 200,
         data: {
-            id: admin._id,
-            fullName: admin.fullName,
-            email: admin.email,
-            avatar: admin.avatar,
-            roles: admin.roles,
+            id: admin?._id,
+            fullName: admin?.fullName,
+            email: admin?.email,
+            avatar: admin?.avatar,
+            roles: admin?.roles,
             permissions: permissions
         }
     });
