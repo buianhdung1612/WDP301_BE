@@ -4,6 +4,7 @@ import moment from "moment";
 import { getApiPayment } from "../../configs/setting.config";
 import { Request, Response } from "express";
 import mongoose from "mongoose";
+import dayjs from "dayjs";
 import BoardingBooking from "../../models/boarding-booking.model";
 import BoardingCage from "../../models/boarding-cage.model";
 import Pet from "../../models/pet.model";
@@ -198,8 +199,9 @@ export const createBoardingBooking = async (req: Request, res: Response) => {
             return res.status(400).json({ message: "Moi phong phai gan 1 thu cung khac nhau" });
         }
 
-        const start = new Date(checkInDate);
-        const end = new Date(checkOutDate);
+        const start = dayjs(checkInDate).hour(9).minute(0).second(0).millisecond(0).toDate();
+        const end = dayjs(checkOutDate).hour(9).minute(0).second(0).millisecond(0).toDate();
+
         if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
             return res.status(400).json({ message: "Invalid date format" });
         }
@@ -763,9 +765,17 @@ export const cancelBoardingBooking = async (req: Request, res: Response) => {
             return res.status(400).json({ message: "Cannot cancel after check-in" });
         }
 
+        const createdAt = (booking as any).createdAt;
+        const diffMins = dayjs().diff(dayjs(createdAt), "minute");
+        const isLostDeposit = diffMins > 30;
+
         booking.boardingStatus = "cancelled";
         booking.cancelledAt = new Date();
         booking.cancelledReason = reason || "Khach hang huy";
+        if (isLostDeposit) {
+            booking.cancelledReason += " (Quá 30p - Mất cọc)";
+            (booking as any).isLostDeposit = true;
+        }
         booking.cancelledBy = "customer";
         await booking.save();
         return res.json({ message: "Booking cancelled successfully" });

@@ -84,6 +84,29 @@ const shiftChecklistSchema = new mongoose.Schema(
     { _id: true }
 );
 
+const belongingsSchema = new mongoose.Schema(
+    {
+        name: String,
+        description: String,
+        quantity: {
+            type: Number,
+            default: 1
+        },
+        status: {
+            type: String,
+            enum: ["received", "returned"],
+            default: "received"
+        },
+        images: [String],
+        receivedAt: {
+            type: Date,
+            default: Date.now
+        },
+        returnedAt: Date
+    },
+    { _id: true }
+);
+
 const schema = new mongoose.Schema(
     {
         code: String,
@@ -161,6 +184,7 @@ const schema = new mongoose.Schema(
         // Boarding care management
         feedingSchedule: [feedingScheduleSchema],
         exerciseSchedule: [exerciseScheduleSchema],
+        belongings: [belongingsSchema],
         shiftChecklist: [shiftChecklistSchema],
 
         boardingStatus: {
@@ -172,6 +196,10 @@ const schema = new mongoose.Schema(
         cancelledReason: String,
         cancelledAt: Date,
         cancelledBy: String,
+        isLostDeposit: {
+            type: Boolean,
+            default: false
+        },
 
         actualCheckInDate: Date,
         actualCheckOutDate: Date,
