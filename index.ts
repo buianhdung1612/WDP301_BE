@@ -19,6 +19,7 @@ import { connectDB } from './configs/database.config';
 import { startCancellationTask } from './jobs/cancellation.job';
 import { startExpiryTask } from './jobs/expiry.job';
 import { startNotificationTask } from './jobs/notification.job';
+import { startBookingTask } from './jobs/booking.job';
 import { initSocket } from './sockets/index.socket';
 import { configGooglePassport } from './configs/googleOauth.config';
 import { configureFacebookPassport } from './configs/facebookOauth.config';
@@ -58,6 +59,7 @@ const startServer = async () => {
             startCancellationTask();
             startExpiryTask();
             startNotificationTask();
+            startBookingTask();
             console.log(`Website đang chạy trên cổng ${port}`);
         });
     } catch (error) {
