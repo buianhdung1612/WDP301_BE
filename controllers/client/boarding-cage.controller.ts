@@ -1,5 +1,6 @@
 import { Request, Response } from "express";
 import mongoose from "mongoose";
+import dayjs from "dayjs";
 import BoardingCage from "../../models/boarding-cage.model";
 import BoardingBooking from "../../models/boarding-booking.model";
 import BoardingCageReview from "../../models/boarding-cage-review.model";
@@ -129,8 +130,9 @@ export const listAvailableCages = async (req: Request, res: Response): Promise<v
       return;
     }
 
-    const start = new Date(checkInDate as string);
-    const end = new Date(checkOutDate as string);
+    const start = dayjs(checkInDate as string).hour(9).minute(0).second(0).millisecond(0).toDate();
+    const end = dayjs(checkOutDate as string).hour(9).minute(0).second(0).millisecond(0).toDate();
+
     if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
       res.status(400).json({ message: "Invalid date format" });
       return;

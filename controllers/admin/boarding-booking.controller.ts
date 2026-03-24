@@ -8,6 +8,7 @@ import Department from "../../models/department.model";
 import Pet from "../../models/pet.model";
 import Role from "../../models/role.model";
 import WorkSchedule from "../../models/work-schedule.model";
+import BoardingPetDiary from "../../models/boarding-pet-diary.model";
 import { buildDefaultBoardingCareSchedule } from "../../utils/boarding-care-template.util";
 import { convertToSlug } from "../../helpers/slug.helper";
 
@@ -310,6 +311,29 @@ const sanitizeExerciseSchedule = (items: any[]): any[] => {
             };
         })
         .filter((item) => item.time || item.activity || item.durationMinutes || item.note || item.staffId || item.proofMedia.length > 0);
+};
+
+const sanitizeBelongings = (items: any[]): any[] => {
+    if (!Array.isArray(items)) return [];
+    return items
+        .map((item) => {
+            const status = String(item?.status || "received").toLowerCase() === "returned" ? "returned" : "received";
+            const returnedAt = status === "returned"
+                ? (item?.returnedAt ? new Date(item.returnedAt) : new Date())
+                : (item?.returnedAt ? new Date(item.returnedAt) : null);
+
+            return {
+                _id: normalizeObjectId(item?._id),
+                name: String(item?.name || "").trim(),
+                description: String(item?.description || "").trim(),
+                quantity: Math.max(1, Number(item?.quantity || 1)),
+                status,
+                images: Array.isArray(item?.images) ? item.images.map((img: any) => String(img).trim()).filter(Boolean) : [],
+                receivedAt: item?.receivedAt ? new Date(item.receivedAt) : new Date(),
+                returnedAt
+            };
+        })
+        .filter((item) => item.name);
 };
 
 const validateDoneScheduleEvidence = (
@@ -986,9 +1010,10 @@ export const updateBoardingCareSchedule = async (req: Request, res: Response) =>
             return res.status(400).json({ code: 400, message: "ID khong hop le" });
         }
 
-        const { feedingSchedule, exerciseSchedule, careDate, resetTemplate } = req.body as {
+        const { feedingSchedule, exerciseSchedule, belongings, careDate, resetTemplate } = req.body as {
             feedingSchedule?: any[];
             exerciseSchedule?: any[];
+            belongings?: any[];
             careDate?: string;
             resetTemplate?: boolean;
         };
@@ -998,6 +1023,9 @@ export const updateBoardingCareSchedule = async (req: Request, res: Response) =>
         }
         if (exerciseSchedule !== undefined && !Array.isArray(exerciseSchedule)) {
             return res.status(400).json({ code: 400, message: "exerciseSchedule phai la mang" });
+        }
+        if (belongings !== undefined && !Array.isArray(belongings)) {
+            return res.status(400).json({ code: 400, message: "belongings phai la mang" });
         }
         const booking: any = await BoardingBooking.findOne({ _id: id, deleted: false });
         if (!booking) return res.status(404).json({ code: 404, message: "Khong tim thay don khach san" });
@@ -1168,7 +1196,55 @@ export const updateBoardingCareSchedule = async (req: Request, res: Response) =>
                 });
         }
 
+        if (belongings !== undefined) {
+            booking.belongings = sanitizeBelongings(belongings);
+        }
+
         await booking.save();
+
+        // --- Auto-Sync To Pet Diary ---
+        try {
+            const feedingItems = Array.isArray(booking.feedingSchedule) ? booking.feedingSchedule : [];
+            const doneFeedingItems = feedingItems.filter((item: any) => String(item.status).toLowerCase() === "done");
+
+            if (doneFeedingItems.length > 0 && Array.isArray(booking.petIds) && booking.petIds.length > 0) {
+                const careDateValue = new Date(careDate || booking.checkInDate || new Date());
+                careDateValue.setHours(0, 0, 0, 0);
+
+                for (const item of doneFeedingItems) {
+                    const hour = parseInt(String(item.time || "00:00").split(":")[0]);
+                    let meal = "Tối";
+                    if (hour < 11) meal = "Sáng";
+                    else if (hour < 16) meal = "Trưa";
+
+                    for (const petId of booking.petIds) {
+                        await BoardingPetDiary.findOneAndUpdate(
+                            {
+                                bookingId: booking._id,
+                                petId: petId,
+                                date: careDateValue,
+                                meal: meal,
+                                deleted: false
+                            },
+                            {
+                                $set: {
+                                    eatingStatus: "Hết", // Default when marking done from schedule
+                                    note: item.note || "",
+                                    proofMedia: item.proofMedia || [],
+                                    staffId: item.staffId || currentStaffId,
+                                    staffName: item.staffName || currentStaffName || "Staff"
+                                }
+                            },
+                            { upsert: true, new: true }
+                        );
+                    }
+                }
+            }
+        } catch (syncError) {
+            console.error("Failed to auto-sync boarding care schedule to pet diary:", syncError);
+            // Non-blocking error, we still return success for the main update
+        }
+        // --- End Auto-Sync ---
 
         const updatedBooking = await BoardingBooking.findById(booking._id)
             .populate("userId", "fullName phone email avatar")
