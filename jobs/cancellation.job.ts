@@ -79,6 +79,26 @@ export const startCancellationTask = () => {
                 await Booking.updateOne({ _id: booking._id }, { bookingStatus: "cancelled" });
             }
 
+            // 3. Tìm các LỊCH ĐẶT KHÁCH SẠN (Boarding) hết hạn giữ chỗ (held)
+            const BoardingBooking = (await import('../models/boarding-booking.model')).default;
+            const expiredBoardings = await BoardingBooking.find({
+                boardingStatus: "held",
+                holdExpiresAt: { $lt: now },
+                deleted: false
+            });
+
+            for (const boarding of expiredBoardings) {
+                await BoardingBooking.updateOne(
+                    { _id: boarding._id },
+                    {
+                        boardingStatus: "cancelled",
+                        cancelledAt: now,
+                        cancelledBy: "system",
+                        cancelledReason: "Hết thời gian giữ phòng (Thanh toán hết hạn 15p)"
+                    }
+                );
+            }
+
         } catch (error) {
             console.error(error);
         }

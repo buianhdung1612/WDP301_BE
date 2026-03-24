@@ -225,7 +225,8 @@ export const createBooking = async (req: Request, res: Response) => {
             discount: discount || 0,
             customerName: customerName || userDetail?.fullName || "",
             customerPhone: customerPhone || userDetail?.phone || "",
-            deleted: false
+            deleted: false,
+            paymentExpireAt: new Date(Date.now() + (config?.bookingGracePeriod || 15) * 60 * 1000)
         });
 
         const name = newBooking.customerName || "";

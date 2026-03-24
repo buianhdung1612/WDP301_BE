@@ -127,39 +127,52 @@ export const findBestStaffForBooking = async (
             continue;
         }
 
-        // D. Tính điểm
-        let score = 100;
+        // D. Thu thập các thông số để sắp xếp (Tiêu chí mới)
 
-        // 1. Lịch sử làm việc (số đơn đã hoàn thành)
-        const historyCount = await Booking.countDocuments({
+        // 1. Số đơn nhận trong ngày hôm nay (Cân bằng tải)
+        const todayCount = assignedBookings.filter(b => {
+            const bStaffIds = b.staffIds?.map((id: any) => id.toString()) || [];
+            return bStaffIds.includes(staff._id.toString());
+        }).length;
+
+        // 2. Tổng số đơn đã làm trong quá khứ
+        const totalPastCount = await Booking.countDocuments({
+            staffIds: staff._id,
+            bookingStatus: "completed",
+            deleted: false
+        });
+
+        // 3. Kinh nghiệm làm dịch vụ này (Số đơn dịch vụ này đã hoàn thành)
+        const experienceServiceCount = await Booking.countDocuments({
             staffIds: staff._id,
             serviceId: serviceId,
             bookingStatus: "completed",
             deleted: false
         });
-        score += historyCount * 5;
 
-        // 2. Điểm đánh giá (Rating)
-        const staffReviews = allReviews.filter(r => r.staffId?.toString() === staff._id.toString());
-        if (staffReviews.length > 0) {
-            const avgRating = staffReviews.reduce((sum, r) => sum + r.rating, 0) / staffReviews.length;
-            score += avgRating * 2;
-        }
-
-        // 3. Phạt theo khối lượng công việc (càng nhiều đơn càng bị trừ điểm để cân bằng tải)
-        const todayCount = assignedBookings.filter(b => {
-            const bStaffIds = b.staffIds?.map((id: any) => id.toString()) || [];
-            return bStaffIds.includes(staff._id.toString());
-        }).length;
-        score -= todayCount * 10;
-
-        console.log(`  v ${staff.fullName}: đủ điều kiện (điểm số: ${score})`);
-        availableStaffList.push({ staff, score });
+        console.log(`  v ${staff.fullName}: Đủ điều kiện (Hôm nay: ${todayCount}, Tổng quá khứ: ${totalPastCount}, Kinh nghiệm: ${experienceServiceCount})`);
+        availableStaffList.push({
+            staff,
+            todayCount,
+            totalPastCount,
+            experienceServiceCount
+        });
     }
 
-    // Sắp xếp theo điểm giảm dần và trả về kết quả
+    // Sắp xếp theo thứ tự ưu tiên:
+    // 1. Ưu tiên người làm ít hơn trong ngày (todayCount ASC)
+    // 2. Nếu bằng nhau, ưu tiên người làm ít hơn trong quá khứ (totalPastCount ASC)
+    // 3. Nếu vẫn bằng nhau, ưu tiên người có kinh nghiệm hơn với dịch vụ này (experienceServiceCount DESC)
     const result = availableStaffList
-        .sort((a, b) => b.score - a.score)
+        .sort((a, b) => {
+            if (a.todayCount !== b.todayCount) {
+                return a.todayCount - b.todayCount;
+            }
+            if (a.totalPastCount !== b.totalPastCount) {
+                return a.totalPastCount - b.totalPastCount;
+            }
+            return b.experienceServiceCount - a.experienceServiceCount;
+        })
         .map(item => item.staff);
 
     // Nếu số lượng thú cưng nhiều hơn số nhân viên rảnh, chúng ta vẫn trả về danh sách nhân viên rảnh

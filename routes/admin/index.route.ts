@@ -24,6 +24,7 @@ import orderRoutes from "./order.route"
 import dashboardRoutes from "./dashboard.route";
 import reviewRoutes from "./review.route";
 import notificationRoutes from "./notification.route";
+import boardingPetDiaryRoutes from "./boarding-pet-diary.route";
 
 import * as authMiddleware from "../../middlewares/admin/auth.middleware";
 
@@ -53,6 +54,7 @@ router.use('/departments', authMiddleware.verifyToken, departmentRoutes);
 router.use('/boarding-cage', authMiddleware.verifyToken, boardingCageRoutes);
 router.use('/boarding-booking', authMiddleware.verifyToken, boardingBookingRoutes);
 router.use('/pet-care-template', authMiddleware.verifyToken, petCareTemplateRoutes);
+router.use('/boarding-pet-diary', authMiddleware.verifyToken, boardingPetDiaryRoutes);
 router.use('/dashboard', authMiddleware.verifyToken, dashboardRoutes);
 router.use('/review', authMiddleware.verifyToken, reviewRoutes);
 router.use('/notifications', authMiddleware.verifyToken, notificationRoutes);

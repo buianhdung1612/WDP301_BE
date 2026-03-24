@@ -1,10 +1,13 @@
 import Booking from "../models/booking.model";
 import BookingConfig from "../models/booking-config.model";
 import Notification from "../models/notification.model";
+import cron from "node-cron";
+import dayjs from "dayjs";
 
 export const autoUpdateBookingStatuses = async () => {
     try {
         const now = new Date();
+        const todayStart = dayjs().startOf('day').toDate();
 
         // Lấy cài đặt thời gian từ BookingConfig, mặc định 15p và 60p
         const config = await BookingConfig.findOne();
@@ -14,6 +17,28 @@ export const autoUpdateBookingStatuses = async () => {
 
         const gracePeriod = gracePeriodMinutes * 60000;
         const cancelPeriod = cancelPeriodMinutes * 60000;
+
+        // 0. Dọn dẹp các lịch từ hôm qua trở về trước (Past Day Cleanup)
+        // Bất kỳ đơn nào có ngày hẹn trước hôm nay mà chưa hoàn quản/hủy thì hủy hết
+        const pastDayResult = await Booking.updateMany(
+            {
+                start: { $lt: todayStart },
+                bookingStatus: { $in: ["pending", "confirmed", "delayed", "in-progress", "returned"] },
+                deleted: false
+            },
+            {
+                $set: {
+                    bookingStatus: "cancelled",
+                    cancelledReason: "Hệ thống tự động dọn dẹp (Lịch cũ chưa hoàn tất)",
+                    cancelledAt: now,
+                    cancelledBy: "system"
+                }
+            }
+        );
+
+        if (pastDayResult.modifiedCount > 0) {
+            console.log(`[JOB-DỊCH VỤ] Đã tự động hủy ${pastDayResult.modifiedCount} lịch đặt cũ từ những ngày trước.`);
+        }
 
         // 1. Chuyển sang delayed nếu quá giờ hẹn gracePeriod mà chưa bắt đầu
         await Booking.updateMany(
@@ -26,6 +51,8 @@ export const autoUpdateBookingStatuses = async () => {
         );
 
         // 2. Tự động hủy nếu trễ quá cancelPeriod phút (No-show)
+        // Nếu autoCancelEnabled được bật, hệ thống sẽ tự hủy sau cancelPeriod
+        // Nếu không, chỉ những đơn pending (chưa thanh toán) có paymentExpireAt mới bị hủy bởi cancellation.job (logic riêng)
         if (autoCancelEnabled) {
             await Booking.updateMany(
                 {
@@ -34,7 +61,14 @@ export const autoUpdateBookingStatuses = async () => {
                     impactedByOverrun: { $ne: true }, // Không tự động hủy nếu do lỗi cửa hàng (Overrun)
                     deleted: false
                 },
-                { $set: { bookingStatus: "cancelled", cancelledReason: "Khách không đến (Tự động)" } }
+                {
+                    $set: {
+                        bookingStatus: "cancelled",
+                        cancelledReason: "Khách không đến (Tự động hủy sau thời gian chờ)",
+                        cancelledAt: now,
+                        cancelledBy: "system"
+                    }
+                }
             );
         }
 
@@ -118,10 +152,22 @@ export const autoUpdateBookingStatuses = async () => {
                     { $set: { expectedFinish: newExpectedFinish } }
                 );
 
-                console.log(`[JOB-ĐẸT LỊCH] Cảnh báo quá giờ cho lịch ${booking.code} (Ảnh hưởng ${affectedBookings.length} lịch)`);
+                console.log(`[JOB-DỊCH VỤ] Cảnh báo quá giờ cho lịch ${booking.code} (Ảnh hưởng ${affectedBookings.length} lịch)`);
             }
         }
     } catch (error) {
-        console.error("[JOB-ĐẸT LỊCH] Lỗi khi cập nhật trạng thái tự động:", error);
+        console.error("[JOB-DỊCH VỤ] Lỗi khi cập nhật trạng thái tự động:", error);
     }
+};
+
+export const startBookingTask = () => {
+    // Chạy mỗi 10 phút để cập nhật trạng thái lịch đặt và dọn dẹp
+    cron.schedule('*/10 * * * *', async () => {
+        console.log(`[JOB-DỊCH VỤ] Đang quét cập nhật trạng thái lịch đặt... (${new Date().toLocaleTimeString()})`);
+        await autoUpdateBookingStatuses();
+    });
+
+    // Chạy ngay lần đầu khi khởi động server
+    autoUpdateBookingStatuses();
+    console.log("[JOB-DỊCH VỤ] Đã lên lịch quét 10 phút/lần");
 };
