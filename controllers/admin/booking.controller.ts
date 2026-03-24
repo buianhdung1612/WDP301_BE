@@ -225,7 +225,8 @@ export const createBooking = async (req: Request, res: Response) => {
             discount: discount || 0,
             customerName: customerName || userDetail?.fullName || "",
             customerPhone: customerPhone || userDetail?.phone || "",
-            deleted: false
+            deleted: false,
+            paymentExpireAt: new Date(Date.now() + (config?.bookingGracePeriod || 15) * 60 * 1000)
         });
 
         const name = newBooking.customerName || "";
@@ -719,6 +720,82 @@ export const confirmBooking = async (req: Request, res: Response) => {
         });
     }
 };
+
+// [PATCH] /api/v1/admin/bookings/:id/check-in
+export const checkInBooking = async (req: Request, res: Response) => {
+    try {
+        const booking = await Booking.findById(req.params.id);
+
+        if (!booking || booking.deleted) {
+            return res.status(404).json({
+                code: 404,
+                message: "Lịch đặt không tồn tại"
+            });
+        }
+
+        booking.bookingStatus = "returned";
+        booking.checkedInAt = new Date();
+        await booking.save();
+
+        res.json({
+            code: 200,
+            message: "Check-in khách thành công",
+            data: booking
+        });
+    } catch (error) {
+        res.status(500).json({
+            code: 500,
+            message: "Lỗi khi thực hiện check-in"
+        });
+    }
+};
+
+// [PATCH] /api/v1/admin/bookings/:id/check-out
+export const checkoutBooking = async (req: Request, res: Response) => {
+    try {
+        const booking = await Booking.findById(req.params.id);
+
+        if (!booking || booking.deleted) {
+            return res.status(404).json({
+                code: 404,
+                message: "Lịch đặt không tồn tại"
+            });
+        }
+
+        // Kiểm tra thanh toán
+        if (booking.paymentStatus !== 'paid') {
+            return res.status(400).json({
+                code: 400,
+                message: "Vui lòng thanh toán đủ trước khi Checkout (Hoàn tất đơn)"
+            });
+        }
+
+        booking.bookingStatus = "completed";
+        booking.completedAt = new Date();
+
+        // Đánh dấu tất cả thú cưng trong đơn là đã xong
+        if (booking.petStaffMap && booking.petStaffMap.length > 0) {
+            booking.petStaffMap.forEach((m: any) => {
+                m.status = "completed";
+                if (!m.completedAt) m.completedAt = new Date();
+            });
+        }
+
+        await booking.save();
+
+        res.json({
+            code: 200,
+            message: "Checkout (Hoàn thành đơn) thành công",
+            data: booking
+        });
+    } catch (error) {
+        res.status(500).json({
+            code: 500,
+            message: "Lỗi khi thực hiện checkout"
+        });
+    }
+};
+
 
 // [PATCH] /api/v1/admin/bookings/:id/cancel
 export const cancelBooking = async (req: Request, res: Response) => {

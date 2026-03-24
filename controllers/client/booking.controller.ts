@@ -469,6 +469,10 @@ export const createBooking = async (req: Request, res: Response) => {
             remainingAmount = 0;
         }
 
+        // Thời gian hết hạn thanh toán (mặc định 15 phút hoặc theo config)
+        const gracePeriodMinutes = config?.bookingGracePeriod || 15;
+        const paymentExpireAt = new Date(Date.now() + gracePeriodMinutes * 60 * 1000);
+
         const newBooking = new Booking({
             code: bookingCode,
             userId,
@@ -487,7 +491,8 @@ export const createBooking = async (req: Request, res: Response) => {
             remainingAmount,
             bookingStatus: autoConfirm ? "confirmed" : "pending",
             paymentMethod: paymentMethod || "money",
-            paymentStatus: "unpaid"
+            paymentStatus: "unpaid",
+            paymentExpireAt: paymentExpireAt
         });
 
         await newBooking.save();
