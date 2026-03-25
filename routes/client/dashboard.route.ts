@@ -34,4 +34,6 @@ router.get('/order/list', dashboardController.orderList);
 
 router.get('/order/detail/:id', dashboardController.orderDetail);
 
+router.get('/overview', dashboardController.overview);
+
 export default router;

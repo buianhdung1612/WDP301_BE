@@ -431,3 +431,68 @@ export const orderDetail = async (req: Request, res: Response) => {
         });
     }
 }
+
+export const overview = async (req: Request, res: Response) => {
+    try {
+        const userId = res.locals.accountUser.id;
+
+        // Stats
+        const [
+            totalOrders,
+            completedOrders,
+            pendingOrders,
+            cancelledOrders,
+        ] = await Promise.all([
+            Order.countDocuments({ userId, deleted: false }),
+            Order.countDocuments({ userId, orderStatus: "completed", deleted: false }),
+            Order.countDocuments({ userId, orderStatus: "pending", deleted: false }),
+            Order.countDocuments({ userId, orderStatus: "cancelled", deleted: false }),
+        ]);
+
+        const Review = (await import("../../models/review.model")).default;
+        const Product = (await import("../../models/product.model")).default;
+
+        const reviewCount = await Review.countDocuments({ userId });
+
+        // Recent Orders
+        const recentOrders = await Order.find({ userId, deleted: false })
+            .sort({ createdAt: -1 })
+            .limit(5)
+            .lean();
+
+        // Recent Reviews
+        const reviews = await Review.find({ userId })
+            .sort({ createdAt: -1 })
+            .limit(3)
+            .lean();
+
+        const recentReviews = await Promise.all(reviews.map(async (review) => {
+            const product = await Product.findById(review.productId).select("name slug").lean();
+            return {
+                ...review,
+                product
+            };
+        }));
+
+        return res.json({
+            success: true,
+            data: {
+                stats: {
+                    totalOrders,
+                    completedOrders,
+                    pendingOrders,
+                    cancelledOrders,
+                    reviewCount
+                },
+                recentOrders,
+                recentReviews
+            }
+        });
+    } catch (error) {
+        console.error(error);
+        return res.status(500).json({
+            success: false,
+            message: "Lỗi hệ thống!"
+        });
+    }
+};
