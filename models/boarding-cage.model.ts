@@ -13,7 +13,7 @@ const schema = new mongoose.Schema(
             enum: ["S", "M", "L", "XL_XXL", "C", "B", "A", "XL"],
             required: true
         },
-        
+
         maxWeightCapacity: Number, // Max weight (kg)
         dailyPrice: Number, // Daily price
         avatar: String, // Cage image
@@ -22,7 +22,7 @@ const schema = new mongoose.Schema(
         amenities: [String], // Amenities (bed, toys, air conditioning, etc.)
         status: {
             type: String,
-            enum: ["available", "occupied", "maintenance"],
+            enum: ["available", "occupied", "maintenance", "under-cleaning"],
             default: "available"
         },
         bookingLockUntil: Date,

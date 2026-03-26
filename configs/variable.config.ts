@@ -44,6 +44,8 @@ export const permissionList = [
     { id: "boarding_booking_delete", name: "Hủy/Xóa lịch khách sạn" },
     { id: "boarding_booking_checkin", name: "Xác nhận nhận chuồng (Check-in)" },
     { id: "boarding_booking_checkout", name: "Xác nhận trả chuồng (Check-out)" },
+    { id: "boarding_config_view", name: "Xem cấu hình khách sạn" },
+    { id: "boarding_config_edit", name: "Chỉnh sửa cấu hình khách sạn" },
     // Quản lý Bài viết
     { id: "blog_view", name: "Xem danh sách bài viết" },
     { id: "blog_create", name: "Tạo bài viết mới" },
