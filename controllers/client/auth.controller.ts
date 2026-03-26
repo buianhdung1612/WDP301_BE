@@ -1,11 +1,41 @@
 import { Request, Response } from "express";
 import AccountUser from "../../models/account-user.model";
 import ForgotPassword from "../../models/forgot-password.model";
+import axios from "axios";
 import bcrypt from "bcryptjs";
 import slugify from "slugify";
 import jwt from "jsonwebtoken";
 import * as generateHelper from "../../helpers/generate.helper";
 import * as authMiddleware from "../../middlewares/client/auth.middleware";
+import { getApiLoginSocial } from "../../configs/setting.config";
+
+const respondWithToken = (res: Response, user: any, message = "Đăng nhập thành công!") => {
+    const tokenUser = jwt.sign(
+        {
+            id: user.id,
+            email: user.email
+        },
+        `${process.env.JWT_SECRET}`,
+        {
+            expiresIn: "7d"
+        }
+    );
+
+    return res.json({
+        success: true,
+        message,
+        token: tokenUser,
+        user: {
+            id: user.id,
+            fullName: user.fullName,
+            email: user.email,
+            phone: user.phone,
+            avatar: user.avatar,
+            totalPoint: user.totalPoint || 0,
+            usedPoint: user.usedPoint || 0
+        }
+    });
+};
 
 // [POST] /api/v1/client/auth/register
 export const registerPost = async (req: Request, res: Response) => {
@@ -330,6 +360,274 @@ export const callbackFacebook = async (req: Request, res: Response) => {
     });
 
     res.redirect(`${process.env.CLIENT_URL || 'http://localhost:5173'}`);
+}
+
+// [POST] /api/v1/client/auth/google/token
+export const googleTokenLoginPost = async (req: Request, res: Response) => {
+    try {
+        const { accessToken, idToken, authCode, redirectUri } = req.body;
+
+        if (!accessToken && !idToken && !authCode) {
+            return res.json({
+                success: false,
+                message: "Thiếu token Google!"
+            });
+        }
+
+        const apiLoginSocial = await getApiLoginSocial();
+        if (!apiLoginSocial?.googleClientId) {
+            return res.json({
+                success: false,
+                message: "Chưa cấu hình Google Client ID!"
+            });
+        }
+
+        let tokenAccess = accessToken;
+        let tokenId = idToken;
+
+        if (authCode) {
+            if (!apiLoginSocial?.googleClientSecret) {
+                return res.json({
+                    success: false,
+                    message: "Chưa cấu hình Google Client Secret!"
+                });
+            }
+
+            const tokenRes = await axios.post(
+                "https://oauth2.googleapis.com/token",
+                new URLSearchParams({
+                    code: authCode,
+                    client_id: apiLoginSocial.googleClientId,
+                    client_secret: apiLoginSocial.googleClientSecret,
+                    redirect_uri: redirectUri || "https://auth.expo.io/@huytran62044/wdtsweetheart-mobile",
+                    grant_type: "authorization_code"
+                }).toString(),
+                {
+                    headers: { "Content-Type": "application/x-www-form-urlencoded" }
+                }
+            );
+
+            tokenAccess = tokenRes.data?.access_token || tokenAccess;
+            tokenId = tokenRes.data?.id_token || tokenId;
+        }
+
+        let googleProfile: any = null;
+
+        if (tokenId) {
+            const tokenInfo = await axios.get("https://oauth2.googleapis.com/tokeninfo", {
+                params: { id_token: tokenId }
+            });
+
+            if (tokenInfo.data?.aud !== apiLoginSocial.googleClientId) {
+                return res.json({
+                    success: false,
+                    message: "Google token không hợp lệ!"
+                });
+            }
+
+            googleProfile = tokenInfo.data;
+        } else if (tokenAccess) {
+            const tokenInfo = await axios.get("https://oauth2.googleapis.com/tokeninfo", {
+                params: { access_token: tokenAccess }
+            });
+
+            if (tokenInfo.data?.aud !== apiLoginSocial.googleClientId) {
+                return res.json({
+                    success: false,
+                    message: "Google token không hợp lệ!"
+                });
+            }
+
+            const userInfo = await axios.get("https://www.googleapis.com/oauth2/v3/userinfo", {
+                headers: {
+                    Authorization: `Bearer ${tokenAccess}`
+                }
+            });
+
+            googleProfile = userInfo.data;
+        } else {
+            return res.json({
+                success: false,
+                message: "Không lấy được token Google!"
+            });
+        }
+
+        const email = googleProfile?.email;
+        if (!email) {
+            return res.json({
+                success: false,
+                message: "Không lấy được email từ Google!"
+            });
+        }
+
+        const fullName = googleProfile?.name || "Google User";
+        const googleId = googleProfile?.sub;
+        const avatar = googleProfile?.picture;
+
+        let user = await AccountUser.findOne({
+            email: email,
+            deleted: false
+        });
+
+        if (user) {
+            let shouldSave = false;
+            if (!user.googleId && googleId) {
+                user.googleId = googleId;
+                shouldSave = true;
+            }
+            if (!user.avatar && avatar) {
+                user.avatar = avatar;
+                shouldSave = true;
+            }
+            if (!user.search) {
+                user.search = slugify(`${user.fullName} ${user.email} ${user.phone || ""}`, {
+                    replacement: " ",
+                    lower: true
+                });
+                shouldSave = true;
+            }
+
+            if (shouldSave) {
+                await user.save();
+            }
+
+            return respondWithToken(res, user);
+        }
+
+        const search = slugify(`${fullName} ${email}`, {
+            replacement: " ",
+            lower: true
+        });
+
+        user = new AccountUser({
+            googleId: googleId,
+            fullName: fullName,
+            email: email,
+            avatar: avatar,
+            search: search,
+            status: "active"
+        });
+
+        await user.save();
+        return respondWithToken(res, user);
+    } catch (error) {
+        return res.json({
+            success: false,
+            message: "Đăng nhập Google thất bại!"
+        });
+    }
+}
+
+// [POST] /api/v1/client/auth/facebook/token
+export const facebookTokenLoginPost = async (req: Request, res: Response) => {
+    try {
+        const { accessToken } = req.body;
+
+        if (!accessToken) {
+            return res.json({
+                success: false,
+                message: "Thiếu token Facebook!"
+            });
+        }
+
+        const apiLoginSocial = await getApiLoginSocial();
+        if (!apiLoginSocial?.facebookAppId || !apiLoginSocial?.facebookAppSecret) {
+            return res.json({
+                success: false,
+                message: "Chưa cấu hình Facebook App ID/Secret!"
+            });
+        }
+
+        const appAccessToken = `${apiLoginSocial.facebookAppId}|${apiLoginSocial.facebookAppSecret}`;
+
+        const debugToken = await axios.get("https://graph.facebook.com/debug_token", {
+            params: {
+                input_token: accessToken,
+                access_token: appAccessToken
+            }
+        });
+
+        const debugData = debugToken.data?.data;
+        if (!debugData?.is_valid || debugData?.app_id !== apiLoginSocial.facebookAppId) {
+            return res.json({
+                success: false,
+                message: "Facebook token không hợp lệ!"
+            });
+        }
+
+        const profileRes = await axios.get("https://graph.facebook.com/me", {
+            params: {
+                fields: "id,name,email,picture.type(large)",
+                access_token: accessToken
+            }
+        });
+
+        const facebookProfile = profileRes.data;
+        const email = facebookProfile?.email;
+
+        if (!email) {
+            return res.json({
+                success: false,
+                message: "Không lấy được email từ Facebook!"
+            });
+        }
+
+        const fullName = facebookProfile?.name || "Facebook User";
+        const facebookId = facebookProfile?.id;
+        const avatar = facebookProfile?.picture?.data?.url;
+
+        let user = await AccountUser.findOne({
+            email: email,
+            deleted: false
+        });
+
+        if (user) {
+            let shouldSave = false;
+            if (!user.facebookId && facebookId) {
+                user.facebookId = facebookId;
+                shouldSave = true;
+            }
+            if (!user.avatar && avatar) {
+                user.avatar = avatar;
+                shouldSave = true;
+            }
+            if (!user.search) {
+                user.search = slugify(`${user.fullName} ${user.email} ${user.phone || ""}`, {
+                    replacement: " ",
+                    lower: true
+                });
+                shouldSave = true;
+            }
+
+            if (shouldSave) {
+                await user.save();
+            }
+
+            return respondWithToken(res, user);
+        }
+
+        const search = slugify(`${fullName} ${email}`, {
+            replacement: " ",
+            lower: true
+        });
+
+        user = new AccountUser({
+            facebookId: facebookId,
+            fullName: fullName,
+            email: email,
+            avatar: avatar,
+            search: search,
+            status: "active"
+        });
+
+        await user.save();
+        return respondWithToken(res, user);
+    } catch (error) {
+        return res.json({
+            success: false,
+            message: "Đăng nhập Facebook thất bại!"
+        });
+    }
 }
 
 // [GET] /api/v1/client/auth/me
