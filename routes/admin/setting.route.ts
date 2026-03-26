@@ -27,4 +27,9 @@ router.get('/point', settingController.point);
 
 router.patch('/point', settingController.pointPatch);
 
+router.get('/page/:key', settingController.getPage);
+
+router.patch('/page/:key', settingController.getPagePatch);
+
+
 export default router;

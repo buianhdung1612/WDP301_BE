@@ -244,3 +244,44 @@ export const pointPatch = async (req: any, res: Response) => {
         data: record.data
     })
 }
+
+// [GET] /api/v1/admin/setting/page/:key
+export const getPage = async (req: Request, res: Response) => {
+    const key = req.params.key;
+
+    const record = await Setting.findOne({
+        key: key
+    });
+
+    res.json({
+        code: 200,
+        message: "Dữ liệu trang tĩnh",
+        data: record ? record.data : {}
+    });
+}
+
+// [PATCH] /api/v1/admin/setting/page/:key
+export const getPagePatch = async (req: any, res: Response) => {
+    const key = req.params.key;
+
+    const record = await Setting.findOneAndUpdate(
+        {
+            key: key
+        },
+        {
+            key: key,
+            data: req.body,
+            updatedBy: req.adminId
+        },
+        {
+            upsert: true,
+            new: true
+        }
+    );
+
+    res.json({
+        code: 200,
+        message: "Cập nhật thành công!",
+        data: record.data
+    })
+}

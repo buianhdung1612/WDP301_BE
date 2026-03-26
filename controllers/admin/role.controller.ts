@@ -1,4 +1,4 @@
-import { Request, Response } from 'express';
+﻿import { Request, Response } from 'express';
 import Role from '../../models/role.model';
 import AccountAdmin from '../../models/account-admin.model';
 import { convertToSlug } from '../../helpers/slug.helper';
@@ -15,8 +15,17 @@ export const list = async (req: Request, res: Response) => {
             find.search = new RegExp(keyword, "i");
         }
 
+        // Add filter by departmentId
+        if (req.query.departmentId) {
+            find.departmentId = req.query.departmentId;
+        }
+
+        if (req.query.status) {
+            find.status = req.query.status;
+        }
+
         // Pagination
-        const limitItems = parseInt(req.query.limit as string) || 20;
+        const limitItems = parseInt(req.query.limit as string) || 50;
         const page = Math.max(1, parseInt(req.query.page as string) || 1);
         const skip = (page - 1) * limitItems;
 
@@ -34,12 +43,14 @@ export const list = async (req: Request, res: Response) => {
         res.json({
             code: 200,
             message: "Danh sách nhóm quyền",
-            data: recordList,
-            pagination: {
-                totalRecords,
-                totalPages: Math.ceil(totalRecords / limitItems),
-                currentPage: page,
-                limit: limitItems
+            data: {
+                recordList: recordList,
+                pagination: {
+                    totalRecords,
+                    totalPages: Math.ceil(totalRecords / limitItems),
+                    currentPage: page,
+                    limit: limitItems
+                }
             }
         });
     } catch (error) {
@@ -130,7 +141,6 @@ export const deleteRole = async (req: Request, res: Response) => {
     try {
         const id = req.params.id;
 
-        // Kiểm tra xem quyền này có đang được gán cho tài khoản admin nào không
         const hasAdmin = await AccountAdmin.exists({ roleId: id, deleted: false });
         if (hasAdmin) {
             return res.status(400).json({

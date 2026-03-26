@@ -1029,6 +1029,58 @@ export const cancelMyOrder = async (req: Request, res: Response) => {
 };
 
 
+
+// [PATCH] /api/v1/client/order/:id/confirm-receipt
+export const confirmReceipt = async (req: Request, res: Response) => {
+    try {
+        const id = req.params.id;
+        const userId = res.locals.accountUser.id;
+
+        const order = await Order.findOne({
+            _id: id,
+            userId: userId,
+            deleted: false
+        });
+
+        if (!order) {
+            return res.json({
+                code: "error",
+                message: "Đơn hàng không tồn tại!"
+            });
+        }
+
+        if (order.orderStatus !== "shipped") {
+            return res.json({
+                code: "error",
+                message: "Chỉ có thể xác nhận khi đơn hàng đang ở trạng thái đã giao!"
+            });
+        }
+
+        // Cập nhật trạng thái thành completed
+        await Order.updateOne({ _id: id }, {
+            orderStatus: "completed"
+        });
+
+        // Tích điểm cho người dùng (nếu chưa tích)
+        if (order.code) {
+            await addPointAfterPayment(order.code);
+        }
+
+        res.json({
+            code: "success",
+            message: "Xác nhận nhận hàng thành công. Đơn hàng đã hoàn thành!"
+        });
+
+    } catch (error) {
+        console.error("Confirm Receipt Error:", error);
+        res.json({
+            code: "error",
+            message: "Lỗi hệ thống!"
+        });
+    }
+};
+
+
 function sortObject(obj: any) {
     let sorted: any = {};
     let str: string[] = [];

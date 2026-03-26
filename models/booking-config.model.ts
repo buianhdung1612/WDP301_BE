@@ -25,7 +25,31 @@ const schema = new mongoose.Schema(
         depositPercentage: {
             type: Number,
             default: 0
-        }
+        },
+        serviceRoomCount: {
+            type: Number,
+            default: 1
+        },
+        staffingRules: [
+            {
+                shiftId: {
+                    type: mongoose.Schema.Types.ObjectId,
+                    ref: "Shift"
+                },
+                roleRequirements: [
+                    {
+                        roleId: {
+                            type: mongoose.Schema.Types.ObjectId,
+                            ref: "Role"
+                        },
+                        minStaff: {
+                            type: Number,
+                            default: 1
+                        }
+                    }
+                ]
+            }
+        ]
     },
     {
         timestamps: true,

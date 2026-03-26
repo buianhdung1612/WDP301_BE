@@ -1,4 +1,4 @@
-import { Request, Response } from 'express';
+﻿import { Request, Response } from 'express';
 import Product from '../../models/product.model';
 import Order from '../../models/order.model';
 import Booking from '../../models/booking.model';
@@ -6,6 +6,8 @@ import BoardingBooking from '../../models/boarding-booking.model';
 import AccountUser from '../../models/account-user.model';
 import AccountAdmin from "../../models/account-admin.model";
 import Pet from "../../models/pet.model";
+import BookingConfig from "../../models/booking-config.model";
+import WorkSchedule from "../../models/work-schedule.model";
 import dayjs from 'dayjs';
 
 export const getEcommerceStats = async (req: Request, res: Response) => {
@@ -26,7 +28,6 @@ export const getEcommerceStats = async (req: Request, res: Response) => {
 
         const baseMatch = { paymentStatus: "paid", orderStatus: "completed", deleted: false };
 
-        // Revenue & Order comparisons
         const [
             todayRevenueRes, yesterdayRevenueRes,
             thisMonthRevenueRes, lastMonthRevenueRes,
@@ -135,7 +136,6 @@ export const getEcommerceStats = async (req: Request, res: Response) => {
             total: item.total
         }));
 
-        // Fetch user details for top customers (since aggregate lookup might be complex here)
         const topCustomers = await Promise.all(topCustomersRes.map(async (c) => {
             const user = await AccountUser.findById(c._id).select('fullName avatar');
             return {
@@ -223,8 +223,7 @@ export const getAnalyticsStats = async (req: Request, res: Response) => {
         const weeklyRevenueTable: Record<string, number> = {};
         weeklyRevenueRes.forEach(item => weeklyRevenueTable[item._id] = item.total);
         const weeklyRevenue = Array.from({ length: 7 }).map((_, i) => {
-            const date = dayjs().subtract(6 - i, 'day').format('Y-M-D'); // Match format in aggregate if possible, or adjust here
-            // Actually aggregate format is %Y-%m-%d
+            const date = dayjs().subtract(6 - i, 'day').format('Y-M-D'); 
             const d = dayjs().subtract(6 - i, 'day').format('YYYY-MM-DD');
             return weeklyRevenueTable[d] || 0;
         });
@@ -243,7 +242,7 @@ export const getAnalyticsStats = async (req: Request, res: Response) => {
                 },
                 newUsers: totalUsers,
                 purchaseOrders: totalOrders,
-                messages: 234, // Mock
+                messages: 234, 
                 orderDistribution: ordersByStatus.map(o => ({ label: o._id, value: o.count })),
                 websiteVisits: monthlyVisits
             }
@@ -325,5 +324,64 @@ export const getSystemStats = async (req: Request, res: Response) => {
         });
     } catch (error: any) {
         res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+export const getStaffingStatus = async (req: Request, res: Response) => {
+    try {
+        const date = req.query.date ? new Date(req.query.date as string) : new Date();
+        const startOfDay = dayjs(date).startOf('day').toDate();
+        const endOfDay = dayjs(date).endOf('day').toDate();
+
+        const [config, schedules] = await Promise.all([
+            BookingConfig.findOne({}),
+            WorkSchedule.find({
+                date: { $gte: startOfDay, $lte: endOfDay },
+                status: { $in: ["scheduled", "checked-in"] }
+            }).populate({
+                path: 'staffId',
+                select: 'fullName roles',
+                populate: { path: 'roles', select: 'name' }
+            })
+        ]);
+
+        if (!config || !config.staffingRules || config.staffingRules.length === 0) {
+            return res.json({
+                code: 200,
+                data: [],
+                message: "Chưa cấu hình định mức nhân sự."
+            });
+        }
+
+        const results = config.staffingRules.map((rule: any) => {
+            const shiftSchedules = schedules.filter(s => s.shiftId.toString() === rule.shiftId.toString());
+            
+            const requirements = rule.roleRequirements.map((req: any) => {
+                const actualStaffCount = shiftSchedules.filter(s => {
+                    const staff = s.staffId as any;
+                    return staff?.roles?.some((r: any) => r._id.toString() === req.roleId.toString());
+                }).length;
+
+                return {
+                    roleId: req.roleId,
+                    required: req.minStaff,
+                    actual: actualStaffCount,
+                    status: actualStaffCount >= req.minStaff ? "vừa đủ" : "thiếu",
+                    diff: actualStaffCount - req.minStaff
+                };
+            });
+
+            return {
+                shiftId: rule.shiftId,
+                requirements
+            };
+        });
+
+        res.json({
+            code: 200,
+            data: results
+        });
+    } catch (error) {
+        res.status(500).json({ code: 500, message: "Lỗi kiểm tra định mức nhân sự" });
     }
 };

@@ -54,6 +54,7 @@ const schema = new mongoose.Schema(
                 "pending",      // Chờ xác nhận
                 "confirmed",    // Đã xác nhận
                 "shipping",     // Đang giao
+                "shipped",      // Đã giao (Chờ khách xác nhận)
                 "completed",    // Giao thành công
                 "cancelled",    // Hủy
                 "returned",     // Trả hàng

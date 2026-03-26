@@ -99,6 +99,29 @@ export const startCancellationTask = () => {
                 );
             }
 
+            // 4. Tự động hoàn thành đơn hàng sau 7 ngày nếu khách quên ấn (Auto-complete Shipped Orders)
+            const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+            const shippedOrdersToComplete = await Order.find({
+                orderStatus: "shipped",
+                updatedAt: { $lt: sevenDaysAgo },
+                deleted: false
+            });
+
+            if (shippedOrdersToComplete.length > 0) {
+                const { addPointAfterPayment } = await import('../helpers/point.helper');
+                for (const order of shippedOrdersToComplete) {
+                    await Order.updateOne({ _id: order._id }, { orderStatus: "completed" });
+                    if (order.code) {
+                        try {
+                            await addPointAfterPayment(order.code);
+                        } catch (e) {
+                            console.error(`Lỗi tích điểm đơn ${order.code}:`, e);
+                        }
+                    }
+                }
+                console.log(`[JOB-HỦY] Đã tự động hoàn thành ${shippedOrdersToComplete.length} đơn hàng quá hạn 7 ngày.`);
+            }
+
         } catch (error) {
             console.error(error);
         }

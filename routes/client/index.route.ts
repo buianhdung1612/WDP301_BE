@@ -15,6 +15,8 @@ import couponRoutes from "./coupon.route";
 import reviewRoutes from "./review.route";
 import boardingCareTemplateRoutes from "./boarding-care-template.route";
 import boardingPetDiaryRoutes from "./boarding-pet-diary.route";
+import settingRoutes from "./setting.route";
+
 
 const router = Router();
 
@@ -34,5 +36,7 @@ router.use('/coupon', couponRoutes);
 router.use('/review', reviewRoutes);
 router.use('/boarding-care-template', boardingCareTemplateRoutes);
 router.use('/boarding-pet-diary', boardingPetDiaryRoutes);
+router.use('/setting', settingRoutes);
+
 
 export default router;

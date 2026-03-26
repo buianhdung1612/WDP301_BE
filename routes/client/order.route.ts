@@ -13,5 +13,6 @@ router.get('/payment-vnpay', orderController.paymentVNPay);
 router.get('/payment-vnpay-result', orderController.paymentVNPayResult);
 router.get('/export-pdf', orderController.exportPdf);
 router.patch("/:id/cancel", infoAuth, orderController.cancelMyOrder);
+router.patch("/:id/confirm-receipt", infoAuth, orderController.confirmReceipt);
 
 export const orderRoutes: Router = router;
