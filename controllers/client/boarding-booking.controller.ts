@@ -8,14 +8,14 @@ import dayjs from "dayjs";
 import BoardingBooking from "../../models/boarding-booking.model";
 import BoardingCage from "../../models/boarding-cage.model";
 import Pet from "../../models/pet.model";
+import BoardingConfig from "../../models/boarding-config.model";
+import AccountAdmin from "../../models/account-admin.model";
 import { buildDefaultBoardingCareSchedule } from "../../utils/boarding-care-template.util";
 import { getFreestBoardingStaffForDate } from "../../helpers/boarding-staff-assignment.helper";
 
 const DEFAULT_HOLD_MINUTES = Number(process.env.BOARDING_HOLD_MINUTES || 5);
 const MAX_ROOMS_PER_CAGE = Math.max(1, Number(process.env.BOARDING_CAGE_CAPACITY || 4));
 const BOOKING_LOCK_MS = Math.max(3000, Number(process.env.BOARDING_BOOKING_LOCK_MS || 8000));
-const COUNTER_DEPOSIT_MIN_DAYS = 2;
-const COUNTER_DEPOSIT_PERCENT = 20;
 
 const releaseExpiredHolds = async () => {
     const now = new Date();
@@ -88,12 +88,13 @@ const getBookingQuantity = (booking: any): number => {
     return 1;
 };
 
-const shouldRequireCounterDeposit = (paymentMethod: string, totalDays: number) =>
-    String(paymentMethod || "").toLowerCase() === "pay_at_site" && Number(totalDays || 0) >= COUNTER_DEPOSIT_MIN_DAYS;
+const shouldRequireCounterDeposit = (paymentMethod: string, totalDays: number, config: any) =>
+    String(paymentMethod || "").toLowerCase() === "pay_at_site" && Number(totalDays || 0) >= (config?.minDaysForDeposit || 2);
 
-const getDepositAmount = (total: number, paymentMethod: string, totalDays: number) => {
-    if (!shouldRequireCounterDeposit(paymentMethod, totalDays)) return 0;
-    return Math.round(Math.max(Number(total || 0), 0) * (COUNTER_DEPOSIT_PERCENT / 100));
+const getDepositAmount = (total: number, paymentMethod: string, totalDays: number, config: any) => {
+    if (!shouldRequireCounterDeposit(paymentMethod, totalDays, config)) return 0;
+    const percent = config?.depositPercentage || 20;
+    return Math.round(Math.max(Number(total || 0), 0) * (percent / 100));
 };
 
 const buildSuccessfulPaymentUpdate = (booking: any) => {
@@ -199,8 +200,18 @@ export const createBoardingBooking = async (req: Request, res: Response) => {
             return res.status(400).json({ message: "Moi phong phai gan 1 thu cung khac nhau" });
         }
 
-        const start = dayjs(checkInDate).hour(9).minute(0).second(0).millisecond(0).toDate();
-        const end = dayjs(checkOutDate).hour(9).minute(0).second(0).millisecond(0).toDate();
+        const config = await BoardingConfig.findOne() || {
+            depositPercentage: 20,
+            minDaysForDeposit: 2,
+            checkInTime: "14:00",
+            checkOutTime: "12:00"
+        };
+
+        const [inHour, inMin] = (config.checkInTime || "14:00").split(":").map(Number);
+        const [outHour, outMin] = (config.checkOutTime || "12:00").split(":").map(Number);
+
+        const start = dayjs(checkInDate).hour(inHour).minute(inMin).second(0).millisecond(0).toDate();
+        const end = dayjs(checkOutDate).hour(outHour).minute(outMin).second(0).millisecond(0).toDate();
 
         if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
             return res.status(400).json({ message: "Invalid date format" });
@@ -289,8 +300,8 @@ export const createBoardingBooking = async (req: Request, res: Response) => {
         const freestStaff = await getFreestBoardingStaffForDate(start);
         const defaultCareSchedule = buildDefaultBoardingCareSchedule(pets as any[], freestStaff, customFeeding, customExercise);
 
-        const depositAmount = getDepositAmount(totalPrice, paymentMethod, totalDays);
-        const depositPercent = depositAmount > 0 ? COUNTER_DEPOSIT_PERCENT : 0;
+        const depositAmount = getDepositAmount(totalPrice, paymentMethod, totalDays, config);
+        const depositPercent = depositAmount > 0 ? (config.depositPercentage || 20) : 0;
         const requiresOnlinePayment = paymentMethod === "prepaid" || depositAmount > 0;
         const holdExpiresAt = requiresOnlinePayment ? new Date(Date.now() + DEFAULT_HOLD_MINUTES * 60 * 1000) : undefined;
 
@@ -664,8 +675,11 @@ export const checkInBoarding = async (req: Request, res: Response) => {
         if (booking.boardingStatus !== "confirmed") {
             return res.status(400).json({ message: "Booking is not ready for check-in" });
         }
+        const config = await BoardingConfig.findOne() || { depositPercentage: 20, minDaysForDeposit: 2 };
         if (!hasSatisfiedCheckInPayment(booking)) {
-            return res.status(400).json({ message: `Don luu tru tu ${COUNTER_DEPOSIT_MIN_DAYS} ngay tro len thanh toan tai quay phai dat coc ${COUNTER_DEPOSIT_PERCENT}% truoc khi nhan chuong` });
+            return res.status(400).json({
+                message: `Đơn lưu trú từ ${config.minDaysForDeposit || 2} ngày trở lên thanh toán tại quầy phải đặt cọc ${config.depositPercentage || 20}% trước khi nhận chuồng`
+            });
         }
 
         booking.boardingStatus = "checked-in";
@@ -841,6 +855,14 @@ export const getMyBoardingBookingDetail = async (req: Request, res: Response) =>
             cage,
             timeline
         });
+    } catch (error: any) {
+        return res.status(500).json({ message: error.message });
+    }
+};
+export const getBoardingConfig = async (_req: Request, res: Response) => {
+    try {
+        const config = await BoardingConfig.findOne() || { depositPercentage: 20, minDaysForDeposit: 2 };
+        return res.json(config);
     } catch (error: any) {
         return res.status(500).json({ message: error.message });
     }

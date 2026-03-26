@@ -17,6 +17,11 @@ router.get(
   boardingBookingController.paymentBoardingVNPayResult
 );
 
+router.get(
+  "/config",
+  boardingBookingController.getBoardingConfig
+);
+
 router.use(requireAuth);
 
 router.get("/boarding-bookings", boardingBookingController.listMyBoardingBookings);

@@ -1,7 +1,9 @@
 ﻿import { Request, Response } from "express";
 import mongoose from "mongoose";
+import dayjs from "dayjs";
 import BoardingBooking from "../../models/boarding-booking.model";
 import BoardingCage from "../../models/boarding-cage.model";
+import BoardingConfig from "../../models/boarding-config.model";
 import AccountAdmin from "../../models/account-admin.model";
 import AccountUser from "../../models/account-user.model";
 import Department from "../../models/department.model";
@@ -21,8 +23,6 @@ import {
 } from "../../helpers/boarding-staff-assignment.helper";
 
 const BOOKING_LOCK_MS = Math.max(3000, Number(process.env.BOARDING_BOOKING_LOCK_MS || 8000));
-const COUNTER_DEPOSIT_MIN_DAYS = 2;
-const COUNTER_DEPOSIT_PERCENT = 20;
 
 const pickParam = (value: unknown): string | undefined => {
     if (typeof value === "string") return value;
@@ -77,12 +77,13 @@ const getBookingQuantity = (booking: any): number => {
     return 1;
 };
 
-const shouldRequireCounterDeposit = (paymentMethod: string, totalDays: number) =>
-    String(paymentMethod || "").toLowerCase() === "pay_at_site" && Number(totalDays || 0) >= COUNTER_DEPOSIT_MIN_DAYS;
+const shouldRequireCounterDeposit = (paymentMethod: string, totalDays: number, config: any) =>
+    String(paymentMethod || "").toLowerCase() === "pay_at_site" && Number(totalDays || 0) >= (config?.minDaysForDeposit || 2);
 
-const getDepositAmount = (total: number, paymentMethod: string, totalDays: number) => {
-    if (!shouldRequireCounterDeposit(paymentMethod, totalDays)) return 0;
-    return Math.round(Math.max(Number(total || 0), 0) * (COUNTER_DEPOSIT_PERCENT / 100));
+const getDepositAmount = (total: number, paymentMethod: string, totalDays: number, config: any) => {
+    if (!shouldRequireCounterDeposit(paymentMethod, totalDays, config)) return 0;
+    const percent = config?.depositPercentage || 20;
+    return Math.floor((total * percent) / 100);
 };
 
 const getPaidAmountByStatus = (bookingLike: any, paymentStatus: string) => {
@@ -456,6 +457,8 @@ export const batchCreateBoardingBooking = async (req: Request, res: Response) =>
             return res.status(404).json({ code: 404, message: "Không tìm thấy khách hàng" });
         }
 
+        const config = await BoardingConfig.findOne() || { depositPercentage: 20, minDaysForDeposit: 2 };
+
         const totalDays = Math.ceil((checkOut.getTime() - checkIn.getTime()) / (1000 * 60 * 60 * 24));
         const createdBookings = [];
 
@@ -498,8 +501,8 @@ export const batchCreateBoardingBooking = async (req: Request, res: Response) =>
             const defaultStaff = await getFreestBoardingStaffForDate(checkIn);
             const defaultCareSchedule = buildDefaultBoardingCareSchedule([pet as any], defaultStaff);
 
-            const depositAmount = getDepositAmount(total, paymentMethod, totalDays);
-            const depositPercent = depositAmount > 0 ? COUNTER_DEPOSIT_PERCENT : 0;
+            const depositAmount = getDepositAmount(total, paymentMethod, totalDays, config);
+            const depositPercent = depositAmount > 0 ? (config.depositPercentage || 20) : 0;
             const paidAmount = getPaidAmountByStatus({ total, depositAmount }, paymentStatus);
 
             const booking = await BoardingBooking.create({
@@ -636,8 +639,10 @@ export const createBoardingBooking = async (req: Request, res: Response) => {
         const defaultStaff = await getFreestBoardingStaffForDate(checkIn);
         const defaultCareSchedule = buildDefaultBoardingCareSchedule([pet as any], defaultStaff);
 
-        const depositAmount = getDepositAmount(total, paymentMethod, totalDays);
-        const depositPercent = depositAmount > 0 ? COUNTER_DEPOSIT_PERCENT : 0;
+        const config = await BoardingConfig.findOne() || { depositPercentage: 20, minDaysForDeposit: 2 };
+
+        const depositAmount = getDepositAmount(total, paymentMethod, totalDays, config);
+        const depositPercent = depositAmount > 0 ? (config.depositPercentage || 20) : 0;
         const allowBoardingStatus = ["pending", "held", "confirmed", "checked-in", "checked-out", "cancelled"];
         const allowPaymentStatus = ["unpaid", "partial", "paid", "refunded"];
         const allowPaymentMethod = ["money", "vnpay", "zalopay", "pay_at_site", "prepaid"];
@@ -648,7 +653,10 @@ export const createBoardingBooking = async (req: Request, res: Response) => {
         const paidAmount = getPaidAmountByStatus({ total, depositAmount }, nextPaymentStatus);
 
         if (nextBoardingStatus === "checked-in" && depositAmount > 0 && paidAmount < depositAmount) {
-            return res.status(400).json({ code: 400, message: `Don thanh toan tai quay tu ${COUNTER_DEPOSIT_MIN_DAYS} ngay tro len phai dat coc ${COUNTER_DEPOSIT_PERCENT}% truoc khi nhan chuong` });
+            return res.status(400).json({
+                code: 400,
+                message: `Đơn lưu trú từ ${config.minDaysForDeposit || 2} ngày trở lên phải đặt cọc ${config.depositPercentage || 20}% trước khi nhận thú`
+            });
         }
 
         const booking = await BoardingBooking.create({
@@ -752,7 +760,8 @@ export const listBoardingBookings = async (req: Request, res: Response) => {
                 $or: [
                     { "feedingSchedule.staffId": currentStaffId },
                     { "exerciseSchedule.staffId": currentStaffId },
-                    { "boardingStatus": "checked-in" } // allow seeing all in-house pets
+                    { "boardingStatus": "checked-in" },
+                    { "boardingStatus": "confirmed" } // allow seeing all upcoming for today/active
                 ]
             });
         }
@@ -884,8 +893,13 @@ export const updateBoardingBookingStatus = async (req: Request, res: Response) =
         const booking: any = await BoardingBooking.findOne({ _id: id, deleted: false });
         if (!booking) return res.status(404).json({ code: 404, message: "Khong tim thay don khach san" });
 
+        const config = await BoardingConfig.findOne() || { lateCheckOutGracePeriod: 30, surchargeHalfDayPrice: 100000, surchargeFullDayPrice: 200000, minDaysForDeposit: 2, depositPercentage: 20 };
+
         if (boardingStatus === "checked-in" && !hasSatisfiedCheckInPayment(booking)) {
-            return res.status(400).json({ code: 400, message: `Don thanh toan tai quay tu ${COUNTER_DEPOSIT_MIN_DAYS} ngay tro len phai dat coc ${COUNTER_DEPOSIT_PERCENT}% truoc khi nhan chuong` });
+            return res.status(400).json({
+                code: 400,
+                message: `Đơn lưu trú từ ${config.minDaysForDeposit || 2} ngày trở lên phải đặt cọc ${config.depositPercentage || 20}% trước khi nhận thú`
+            });
         }
 
         booking.boardingStatus = boardingStatus;
@@ -897,18 +911,20 @@ export const updateBoardingBookingStatus = async (req: Request, res: Response) =
             const actualOut = new Date();
             booking.actualCheckOutDate = actualOut;
 
-            // Logic phụ thu: quá 30p so với checkOutDate
+            // Logic phụ thu: quá gracePeriod so với checkOutDate
             const scheduledOut = new Date(booking.checkOutDate);
             const diffMs = actualOut.getTime() - scheduledOut.getTime();
             const diffMins = Math.floor(diffMs / (1000 * 60));
 
-            if (diffMins > 30) {
-                // Tầng phụ thu: <= 6 tiếng (nửa buổi) = 100k, > 6 tiếng (1 ngày) = 200k
+            const gracePeriod = config?.lateCheckOutGracePeriod || 30;
+
+            if (diffMins > gracePeriod) {
+                // Tầng phụ thu: <= 6 tiếng (nửa buổi), > 6 tiếng (1 ngày)
                 if (diffMins <= 360) {
-                    booking.surcharge = 100000;
-                    booking.surchargeReason = `Trả chuồng trễ ${diffMins} phút (quá giới hạn 30 phút - Phụ thu nửa buổi)`;
+                    booking.surcharge = config?.surchargeHalfDayPrice || 100000;
+                    booking.surchargeReason = `Trả chuồng trễ ${diffMins} phút (quá giới hạn ${gracePeriod} phút - Phụ thu nửa buổi)`;
                 } else {
-                    booking.surcharge = 200000;
+                    booking.surcharge = config?.surchargeFullDayPrice || 200000;
                     booking.surchargeReason = `Trả chuồng trễ ${diffMins} phút (Phụ thu trọn 1 ngày)`;
                 }
 
@@ -936,7 +952,7 @@ export const updateBoardingBookingStatus = async (req: Request, res: Response) =
             }
             // Luôn cập nhật lại total để tránh sai sót
             booking.total = Math.max(0, (booking.subTotal || 0) - (booking.discount || 0) + (booking.surcharge || 0));
-            await BoardingCage.findByIdAndUpdate(booking.cageId, { status: "available" });
+            await BoardingCage.findByIdAndUpdate(booking.cageId, { status: "under-cleaning" });
         } else {
             // Nếu đổi sang trạng thái khác (Confirmed, Pending...) thì reset thông tin checkout/phụ phí
             if (boardingStatus !== "cancelled") {
@@ -960,7 +976,7 @@ export const updateBoardingBookingStatus = async (req: Request, res: Response) =
         await booking.save();
         return res.json({ code: 200, message: "Cap nhat trang thai thanh cong", data: booking });
     } catch (error: any) {
-        return res.status(500).json({ code: 500, message: error.message || "Loi he thong" });
+        return res.status(500).json({ code: 500, message: error.message || "Lỗi hệ thống" });
     }
 };
 
@@ -970,20 +986,21 @@ export const updateBoardingPaymentStatus = async (req: Request, res: Response) =
         const id = pickParam(req.params.id);
         const { paymentStatus } = req.body as { paymentStatus: string };
         if (!id || !mongoose.Types.ObjectId.isValid(id)) {
-            return res.status(400).json({ code: 400, message: "ID khong hop le" });
+            return res.status(400).json({ code: 400, message: "ID không hợp lệ" });
         }
         if (!["unpaid", "partial", "paid", "refunded"].includes(paymentStatus)) {
-            return res.status(400).json({ code: 400, message: "Trang thai thanh toan khong hop le" });
+            return res.status(400).json({ code: 400, message: "Trạng thái thanh toán không hợp lệ" });
         }
 
         const booking = await BoardingBooking.findOne({ _id: id, deleted: false });
-        if (!booking) return res.status(404).json({ code: 404, message: "Khong tim thay don khach san" });
+        if (!booking) return res.status(404).json({ code: 404, message: "Không tìm thấy đơn khách sạn" });
 
         const nextPaidAmount = getPaidAmountByStatus(booking, paymentStatus);
         const updatePayload: any = {
             paymentStatus,
             paidAmount: nextPaidAmount,
         };
+
         if ((paymentStatus === "partial" || paymentStatus === "paid") && String(booking.boardingStatus || "") === "held") {
             updatePayload.boardingStatus = "confirmed";
             updatePayload.holdExpiresAt = null;
@@ -995,10 +1012,53 @@ export const updateBoardingPaymentStatus = async (req: Request, res: Response) =
             { new: true }
         );
 
-        if (!updated) return res.status(404).json({ code: 404, message: "Khong tim thay don khach san" });
-        return res.json({ code: 200, message: "Cap nhat thanh toan thanh cong", data: updated });
+        if (!updated) return res.status(404).json({ code: 404, message: "Không tìm thấy đơn khách sạn" });
+        return res.json({ code: 200, message: "Cập nhật thanh toán thành công", data: updated });
     } catch (error: any) {
-        return res.status(500).json({ code: 500, message: error.message || "Loi he thong" });
+        return res.status(500).json({ code: 500, message: error.message || "Lỗi hệ thống" });
+    }
+};
+
+// [PUT] /api/v1/admin/boarding-booking/:id
+export const updateBoardingBookingDetail = async (req: Request, res: Response) => {
+    try {
+        const id = pickParam(req.params.id);
+        const data = req.body;
+        if (!id || !mongoose.Types.ObjectId.isValid(id)) {
+            return res.status(400).json({ code: 400, message: "ID không hợp lệ" });
+        }
+
+        const booking = await BoardingBooking.findOne({ _id: id, deleted: false });
+        if (!booking) {
+            return res.status(404).json({ code: 404, message: "Không tìm thấy đơn" });
+        }
+
+        // Nếu chuồng thay đổi, giải phóng chuồng cũ và chuyển sang chuồng mới
+        if (data.cageId && data.cageId !== booking.cageId?.toString()) {
+            if (booking.cageId) {
+                await BoardingCage.findByIdAndUpdate(booking.cageId, { status: "empty" });
+            }
+            await BoardingCage.findByIdAndUpdate(data.cageId, { status: "occupied" });
+        }
+
+        // Tính lại số ngày nếu ngày nhận/trả thay đổi
+        if (data.checkInDate || data.checkOutDate) {
+            const checkIn = dayjs(data.checkInDate || booking.checkInDate);
+            const checkOut = dayjs(data.checkOutDate || booking.checkOutDate);
+            data.numberOfDays = checkOut.diff(checkIn, 'day') + 1;
+        }
+
+        // Cập nhật các trường thông tin
+        Object.assign(booking, data);
+        await booking.save();
+
+        return res.json({
+            code: 200,
+            message: "Cập nhật thông tin đơn thành công",
+            data: booking
+        });
+    } catch (error: any) {
+        return res.status(500).json({ code: 500, message: error.message || "Lỗi hệ thống" });
     }
 };
 

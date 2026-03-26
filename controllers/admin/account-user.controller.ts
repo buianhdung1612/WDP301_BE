@@ -34,6 +34,28 @@ export const list = async (req: Request, res: Response) => {
             find.createdBy = req.query.createdBy;
         }
 
+        // Filter by Staff ID (My Customers feature)
+        if (req.query.assignedStaffId) {
+            const staffId = req.query.assignedStaffId;
+            const now = new Date();
+
+            // Tìm các đơn đặt phòng đang diễn ra (đã xác nhận hoặc đã nhận phòng)
+            // và ngày hiện tại nằm trong khoảng lưu trú
+            const activeBookings = await BoardingBooking.find({
+                boardingStatus: { $in: ["confirmed", "checked-in"] },
+                checkInDate: { $lte: now },
+                checkOutDate: { $gte: now },
+                $or: [
+                    { "feedingSchedule.staffId": staffId },
+                    { "exerciseSchedule.staffId": staffId }
+                ],
+                deleted: false
+            }).select("userId");
+
+            const userIds = activeBookings.map(b => b.userId).filter(Boolean);
+            find._id = { $in: userIds };
+        }
+
         // Pagination
         const limitItems = parseInt(req.query.limit as string) || 20;
         const page = Math.max(1, parseInt(req.query.page as string) || 1);
