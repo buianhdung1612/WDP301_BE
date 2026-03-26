@@ -31,6 +31,9 @@ router.get('/facebook/callback', passport.authenticate('facebook', {
     failureRedirect: '/auth/login',
 }), authController.callbackFacebook);
 
+router.post('/google/token', authController.googleTokenLoginPost);
+router.post('/facebook/token', authController.facebookTokenLoginPost);
+
 router.get("/me", authMiddleware.requireAuth, authController.getMe);
 
 export default router;
