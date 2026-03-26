@@ -27,7 +27,7 @@ const schema = new mongoose.Schema(
             price: Number,
             status: {
                 type: String,
-                enum: ["pending", "in-progress", "completed"],
+                enum: ["pending", "in-progress", "completed", "cancelled"],
                 default: "pending"
             },
             startedAt: Date,
@@ -35,6 +35,8 @@ const schema = new mongoose.Schema(
         }],
         start: Date, // Thời gian bắt đầu
         end: Date, // Thời gian kết thúc
+        originalStart: Date, // Thời gian đặt lịch gốc
+        originalEnd: Date, // Thời gian kết thúc gốc
         notes: String,
         subTotal: Number,
         coupon: String,

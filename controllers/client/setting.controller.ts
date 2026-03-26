@@ -16,3 +16,17 @@ export const getPage = async (req: Request, res: Response) => {
     });
 }
 
+// [GET] /api/v1/setting/general
+export const getGeneral = async (req: Request, res: Response) => {
+    const key = "general";
+
+    const record = await Setting.findOne({
+        key: key
+    });
+
+    res.json({
+        code: 200,
+        message: "Cài đặt chung",
+        data: record ? record.data : {}
+    });
+}

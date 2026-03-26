@@ -574,7 +574,25 @@ export const listStaffTasks = async (req: Request, res: Response) => {
             filter.bookingStatus = req.query.status;
         }
 
-        if (req.query.date) {
+        if (req.query.date && !req.query.status) {
+            const date = dayjs(req.query.date as string);
+            filter.$or = [
+                {
+                    start: {
+                        $gte: date.startOf('day').toDate(),
+                        $lte: date.endOf('day').toDate()
+                    }
+                },
+                {
+                    "petStaffMap": {
+                        $elemMatch: {
+                            staffId: staffId,
+                            status: "in-progress"
+                        }
+                    }
+                }
+            ];
+        } else if (req.query.date) {
             const date = dayjs(req.query.date as string);
             filter.start = {
                 $gte: date.startOf('day').toDate(),
@@ -815,6 +833,15 @@ export const cancelBooking = async (req: Request, res: Response) => {
         booking.cancelledAt = new Date();
         booking.cancelledBy = "admin";
 
+        // Cập nhật trạng thái từng thú cưng trong đơn
+        if (booking.petStaffMap && booking.petStaffMap.length > 0) {
+            booking.petStaffMap.forEach((m: any) => {
+                if (m.status !== "completed") {
+                    m.status = "cancelled";
+                }
+            });
+        }
+
         await booking.save();
 
         res.json({
@@ -890,14 +917,26 @@ export const startInProgress = async (req: Request, res: Response) => {
                                 status: "in-progress"
                             }
                         },
+                        bookingStatus: { $nin: ["cancelled", "completed"] },
                         deleted: false
                     });
 
                     if (isBusy) {
                         const busyStaff = await AccountAdmin.findById(staffId);
+                        const busyPetMapping = isBusy.petStaffMap.find((m: any) =>
+                            m.staffId?.toString() === staffId.toString() &&
+                            m.status === "in-progress"
+                        );
+
+                        let petName = "một bé khác";
+                        if (busyPetMapping && busyPetMapping.petId) {
+                            const pet = await Pet.findById(busyPetMapping.petId);
+                            if (pet && pet.name) petName = pet.name as string;
+                        }
+
                         return res.status(400).json({
                             code: 400,
-                            message: `Nhân viên ${busyStaff?.fullName || "được chỉ định"} đang bận thực hiện dịch vụ cho một bé khác. Vui lòng hoàn tất dịch vụ hiện tại trước khi bắt đầu dịch vụ mới.`
+                            message: `Nhân viên ${busyStaff?.fullName || "được chỉ định"} đang bận thực hiện đơn #${isBusy.code} cho bé ${petName}. Vui lòng hoàn tất dịch vụ hiện tại trước khi bắt đầu dịch vụ mới.`
                         });
                     }
                 }
@@ -919,13 +958,25 @@ export const startInProgress = async (req: Request, res: Response) => {
                                 status: "in-progress"
                             }
                         },
+                        bookingStatus: { $nin: ["cancelled", "completed"] },
                         deleted: false
                     });
                     if (isBusy) {
                         const staff = await AccountAdmin.findById(m.staffId);
+                        const busyPetMapping = isBusy.petStaffMap.find((bp: any) =>
+                            bp.staffId?.toString() === m.staffId?.toString() &&
+                            bp.status === "in-progress"
+                        );
+
+                        let petName = "một bé khác";
+                        if (busyPetMapping && busyPetMapping.petId) {
+                            const pet = await Pet.findById(busyPetMapping.petId);
+                            if (pet && pet.name) petName = pet.name as string;
+                        }
+
                         return res.status(400).json({
                             code: 400,
-                            message: `Nhân viên ${staff?.fullName || ""} đang bận, không thể bắt đầu thực hiện đồng loạt cho tất cả các bé.`
+                            message: `Nhân viên ${staff?.fullName || ""} đang bận thực hiện đơn #${isBusy.code} cho bé ${petName}. Vui lòng hoàn tất dịch vụ đó trước.`
                         });
                     }
                 }
@@ -1031,6 +1082,12 @@ export const rescheduleBooking = async (req: Request, res: Response) => {
             }
         }
 
+        // Lưu thời gian gốc nếu đây là lần đổi lịch đầu tiên
+        if (!booking.originalStart) {
+            booking.originalStart = booking.start;
+            booking.originalEnd = booking.end;
+        }
+
         // Cập nhật thời gian mới
         booking.start = newStart;
         booking.end = newEnd;
@@ -1130,7 +1187,18 @@ export const updateBooking = async (req: Request, res: Response) => {
             */
         }
 
-        // Validate overlapping if time or pets or user changes
+        // Lưu thời gian gốc nếu đây là lần đổi lịch đầu tiên thông qua Update/Edit
+        if (req.body.start || req.body.end) {
+            const newStart = new Date(req.body.start || booking.start);
+            const newEnd = new Date(req.body.end || booking.end);
+
+            if (newStart.getTime() !== booking.start?.getTime()) {
+                if (!booking.originalStart) {
+                    booking.originalStart = booking.start;
+                    booking.originalEnd = booking.end;
+                }
+            }
+        }
         const checkStart = req.body.start ? new Date(req.body.start) : booking.start;
         const checkEnd = req.body.end ? new Date(req.body.end) : booking.end;
         const checkUserId = req.body.userId || booking.userId;

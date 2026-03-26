@@ -18,16 +18,19 @@ export const index = async (req: Request, res: Response) => {
         }
 
         // Filter by date range
-        if (req.query.startDate && req.query.endDate) {
-            filter.date = {
-                $gte: new Date(req.query.startDate as string),
-                $lte: new Date(req.query.endDate as string)
-            };
+        if (req.query.startDate || req.query.endDate) {
+            filter.date = {};
+            if (req.query.startDate) {
+                filter.date.$gte = dayjs(req.query.startDate as string).startOf('day').toDate();
+            }
+            if (req.query.endDate) {
+                filter.date.$lte = dayjs(req.query.endDate as string).endOf('day').toDate();
+            }
         } else if (req.query.date) {
-            const date = new Date(req.query.date as string);
+            const date = dayjs(req.query.date as string);
             filter.date = {
-                $gte: dayjs(date).startOf('day').toDate(),
-                $lte: dayjs(date).endOf('day').toDate()
+                $gte: date.startOf('day').toDate(),
+                $lte: date.endOf('day').toDate()
             };
         }
 
@@ -40,6 +43,8 @@ export const index = async (req: Request, res: Response) => {
         const limit = parseInt(req.query.limit as string) || 20;
         const skip = (page - 1) * limit;
 
+        const isNoLimit = req.query.noLimit === 'true';
+
         const [schedules, total] = await Promise.all([
             WorkSchedule.find(filter)
                 .populate({
@@ -51,8 +56,8 @@ export const index = async (req: Request, res: Response) => {
                 .populate("departmentId", "name")
                 .populate("createdBy", "fullName")
                 .sort({ date: -1, 'shiftId.startTime': 1 })
-                .skip(skip)
-                .limit(limit),
+                .skip(isNoLimit ? 0 : skip)
+                .limit(isNoLimit ? 0 : limit),
             WorkSchedule.countDocuments(filter)
         ]);
 
