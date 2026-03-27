@@ -19,10 +19,6 @@ const schema = new mongoose.Schema(
             type: Number,
             default: 0
         },
-        maxDuration: {
-            type: Number,
-            default: 0
-        },
         petTypes: {
             type: [String],
             enum: ["DOG", "CAT"],
@@ -50,7 +46,11 @@ const schema = new mongoose.Schema(
             default: false
         },
         deletedAt: Date,
-        images: [String]
+        images: [String],
+        maxExtensionMinutes: {
+            type: Number,
+            default: 30
+        }
     },
     {
         timestamps: true,

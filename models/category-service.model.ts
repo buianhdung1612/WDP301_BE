@@ -11,12 +11,6 @@ const schema = new mongoose.Schema(
         slug: String,
         description: String,
         avatar: String,
-        icon: String,       // 👈 BỔ SUNG
-
-        bookingTypes: {
-            type: String,
-            enum: ["HOTEL", "STANDALONE", "BOTH"]
-        },
         petTypes: {
             type: [String],
             enum: ["DOG", "CAT"],

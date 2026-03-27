@@ -285,3 +285,48 @@ export const deleteAccount = async (req: Request, res: Response) => {
         });
     }
 };
+import UserAddress from '../../models/user-address.model';
+
+// ... (existing code)
+
+// [GET] /api/v1/admin/account-user/address/:userId
+export const addressList = async (req: Request, res: Response) => {
+    try {
+        const userId = req.params.userId;
+        const addressList = await UserAddress.find({ userId }).sort({ createdAt: -1 });
+
+        res.json({
+            code: 200,
+            data: addressList
+        });
+    } catch (error) {
+        res.status(500).json({ code: 500, message: "Lỗi hệ thống" });
+    }
+};
+
+// [DELETE] /api/v1/admin/account-user/address/delete/:id
+export const addressDelete = async (req: Request, res: Response) => {
+    try {
+        const id = req.params.id;
+        await UserAddress.deleteOne({ _id: id });
+        res.json({ code: 200, message: "Xóa địa chỉ thành công!" });
+    } catch (error) {
+        res.status(500).json({ code: 500, message: "Lỗi hệ thống" });
+    }
+};
+
+// [PATCH] /api/v1/admin/account-user/address/set-default/:id
+export const addressSetDefault = async (req: Request, res: Response) => {
+    try {
+        const id = req.params.id;
+        const address = await UserAddress.findById(id);
+        if (!address) return res.status(404).json({ code: 404, message: "Không tìm thấy địa chỉ" });
+
+        await UserAddress.updateMany({ userId: address.userId, isDefault: true }, { isDefault: false });
+        await UserAddress.updateOne({ _id: id }, { isDefault: true });
+
+        res.json({ code: 200, message: "Đã đặt làm địa chỉ mặc định!" });
+    } catch (error) {
+        res.status(500).json({ code: 500, message: "Lỗi hệ thống" });
+    }
+};

@@ -1106,7 +1106,62 @@ export const rescheduleBooking = async (req: Request, res: Response) => {
     }
 };
 
-// [PATCH] /api/v1/admin/bookings/:id/update
+// [PATCH] /api/v1/admin/bookings/:id/extend
+export const extendBooking = async (req: Request, res: Response) => {
+    try {
+        const { id } = req.params;
+        const { minutes } = req.body;
+
+        if (!minutes || isNaN(parseInt(minutes)) || parseInt(minutes) <= 0) {
+            return res.status(400).json({ code: 400, message: "Số phút gia hạn không hợp lệ" });
+        }
+
+        const extendMin = parseInt(minutes);
+        const booking = await Booking.findById(id).populate("serviceId");
+
+        if (!booking || booking.deleted) {
+            return res.status(404).json({ code: 404, message: "Lịch đặt không tồn tại" });
+        }
+
+        if (booking.bookingStatus !== "in-progress") {
+            return res.status(400).json({ code: 400, message: "Chỉ đơn đang thực hiện mới có thể gia hạn thời gian" });
+        }
+
+        const service = booking.serviceId as any;
+        const maxExtension = service?.maxExtensionMinutes || 30;
+
+        // Tính tổng thời gian đã gia hạn so với mốc kết thúc gốc
+        const baseEnd = booking.originalEnd || booking.end;
+        const currentFinish = booking.expectedFinish || booking.end;
+        const currentTotalExt = dayjs(currentFinish).diff(dayjs(baseEnd), 'minute');
+
+        if (currentTotalExt + extendMin > maxExtension) {
+            const available = maxExtension - currentTotalExt;
+            return res.status(400).json({
+                code: 400,
+                message: `Tổng thời gian gia hạn tối đa cho ${service?.name || 'dịch vụ'} là ${maxExtension} phút. Bạn chỉ có thể gia hạn thêm tối đa ${available > 0 ? available : 0} phút.`
+            });
+        }
+
+        // Cập nhật thời gian kết thúc dự kiến
+        const newFinish = dayjs(currentFinish || new Date()).add(extendMin, 'minute').toDate();
+        booking.expectedFinish = newFinish;
+        booking.end = newFinish; // Đồng bộ end để các logic tìm slot trống nhận diện là bận
+        booking.isOverrun = true; // Đánh dấu là đã lấn giờ để hệ thống cảnh báo xung đột
+
+        await booking.save();
+
+        res.json({
+            code: 200,
+            message: `Gia hạn thành công thêm ${extendMin} phút`,
+            data: booking
+        });
+    } catch (error) {
+        console.error("Extend Booking Error:", error);
+        res.status(500).json({ code: 500, message: "Lỗi khi gia hạn thời gian" });
+    }
+};
+
 export const updateBooking = async (req: Request, res: Response) => {
     try {
         const { id } = req.params;

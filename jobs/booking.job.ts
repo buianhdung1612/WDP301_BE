@@ -83,76 +83,89 @@ export const autoUpdateBookingStatuses = async () => {
             const now = new Date();
             const service = b.serviceId as any;
 
-            // Lấy maxDuration từ service hoặc mặc định 120p
-            const maxDuration = (service?.maxDuration && service.maxDuration > 0)
-                ? service.maxDuration
-                : (service?.duration || 60);
-
+            // Lấy deadline mặc định là thời lượng dịch vụ
+            const baseDuration = service?.duration || 60;
             const startVal = b.actualStart || b.start;
             if (!startVal) continue;
 
             const startTime = new Date(startVal);
-            const deadline = new Date(startTime.getTime() + maxDuration * 60 * 1000);
+            const deadline = new Date(startTime.getTime() + baseDuration * 60 * 1000);
 
             // Nếu quá deadline (maxDuration), hệ thống đánh dấu Overrun
-            if (now > deadline && !b.isOverrun) {
-                // Tìm các đơn hàng sau của cùng nhân viên (nếu có) bị ảnh hưởng
-                const affectedBookings = await Booking.find({
-                    bookingStatus: { $in: ["pending", "confirmed"] },
-                    staffIds: { $in: b.staffIds },
-                    start: { $lt: new Date(now.getTime() + 10 * 60000) }, // Dưới 10p tới là bị chồng lấn
-                    _id: { $ne: b._id },
-                    deleted: false
-                });
-
-                await Booking.updateOne(
-                    { _id: b._id },
-                    { $set: { isOverrun: true } }
-                );
-
-                // Gửi thông báo socket & Lưu Database
-                let notificationContent = `Lịch đặt ${booking.code} đã bị quá giờ!`;
-                if (affectedBookings.length > 0) {
-                    notificationContent += ` Ảnh hưởng ${affectedBookings.length} lịch tiếp theo.`;
-
-                    // Đánh dấu các đơn bị ảnh hưởng để không bị Auto-Cancel
-                    const affectedIds = affectedBookings.map(b => b._id);
-                    await Booking.updateMany(
-                        { _id: { $in: affectedIds } },
-                        { $set: { impactedByOverrun: true } }
-                    );
-                }
-
-                await Notification.create({
-                    title: "Cảnh báo quá giờ",
-                    content: notificationContent,
-                    type: "overrun",
-                    link: `/admin/booking/detail/${booking._id}`, // Chuyển link sang detail để xử lý xung đột
-                    metadata: {
-                        bookingId: booking._id,
-                        bookingCode: booking.code,
-                        affectedCount: affectedBookings.length
-                    }
-                });
-
-                if ((global as any).io) {
-                    (global as any).io.to('admin').emit('overrun-alert', {
-                        bookingId: booking._id,
-                        bookingCode: booking.code,
-                        staffIds: booking.staffIds,
-                        affectedCount: affectedBookings.length,
-                        message: notificationContent
+            if (now > deadline) {
+                if (!b.isOverrun) {
+                    // Tìm các đơn hàng sau của cùng nhân viên (nếu có) bị ảnh hưởng
+                    const affectedBookings = await Booking.find({
+                        bookingStatus: { $in: ["pending", "confirmed"] },
+                        staffIds: { $in: b.staffIds },
+                        start: { $lt: new Date(now.getTime() + 10 * 60000) }, // Dưới 10p tới là bị chồng lấn
+                        _id: { $ne: b._id },
+                        deleted: false
                     });
+
+                    await Booking.updateOne(
+                        { _id: b._id },
+                        { $set: { isOverrun: true } }
+                    );
+
+                    // Gửi thông báo socket & Lưu Database
+                    let notificationContent = `Lịch đặt ${booking.code} đã bị quá giờ!`;
+                    if (affectedBookings.length > 0) {
+                        notificationContent += ` Ảnh hưởng ${affectedBookings.length} lịch tiếp theo.`;
+
+                        // Đánh dấu các đơn bị ảnh hưởng để không bị Auto-Cancel
+                        const affectedIds = affectedBookings.map(b => b._id);
+                        await Booking.updateMany(
+                            { _id: { $in: affectedIds } },
+                            { $set: { impactedByOverrun: true } }
+                        );
+                    }
+
+                    await Notification.create({
+                        title: "Cảnh báo quá giờ",
+                        content: notificationContent,
+                        type: "overrun",
+                        link: `/admin/booking/detail/${booking._id}`,
+                        metadata: {
+                            bookingId: booking._id,
+                            bookingCode: booking.code,
+                            affectedCount: affectedBookings.length
+                        }
+                    });
+
+                    if ((global as any).io) {
+                        (global as any).io.to('admin').emit('overrun-alert', {
+                            bookingId: booking._id,
+                            bookingCode: booking.code,
+                            staffIds: booking.staffIds,
+                            affectedCount: affectedBookings.length,
+                            message: notificationContent
+                        });
+                    }
+
+                    // Cập nhật expectedFinish ban đầu (cộng 10p từ bây giờ)
+                    const newExpectedFinish = new Date(now.getTime() + 10 * 60 * 1000);
+                    await Booking.updateOne(
+                        { _id: booking._id },
+                        { $set: { expectedFinish: newExpectedFinish, end: newExpectedFinish } }
+                    );
+
+                    console.log(`[JOB-DỊCH VỤ] Cảnh báo quá giờ cho lịch ${booking.code} (Ảnh hưởng ${affectedBookings.length} lịch)`);
+                } else if (b.expectedFinish && now > new Date(b.expectedFinish)) {
+                    // ĐÃ báo quá giờ rồi, nhưng vẫn quá giờ tiếp so với dự kiến đã gia hạn
+                    const maxExtension = service?.maxExtensionMinutes || 30;
+                    const baseEnd = b.originalEnd || b.end;
+                    const currentTotalExt = dayjs(b.expectedFinish).diff(dayjs(baseEnd), 'minute');
+
+                    if (currentTotalExt < maxExtension) {
+                        const newFinish = dayjs(b.expectedFinish).add(10, 'minute').toDate();
+                        await Booking.updateOne(
+                            { _id: b._id },
+                            { $set: { expectedFinish: newFinish, end: newFinish } }
+                        );
+                        console.log(`[JOB-DỊCH VỤ] Tự động gia hạn 10p cho lẻ ${b.code} vì vẫn đang làm.`);
+                    }
                 }
-
-                // Cập nhật expectedFinish mới để giữ slot bận (đẩy 10p)
-                const newExpectedFinish = new Date(now.getTime() + 10 * 60 * 1000);
-                await Booking.updateOne(
-                    { _id: booking._id },
-                    { $set: { expectedFinish: newExpectedFinish } }
-                );
-
-                console.log(`[JOB-DỊCH VỤ] Cảnh báo quá giờ cho lịch ${booking.code} (Ảnh hưởng ${affectedBookings.length} lịch)`);
             }
         }
     } catch (error) {

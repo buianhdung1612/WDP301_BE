@@ -42,7 +42,7 @@ export const categoryList = async (req: Request, res: Response) => {
                 pagination: {
                     currentPage: page,
                     limit,
-                    total,
+                    totalRecords: total,
                     totalPages: Math.ceil(total / limit),
                     deletedCount
                 }
@@ -78,7 +78,7 @@ export const categoryTree = async (req: Request, res: Response) => {
 // [GET] /api/v1/admin/services/categories/detail/:id
 export const categoryDetail = async (req: Request, res: Response) => {
     try {
-        const category = await ServiceCategory.findById(req.params.id);
+        const category = await ServiceCategory.findById(req.params.id).populate("parentId", "name");
 
         if (!category || category.deleted) {
             return res.status(404).json({
@@ -103,7 +103,7 @@ export const categoryDetail = async (req: Request, res: Response) => {
 // [POST] /api/v1/admin/services/categories
 export const categoryCreate = async (req: Request, res: Response) => {
     try {
-        const { name, description, avatar, parentId, bookingTypes, petTypes } = req.body;
+        const { name, description, avatar, parentId, petTypes } = req.body;
 
         let slug = req.body.slug || convertToSlug(name);
 
@@ -122,8 +122,7 @@ export const categoryCreate = async (req: Request, res: Response) => {
             slug,
             description,
             avatar,
-            parentId: parentId || "",
-            bookingTypes,
+            parentId: (parentId && parentId !== "") ? parentId : null,
             petTypes,
             status: "active"
         });
@@ -156,7 +155,11 @@ export const categoryEdit = async (req: Request, res: Response) => {
             });
         }
 
-        if (req.body.name && !req.body.slug) {
+        // Đảm bảo luôn có slug
+        if (!req.body.slug && !category.slug) {
+            req.body.slug = convertToSlug(req.body.name || category.name);
+        } else if (req.body.name && req.body.name !== category.name && !req.body.slug) {
+            // Nếu đổi tên mà không truyền slug mới, tự tạo slug từ tên mới
             req.body.slug = convertToSlug(req.body.name);
         }
 
@@ -181,7 +184,18 @@ export const categoryEdit = async (req: Request, res: Response) => {
             req.body.slug = slug;
         }
 
-        await ServiceCategory.updateOne({ _id: req.params.id }, req.body);
+        const updateData = { ...req.body };
+        if (updateData.parentId === "") updateData.parentId = null;
+
+        await ServiceCategory.updateOne({ _id: req.params.id }, updateData);
+
+        // Nếu chuyển danh mục sang tạm ẩn, chuyển tất cả dịch vụ thuộc danh mục đó sang tạm ẩn
+        if (updateData.status === "inactive") {
+            await Service.updateMany(
+                { categoryId: req.params.id, deleted: false },
+                { status: "inactive" }
+            );
+        }
 
         const updatedCategory = await ServiceCategory.findById(req.params.id);
 
@@ -193,7 +207,8 @@ export const categoryEdit = async (req: Request, res: Response) => {
     } catch (error) {
         res.status(500).json({
             code: 500,
-            message: "Lỗi khi cập nhật danh mục dịch vụ"
+            message: "Lỗi khi cập nhật danh mục dịch vụ",
+            error: error instanceof Error ? error.message : String(error)
         });
     }
 };
@@ -291,6 +306,18 @@ export const serviceList = async (req: Request, res: Response) => {
             find.status = req.query.status;
         }
 
+        if (req.query.categoryId) {
+            find.categoryId = req.query.categoryId;
+        }
+
+        if (req.query.departmentId) {
+            find.departmentId = req.query.departmentId;
+        }
+
+        if (req.query.pricingType) {
+            find.pricingType = req.query.pricingType;
+        }
+
         const [services, total, deletedCount] = await Promise.all([
             Service.find(find)
                 .populate("categoryId", "name")
@@ -309,7 +336,7 @@ export const serviceList = async (req: Request, res: Response) => {
                 pagination: {
                     currentPage: page,
                     limit,
-                    total,
+                    totalRecords: total,
                     totalPages: Math.ceil(total / limit),
                     deletedCount
                 }
@@ -352,9 +379,9 @@ export const serviceDetail = async (req: Request, res: Response) => {
 export const serviceCreate = async (req: Request, res: Response) => {
     try {
         const {
-            categoryId, name, description, duration, petTypes,
+            categoryId, departmentId, name, description, duration, petTypes,
             pricingType, basePrice, priceList, images,
-            minDuration, maxDuration, procedure
+            minDuration, maxExtensionMinutes, procedure
         } = req.body;
 
         const category = await ServiceCategory.findById(categoryId);
@@ -377,6 +404,7 @@ export const serviceCreate = async (req: Request, res: Response) => {
 
         const newService = new Service({
             categoryId,
+            departmentId: (departmentId && departmentId !== "") ? departmentId : null,
             name,
             slug,
             description,
@@ -387,7 +415,7 @@ export const serviceCreate = async (req: Request, res: Response) => {
             priceList,
             images,
             minDuration,
-            maxDuration,
+            maxExtensionMinutes,
             procedure,
             status: "active"
         });
@@ -430,19 +458,24 @@ export const serviceEdit = async (req: Request, res: Response) => {
         }
 
         const {
-            name, slug, categoryId, description, duration,
+            name, slug, categoryId, departmentId, description, duration,
             petTypes, pricingType, basePrice, priceList, status, images,
-            minDuration, maxDuration, procedure
+            minDuration, maxExtensionMinutes, procedure
         } = req.body;
 
         const updateData: any = {
-            name, slug, categoryId, description, duration,
+            name, slug, categoryId, departmentId, description, duration,
             petTypes, pricingType, basePrice, priceList, status, images,
-            minDuration, maxDuration, procedure
+            minDuration, maxExtensionMinutes, procedure
         };
 
-        // Xóa các trường undefined để tránh ghi đè dữ liệu cũ bằng null/undefined nếu không truyền
-        Object.keys(updateData).forEach(key => updateData[key] === undefined && delete updateData[key]);
+        Object.keys(updateData).forEach(key => {
+            if (updateData[key] === undefined) {
+                delete updateData[key];
+            } else if ((key === "departmentId" || key === "categoryId") && updateData[key] === "") {
+                updateData[key] = null;
+            }
+        });
 
         if (updateData.name && !updateData.slug) {
             updateData.slug = convertToSlug(updateData.name);
@@ -480,7 +513,8 @@ export const serviceEdit = async (req: Request, res: Response) => {
     } catch (error) {
         res.status(500).json({
             code: 500,
-            message: "Lỗi khi cập nhật dịch vụ"
+            message: "Lỗi khi cập nhật dịch vụ",
+            error: error instanceof Error ? error.message : String(error)
         });
     }
 };

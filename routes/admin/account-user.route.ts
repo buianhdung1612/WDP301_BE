@@ -11,4 +11,8 @@ router.patch("/edit/:id", checkPermission("account_user_edit"), controller.edit)
 router.patch("/change-password/:id", checkPermission("account_user_edit"), controller.changePassword);
 router.delete("/delete/:id", checkPermission("account_user_delete"), controller.deleteAccount);
 
+router.get("/address/:userId", checkPermission("account_user_view"), controller.addressList);
+router.delete("/address/delete/:id", checkPermission("account_user_edit"), controller.addressDelete);
+router.patch("/address/set-default/:id", checkPermission("account_user_edit"), controller.addressSetDefault);
+
 export default router;
