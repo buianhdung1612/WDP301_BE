@@ -41,6 +41,14 @@ const schema = new mongoose.Schema(
             default: false
         },
         expiryDate: Date,
+        suitableBreeds: [{
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "Breed"
+        }],
+        minAge: {
+            type: Number, // In months
+            default: 0
+        },
         deleted: {
             type: Boolean,
             default: false

@@ -65,9 +65,23 @@ export const category = async (req: Request, res: Response) => {
             }
         }
 
+        const categoryIds = recordList.map(item => item._id);
+        const productCounts = await Product.aggregate([
+            { $match: { category: { $in: categoryIds }, deleted: false } },
+            { $unwind: "$category" },
+            { $match: { category: { $in: categoryIds } } },
+            { $group: { _id: "$category", count: { $sum: 1 } } }
+        ]);
+
+        const countMap = productCounts.reduce((acc: any, cur: any) => {
+            acc[cur._id.toString()] = cur.count;
+            return acc;
+        }, {});
+
         const formattedList = recordList.map(item => ({
             ...item,
             parentName: item.parent ? parentMap[item.parent.toString()] || null : null,
+            productCount: countMap[item._id.toString()] || 0
         }));
 
         return res.json({
@@ -208,6 +222,11 @@ export const editCategory = async (req: Request, res: Response) => {
             req.body.search = convertToSlug(req.body.name).replace(/-/g, " ");
         }
 
+        // Handle parent field
+        if (!req.body.parent || req.body.parent === "" || req.body.parent === "null") {
+            req.body.parent = null;
+        }
+
         await CategoryProduct.updateOne({
             _id: id,
             deleted: false
@@ -218,6 +237,7 @@ export const editCategory = async (req: Request, res: Response) => {
             message: "Cập nhật thành công!"
         })
     } catch (error) {
+        console.error("Error in editCategory:", error);
         return res.status(400).json({
             success: false,
             message: "Dữ liệu không hợp lệ!"
@@ -236,7 +256,7 @@ export const deleteCategory = async (req: Request, res: Response) => {
         });
 
         if (hasChildCategory) {
-            return res.status(400).json({
+            return res.json({
                 success: false,
                 message: "Không thể xóa danh mục này vì vẫn còn danh mục con bên trong!"
             });
@@ -249,9 +269,18 @@ export const deleteCategory = async (req: Request, res: Response) => {
         });
 
         if (hasProduct) {
-            return res.status(400).json({
+            // Lấy tên một vài sản phẩm để chỉ ra cho người dùng
+            const products = await Product.find({
+                category: id,
+                deleted: false
+            }).select("name").limit(3).lean();
+
+            const productNames = products.map(p => p.name).join(", ");
+            const moreText = products.length >= 3 ? "..." : "";
+
+            return res.json({
                 success: false,
-                message: "Không thể xóa danh mục này vì vẫn còn sản phẩm thuộc danh mục!"
+                message: `Không thể xóa danh mục này vì vẫn còn sản phẩm thuộc danh mục (${productNames}${moreText})`
             });
         }
 
@@ -286,8 +315,43 @@ export const restoreCategory = async (req: Request, res: Response) => {
 
 export const forceDeleteCategory = async (req: Request, res: Response) => {
     try {
-        // Có thể cần kiểm tra guard ở đây nếu yêu cầu an toàn tuyệt đối
-        await CategoryProduct.deleteOne({ _id: req.params.id });
+        const id = req.params.id;
+
+        // Kiểm tra xem có danh mục con không
+        const hasChildCategory = await CategoryProduct.exists({
+            parent: id,
+            deleted: false
+        });
+
+        if (hasChildCategory) {
+            return res.json({
+                success: false,
+                message: "Không thể xóa vĩnh viễn danh mục này vì vẫn còn danh mục con bên trong!"
+            });
+        }
+
+        // Kiểm tra xem có sản phẩm nào thuộc danh mục này không
+        const hasProduct = await Product.exists({
+            category: id,
+            deleted: false
+        });
+
+        if (hasProduct) {
+            const products = await Product.find({
+                category: id,
+                deleted: false
+            }).select("name").limit(3).lean();
+
+            const productNames = products.map(p => p.name).join(", ");
+            const moreText = products.length >= 3 ? "..." : "";
+
+            return res.json({
+                success: false,
+                message: `Không thể xóa vĩnh viễn danh mục này vì vẫn còn sản phẩm thuộc danh mục (${productNames}${moreText})`
+            });
+        }
+
+        await CategoryProduct.deleteOne({ _id: id });
         res.json({ success: true, message: "Xóa vĩnh viễn danh mục thành công!" });
     } catch (e) {
         res.status(500).json({ success: false, message: "Lỗi hệ thống!" });
@@ -475,6 +539,7 @@ export const createPost = async (req: Request, res: Response) => {
         req.body.images = parseIfString(req.body.images);
         req.body.attributes = parseIfString(req.body.attributes);
         req.body.variants = parseIfString(req.body.variants);
+        req.body.suitableBreeds = parseIfString(req.body.suitableBreeds);
 
         req.body.search = convertToSlug(`${req.body.name}`).replace(/-/g, " ");
 
@@ -634,6 +699,7 @@ export const editPatch = async (req: Request, res: Response) => {
         req.body.images = parseIfString(req.body.images);
         req.body.attributes = parseIfString(req.body.attributes);
         req.body.variants = parseIfString(req.body.variants);
+        req.body.suitableBreeds = parseIfString(req.body.suitableBreeds);
 
         if (req.body.name) {
             req.body.search = convertToSlug(req.body.name).replace(/-/g, " ");
