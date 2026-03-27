@@ -3,6 +3,7 @@ import WorkSchedule from "../models/work-schedule.model";
 import AccountAdmin from "../models/account-admin.model";
 import Department from "../models/department.model";
 import Role from "../models/role.model";
+import BoardingConfig from "../models/boarding-config.model";
 
 const normalizeLookupText = (value: unknown) => String(value || "")
     .normalize("NFD")
@@ -121,12 +122,22 @@ export async function getFreestBoardingStaffForDate(dateVal: string | Date | und
         };
     }));
 
-    // 4. Chọn người có tải trọng thấp nhất
-    staffWorkloads.sort((a, b) => a.workload - b.workload);
-    const freestStaff = staffWorkloads[0].staff;
+    const config = (await BoardingConfig.findOne()) || { maxCagesPerStaff: 10 };
+    const maxLimit = config.maxCagesPerStaff || 10;
+
+    // 4. Lọc bỏ người đã đạt giới hạn và chọn người có tải trọng thấp nhất
+    const eligibleWorkloads = staffWorkloads.filter((sw) => sw.workload < maxLimit);
+    if (eligibleWorkloads.length === 0) {
+        // Tùy chọn: Nếu tất cả đều bận, có thể fallback hoặc cảnh báo
+        // Hiện tại trả về người ít bận nhất hoặc undefined tùy nghiệp vụ
+        return undefined;
+    }
+
+    eligibleWorkloads.sort((a, b) => a.workload - b.workload);
+    const freestStaff = eligibleWorkloads[0].staff;
 
     return {
         staffId: String(freestStaff._id),
-        staffName: String(freestStaff.fullName || "")
+        staffName: String(freestStaff.fullName || ""),
     };
 }

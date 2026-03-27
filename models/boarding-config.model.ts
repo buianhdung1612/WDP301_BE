@@ -41,6 +41,10 @@ const schema = new mongoose.Schema(
         refundPercentage: {
             type: Number,
             default: 80
+        },
+        maxCagesPerStaff: {
+            type: Number,
+            default: 10
         }
     },
     {
