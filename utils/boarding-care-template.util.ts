@@ -13,6 +13,8 @@ type FeedingItem = {
     note: string;
     status: "pending";
     petType: "dog" | "cat" | "all";
+    petId?: string | null;
+    petName?: string;
     staffId: string | null;
     staffName: string;
     doneAt: null;
@@ -25,6 +27,8 @@ type ExerciseItem = {
     note: string;
     status: "pending";
     petType: "dog" | "cat" | "all";
+    petId?: string | null;
+    petName?: string;
     staffId: string | null;
     staffName: string;
     doneAt: null;
@@ -243,25 +247,28 @@ export const buildDefaultBoardingCareSchedule = (
     const staffIdRaw = staff?.staffId || null;
     const staffName = staff?.staffName || "";
     const safePets = Array.isArray(pets) ? pets : [];
-    const dogs = safePets.filter((pet) => normalizePetType(pet?.type) === "dog");
-    const cats = safePets.filter((pet) => normalizePetType(pet?.type) === "cat");
-
-    const includeDog = dogs.length > 0;
-    const includeCat = cats.length > 0;
-
     let feedingSchedule: FeedingItem[] = [];
     let exerciseSchedule: ExerciseItem[] = [];
 
-    if (includeDog) {
-        feedingSchedule = feedingSchedule.concat(buildDogFeedingTemplate(dogs));
-        exerciseSchedule = exerciseSchedule.concat(buildDogExerciseTemplate(dogs));
-    }
-    if (includeCat) {
-        feedingSchedule = feedingSchedule.concat(buildCatFeedingTemplate(cats));
-        exerciseSchedule = exerciseSchedule.concat(buildCatExerciseTemplate());
-    }
+    safePets.forEach((pet: any) => {
+        const type = normalizePetType(pet.type || pet.petType);
+        const pId = pet._id ? String(pet._id) : null;
+        const pName = pet.name || "";
 
-    // Apply custom overrides if provided
+        if (type === "dog") {
+            const dogFeeding = buildDogFeedingTemplate([pet]).map(i => ({ ...i, petId: pId, petName: pName }));
+            const dogExercise = buildDogExerciseTemplate([pet]).map(i => ({ ...i, petId: pId, petName: pName }));
+            feedingSchedule = feedingSchedule.concat(dogFeeding);
+            exerciseSchedule = exerciseSchedule.concat(dogExercise);
+        } else if (type === "cat") {
+            const catFeeding = buildCatFeedingTemplate([pet]).map(i => ({ ...i, petId: pId, petName: pName }));
+            const catExercise = buildCatExerciseTemplate().map(i => ({ ...i, petId: pId, petName: pName }));
+            feedingSchedule = feedingSchedule.concat(catFeeding);
+            exerciseSchedule = exerciseSchedule.concat(catExercise);
+        }
+    });
+
+    // Apply custom overrides if provided (per item, matching by time slot)
     if (customFeeding) {
         feedingSchedule = feedingSchedule.map(item => {
             const hour = parseInt(item.time.split(':')[0]);
