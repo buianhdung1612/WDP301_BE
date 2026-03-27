@@ -34,6 +34,11 @@ const feedingScheduleSchema = new mongoose.Schema(
             enum: ["dog", "cat", "all"],
             default: "all"
         },
+        petId: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "Pet"
+        },
+        petName: String,
         doneAt: Date
     },
     { _id: true }
@@ -61,6 +66,11 @@ const exerciseScheduleSchema = new mongoose.Schema(
             enum: ["dog", "cat", "all"],
             default: "all"
         },
+        petId: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "Pet"
+        },
+        petName: String,
         doneAt: Date
     },
     { _id: true }

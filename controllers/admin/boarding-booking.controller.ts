@@ -281,7 +281,10 @@ const sanitizeFeedingSchedule = (items: any[]): any[] => {
                 staffId,
                 staffName: String(item?.staffName || "").trim(),
                 status,
-                doneAt
+                doneAt,
+                petId: normalizeObjectId(item?.petId),
+                petName: String(item?.petName || "").trim(),
+                petType: String(item?.petType || "all").trim()
             };
         })
         .filter((item) => item.time || item.food || item.amount || item.note || item.staffId || item.proofMedia.length > 0);
@@ -308,7 +311,10 @@ const sanitizeExerciseSchedule = (items: any[]): any[] => {
                 staffId,
                 staffName: String(item?.staffName || "").trim(),
                 status,
-                doneAt
+                doneAt,
+                petId: normalizeObjectId(item?.petId),
+                petName: String(item?.petName || "").trim(),
+                petType: String(item?.petType || "all").trim()
             };
         })
         .filter((item) => item.time || item.activity || item.durationMinutes || item.note || item.staffId || item.proofMedia.length > 0);
@@ -1144,7 +1150,7 @@ export const updateBoardingCareSchedule = async (req: Request, res: Response) =>
                         sanitizeFeedingSchedule(feedingSchedule),
                         visibleExistingFeeding
                     )
-            ).slice(0, 30)
+            ).slice(0, 100)
             : undefined;
         const sanitizedExercise = exerciseSchedule !== undefined
             ? (
@@ -1154,7 +1160,7 @@ export const updateBoardingCareSchedule = async (req: Request, res: Response) =>
                         sanitizeExerciseSchedule(exerciseSchedule),
                         visibleExistingExercise
                     )
-            ).slice(0, 30)
+            ).slice(0, 100)
             : undefined;
 
         const feedingEvidenceError = sanitizedFeeding !== undefined
@@ -1277,11 +1283,14 @@ export const updateBoardingCareSchedule = async (req: Request, res: Response) =>
                     if (hour < 11) meal = "Sáng";
                     else if (hour < 16) meal = "Trưa";
 
-                    for (const petId of booking.petIds) {
+                    // Chốt PetId cụ thể nếu có, nếu không sync hết như cũ (legacy logic)
+                    const targetPetIds = item.petId ? [item.petId] : (Array.isArray(booking.petIds) ? booking.petIds : []);
+
+                    for (const pId of targetPetIds) {
                         await BoardingPetDiary.findOneAndUpdate(
                             {
                                 bookingId: booking._id,
-                                petId: petId,
+                                petId: pId,
                                 date: careDateValue,
                                 meal: meal,
                                 deleted: false
