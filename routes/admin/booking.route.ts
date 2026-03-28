@@ -26,5 +26,7 @@ router.get("/bookings/:id/recommend-staff", checkPermission("booking_assign"), b
 router.post("/bookings/suggest-assignment", checkPermission("booking_create"), bookingController.suggestSmartAssignment);
 router.get("/bookings/:id/overrun-impact", checkPermission("booking_view"), bookingController.getOverrunImpactAnalysis);
 router.post("/bookings/auto-assign", checkPermission("booking_assign"), bookingController.autoAssignBookings);
+router.patch("/bookings/:id/apply-optimization", checkPermission("booking_edit"), bookingController.applyOptimization);
+router.patch("/bookings/:id/reassign-pet-staff", checkPermission("booking_edit"), bookingController.reassignPetStaff);
 
 export default router;

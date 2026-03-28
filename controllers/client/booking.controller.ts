@@ -459,13 +459,16 @@ export const createBooking = async (req: Request, res: Response) => {
         let depositAmount = 0;
         let remainingAmount = totalPrice;
 
+        const depositPercentage = config?.depositPercentage || 0;
+
         if (paymentMethod === "money") {
-            const depositPercentage = config?.depositPercentage || 0;
+            // Tiền mặt: thu cọc theo % cấu hình, khách trả nốt tại quầy
             depositAmount = Math.round((totalPrice * depositPercentage) / 100);
             remainingAmount = totalPrice - depositAmount;
         } else {
-            // Thanh toán online thì mặc định thanh toán 100%
-            depositAmount = totalPrice;
+            // Online (zalopay/vnpay): thu full tiền qua cổng thanh toán
+            // depositAmount = 0 để không bị hint là "cọc"
+            depositAmount = 0;
             remainingAmount = 0;
         }
 

@@ -1,4 +1,4 @@
-import express, { Request, Response } from "express";
+﻿import express, { Request, Response } from "express";
 import Booking from "../../models/booking.model";
 import AccountUser from "../../models/account-user.model";
 import Service from "../../models/service.model";
@@ -11,8 +11,9 @@ import BookingReview from "../../models/booking-review.model";
 import dayjs from "dayjs";
 import puppeteer from "puppeteer";
 import { autoUpdateBookingStatuses } from "../../jobs/booking.job";
-import { findBestStaffForBooking, autoAssignPetsToStaff } from "../../helpers/booking-assignment.helper";
+import { findBestStaffForBooking, autoAssignPetsToStaff, checkOptimizedStaffAvailability } from "../../helpers/booking-assignment.helper";
 import { convertToSlug } from "../../helpers/slug.helper";
+import Notification from "../../models/notification.model";
 
 // [POST] /api/v1/admin/booking/bookings/create
 export const createBooking = async (req: Request, res: Response) => {
@@ -1318,6 +1319,15 @@ export const updateBooking = async (req: Request, res: Response) => {
             }
         });
 
+        // Đảm bảo Mongoose nhận diện được sự thay đổi trong mảng sub-documents
+        if (req.body.petStaffMap) {
+            console.log(`[UpdateBooking] Updating petStaffMap for ${id}:`, JSON.stringify(req.body.petStaffMap, null, 2));
+            booking.markModified('petStaffMap');
+        }
+        if (req.body.staffIds) {
+            booking.markModified('staffIds');
+        }
+
         // Tự động hủy lịch nếu đã hoàn tiền (refunded) và chưa bị hủy trước đó
         if (booking.paymentStatus === "refunded" && booking.bookingStatus !== "cancelled") {
             booking.bookingStatus = "cancelled";
@@ -1475,6 +1485,14 @@ export const completeBooking = async (req: Request, res: Response) => {
             });
         }
 
+
+        // Khong cho hoan thanh neu chua thanh toan
+        if (booking.paymentStatus === "unpaid") {
+            return res.status(400).json({
+                code: 400,
+                message: "Không thể hoàn thành lịch đặt khi chưa thanh toán!"
+            });
+        }
         // 1. Cập nhật trạng thái từng thú cưng
         if (petId) {
             const petMapping = booking.petStaffMap.find((m: any) => m.petId.toString() === petId.toString());
@@ -1513,6 +1531,86 @@ export const completeBooking = async (req: Request, res: Response) => {
         }
 
         await booking.save();
+
+        // --- Logic Gợi ý tối ưu (Optimization Recommendation) ---
+        if (!allCompleted && petId) {
+            try {
+                const finishedMapping = booking.petStaffMap.find((m: any) => (m.petId?._id || m.petId).toString() === petId.toString());
+                const freeStaffId = finishedMapping?.staffId?._id || finishedMapping?.staffId;
+
+                console.log(`[Optimization] Pet finished: ${petId}, Staff free: ${freeStaffId}`);
+
+                if (freeStaffId) {
+                    // 1. Tim tat ca thu cung con pending trong don, duoc giao cho nhan vien KHAC
+                    const pendingMappings = booking.petStaffMap.filter((m: any) =>
+                        m.status === "pending" &&
+                        (m.staffId?._id || m.staffId).toString() !== freeStaffId.toString()
+                    );
+
+                    console.log(`[Optimization] Pending mappings found: ${pendingMappings.length}`);
+
+                    for (const targetMapping of pendingMappings) {
+                        const busyStaffId = targetMapping.staffId?._id || targetMapping.staffId;
+                        const targetPetId = targetMapping.petId?._id || targetMapping.petId;
+
+                        if (!busyStaffId || !targetPetId) continue;
+
+                        // 2. Kiem tra nhan vien vua xong co ranh de nhan them khong
+                        const service = await Service.findById(booking.serviceId?._id || booking.serviceId);
+                        const duration = (service as any)?.duration || 30;
+
+                        const isAvailable = await checkOptimizedStaffAvailability(
+                            freeStaffId.toString(),
+                            duration,
+                            new Date(),
+                            booking._id.toString()
+                        );
+
+                        console.log(`[Optimization] Staff ${freeStaffId} available: ${isAvailable}`);
+
+                        if (isAvailable) {
+                            // 3. Tranh spam - chi tao neu chua co thong bao unread tuong tu
+                            const existingNoti = await Notification.findOne({
+                                'metadata.bookingId': booking._id,
+                                'metadata.targetPetId': targetPetId,
+                                status: "unread"
+                            });
+
+                            if (!existingNoti) {
+                                const staff = await AccountAdmin.findById(freeStaffId);
+                                const busyStaff = await AccountAdmin.findById(busyStaffId);
+                                const pet = await Pet.findById(targetPetId);
+
+                                console.log(`[Optimization] Creating notification for pet: ${pet?.name}`);
+
+                                await Notification.create({
+                                    title: 'Goi y toi uu dieu phoi',
+                                    content: `Nhan vien \ vua hoan thanh som. Co the ho tro \ lam cho thu cung \ de day nhanh tien do.`,
+                                    type: 'system',
+                                    receiverId: null,
+                                    metadata: {
+                                        bookingId: booking._id,
+                                        type: 'optimization_suggestion',
+                                        targetPetId,
+                                        busyStaffId,
+                                        offeringStaffId: freeStaffId
+                                    }
+                                });
+
+                                console.log(`[Optimization] Notification created successfully.`);
+                            } else {
+                                console.log(`[Optimization] Unread notification already exists, skip.`);
+                            }
+                            break;
+                        } else {
+                            console.log(`[Optimization] Staff ${freeStaffId} has conflicts, skipping.`);
+                        }
+                    }
+                }            } catch (optError) {
+                console.error("Optimization Suggestion Error:", optError);
+                // Không throw lỗi ở đây để tránh làm gián đoạn luồng hoàn thành dịch vụ chính
+            }
+        }
 
         res.json({
             code: 200,
@@ -1765,8 +1863,8 @@ export const exportDailyStaffSchedule = async (req: Request, res: Response) => {
 // [POST] /api/v1/admin/bookings/suggest-assignment
 export const suggestSmartAssignment = async (req: Request, res: Response) => {
     try {
-        const { date, startTime, endTime, serviceId, petIds, staffIds } = req.body;
-        console.log("SMART ASSIGN REQUEST:", { date, startTime, endTime, serviceId, petIds, staffIds });
+        const { date, startTime, endTime, serviceId, petIds, staffIds, bookingId } = req.body;
+        console.log("SMART ASSIGN REQUEST:", { date, startTime, endTime, serviceId, petIds, staffIds, bookingId });
 
         if (!date || !startTime || !endTime || !serviceId || !petIds) {
             return res.status(400).json({ code: 400, message: "Thiếu thông tin để gợi ý phân công" });
@@ -1782,7 +1880,7 @@ export const suggestSmartAssignment = async (req: Request, res: Response) => {
             endDateTime,
             serviceId,
             petIds.length,
-            undefined,
+            bookingId,
             staffIds
         );
 
@@ -1807,57 +1905,97 @@ export const suggestSmartAssignment = async (req: Request, res: Response) => {
         res.status(500).json({ code: 500, message: "Lỗi khi gợi ý phân công" });
     }
 };
+// [PATCH] /api/v1/admin/bookings/:id/reassign-pet-staff
+export const reassignPetStaff = async (req: Request, res: Response) => {
+    try {
+        const { id } = req.params;
+        const { petId, staffId } = req.body;
+
+        if (!petId || !staffId) {
+            return res.status(400).json({ code: 400, message: "Thiếu petId hoặc staffId" });
+        }
+
+        const booking = await Booking.findById(id);
+        if (!booking || booking.deleted) {
+            return res.status(404).json({ code: 404, message: "Không tìm thấy đơn hàng" });
+        }
+
+        const mapItem = (booking as any).petStaffMap.find((m: any) => m.petId?.toString() === petId);
+        if (!mapItem) {
+            return res.status(404).json({ code: 404, message: "Không tìm thấy thú cưng trong đơn hàng" });
+        }
+
+        if (mapItem.status !== "pending") {
+            return res.status(400).json({ code: 400, message: "Không thể đổi nhân viên cho thú cưng đang thực hiện hoặc đã hoàn thành" });
+        }
+
+        mapItem.staffId = staffId;
+        const allStaffIds = Array.from(new Set((booking as any).petStaffMap.map((m: any) => m.staffId?.toString()).filter((x: any) => x)));
+        (booking as any).staffIds = allStaffIds;
+        booking.markModified("petStaffMap");
+        booking.markModified("staffIds");
+        await booking.save();
+
+        res.json({ code: 200, message: "Đã đổi nhân viên thành công", data: booking });
+    } catch (error) {
+        console.error("Reassign Pet Staff Error:", error);
+        res.status(500).json({ code: 500, message: "Lỗi hệ thống khi đổi nhân viên" });
+    }
+};
 
 // [GET] /api/v1/admin/booking/overrun-impact/:id
 export const getOverrunImpactAnalysis = async (req: Request, res: Response) => {
     try {
         const { id } = req.params;
-        const overrunBooking = await Booking.findById(id).populate('staffIds');
-        if (!overrunBooking || !overrunBooking.isOverrun) {
-            return res.status(404).json({ code: 404, message: "Không tìm thấy ca quá giờ hoặc ca này chưa bị đánh dấu quá giờ" });
+        const booking = await Booking.findById(id).populate("staffIds").populate("petIds").populate("serviceId");
+        if (!booking || booking.deleted) {
+            return res.status(404).json({ code: 404, message: "Không tìm thấy đơn hàng" });
+        }
+        res.json({ code: 200, message: "OK", data: booking });
+    } catch (error) {
+        console.error("Get Overrun Impact Error:", error);
+        res.status(500).json({ code: 500, message: "Lỗi hệ thống" });
+    }
+};
+
+// [PATCH] /api/v1/admin/bookings/:id/apply-optimization
+export const applyOptimization = async (req: Request, res: Response) => {
+    try {
+        const { id } = req.params;
+        const { targetPetId, newStaffId, notificationId } = req.body;
+
+        if (!targetPetId || !newStaffId) {
+            return res.status(400).json({ code: 400, message: "Thiếu targetPetId hoặc newStaffId" });
         }
 
-        // Tìm các ca tiếp theo bị ảnh hưởng (có ít nhất 1 staff đang kẹt trong ca overrun)
-        const impactedBookings = await Booking.find({
-            staffIds: { $in: overrunBooking.staffIds },
-            _id: { $ne: overrunBooking._id },
-            start: { $gte: overrunBooking.start },
-            bookingStatus: { $in: ["confirmed", "pending", "delayed"] },
-            deleted: false
-        }).populate('serviceId petIds');
+        const booking = await Booking.findById(id);
+        if (!booking || booking.deleted) {
+            return res.status(404).json({ code: 404, message: "Không tìm thấy đơn hàng" });
+        }
 
-        // Phân tích từng ca bị ảnh hưởng
-        const analysis = await Promise.all(impactedBookings.map(async (bk: any) => {
-            // Tìm nhân viên thay thế (rảnh hoàn toàn trong khung giờ đó và có kỹ năng)
-            const suggestions = await findBestStaffForBooking(
-                bk.start,
-                bk.start,
-                bk.end,
-                bk.serviceId?._id?.toString() || bk.serviceId?.toString(),
-                bk.petIds?.length || 1,
-                bk._id?.toString(),
-                undefined, // restricted
-                overrunBooking.staffIds.map((s: any) => s._id?.toString()) // exclude busy staff
-            );
+        const petMapping = (booking as any).petStaffMap.find((m: any) => m.petId?.toString() === targetPetId.toString());
+        if (!petMapping) {
+            return res.status(404).json({ code: 404, message: "Không tìm thấy thú cưng trong đơn hàng này" });
+        }
 
-            return {
-                booking: bk,
-                impactedStaffIds: bk.staffIds.filter((sId: any) =>
-                    overrunBooking.staffIds.some((os: any) => os._id.toString() === sId.toString())
-                ),
-                suggestedStaff: suggestions // suggest top matches
-            };
-        }));
+        if (petMapping.status !== "pending") {
+            return res.status(400).json({ code: 400, message: "Chỉ có thể điều phối lại những thú cưng chưa thực hiện" });
+        }
 
-        res.json({
-            code: 200,
-            data: {
-                overrunBooking,
-                impactedBookings: analysis
-            }
-        });
-    } catch (error: any) {
-        console.error("Overrun Impact Error:", error);
-        res.status(500).json({ code: 500, message: "Lỗi hệ thống khi phân tích tác động quá giờ" });
+        petMapping.staffId = newStaffId;
+        const currentStaffIds = (booking as any).petStaffMap.map((m: any) => m.staffId?.toString()).filter((x: any) => x);
+        (booking as any).staffIds = Array.from(new Set(currentStaffIds));
+        booking.markModified("petStaffMap");
+        booking.markModified("staffIds");
+        await booking.save();
+
+        if (notificationId) {
+            await Notification.updateOne({ _id: notificationId }, { status: "read" });
+        }
+
+        res.json({ code: 200, message: "Đã điều phối lại nhân sự tối ưu thành công", data: booking });
+    } catch (error) {
+        console.error("Apply Optimization Error:", error);
+        res.status(500).json({ code: 500, message: "Lỗi khi áp dụng tối ưu" });
     }
-}
+};

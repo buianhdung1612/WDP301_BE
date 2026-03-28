@@ -475,8 +475,10 @@ export const paymentZaloPay = async (req: Request, res: Response) => {
 
     let amount = target.total;
     if (bookingCode && target.depositAmount > 0 && target.paymentStatus === "unpaid") {
+        // Tiền mặt có cọc → chỉ thu tiền cọc
         amount = target.depositAmount;
     }
+    // Online (zalopay/vnpay): depositAmount = 0 → thu full total (giữ nguyên amount = target.total)
 
     const order = {
         app_id: config.app_id,
@@ -534,11 +536,17 @@ export const paymentZalopayResult = async (req: Request, res: Response) => {
                 if (booking) {
                     let updateData: any = {};
                     if (booking.depositAmount > 0 && booking.paymentStatus === "unpaid") {
-                        updateData.paymentStatus = "partially_paid";
+                        // Tiền mặt có cọc: thu cọc trước
+                        updateData.paymentStatus = (booking.depositAmount || 0) >= (booking.total || 0) ? "paid" : "partially_paid";
                         updateData.depositMethod = "zalopay";
                         updateData.bookingStatus = "confirmed";
-                    } else {
+                    } else if (booking.paymentStatus === "partially_paid") {
+                        // Thanh toán nốt phần còn lại
                         updateData.paymentStatus = "paid";
+                    } else {
+                        // Online payment (depositAmount = 0): thu full tiền
+                        updateData.paymentStatus = "paid";
+                        updateData.bookingStatus = "confirmed";
                     }
                     await Booking.updateOne({ _id: booking._id }, updateData);
                 }
@@ -603,8 +611,10 @@ export const paymentVNPay = async (req: Request, res: Response) => {
     let orderId = `${phone}-${code}-${Date.now()}`;
     let amount = target.total || 0;
     if (bookingCode && target.depositAmount > 0 && target.paymentStatus === "unpaid") {
+        // Tiền mặt có cọc → chỉ thu tiền cọc
         amount = target.depositAmount;
     }
+    // Online (zalopay/vnpay): depositAmount = 0 → thu full total
     let bankCode = "";
 
     let locale = 'vn';
@@ -668,11 +678,16 @@ export const paymentVNPayResult = async (req: Request, res: Response) => {
                 if (booking) {
                     let updateData: any = {};
                     if (booking.depositAmount > 0 && booking.paymentStatus === "unpaid") {
+                        // Tiền mặt có cọc: thu cọc trước
                         updateData.paymentStatus = (booking.depositAmount || 0) >= (booking.total || 0) ? "paid" : "partially_paid";
                         updateData.depositMethod = "vnpay";
                         updateData.bookingStatus = "confirmed";
-                    } else {
+                    } else if (booking.paymentStatus === "partially_paid") {
                         updateData.paymentStatus = "paid";
+                    } else {
+                        // Online payment (depositAmount = 0): thu full tiền
+                        updateData.paymentStatus = "paid";
+                        updateData.bookingStatus = "confirmed";
                     }
                     await Booking.updateOne({ _id: booking._id }, updateData);
                 }
