@@ -1,8 +1,12 @@
 import { Request, Response } from 'express';
 import Review from '../../models/review.model';
+import BookingReview from '../../models/booking-review.model';
+import BoardingCageReview from '../../models/boarding-cage-review.model';
 import Product from '../../models/product.model';
 import User from '../../models/account-user.model';
 import Order from '../../models/order.model';
+import Service from '../../models/service.model';
+import BoardingCage from '../../models/boarding-cage.model';
 
 // [GET] /api/v1/client/reviews/:productId
 export const getReviews = async (req: Request, res: Response) => {
@@ -169,15 +173,65 @@ export const getMyReviews = async (req: Request, res: Response) => {
             });
         }
 
-        const reviews = await Review.find({ userId })
+        // 1. Lấy review sản phẩm
+        const productReviews = (await Review.find({ userId })
             .populate("productId", "name images slug")
-            .sort({ createdAt: -1 });
+            .sort({ createdAt: -1 })
+            .lean()) as any[];
+
+        const formattedProductReviews = productReviews.map((r: any) => ({
+            ...r,
+            reviewType: "product",
+            targetName: r.productId?.name,
+            targetImage: r.productId?.images?.[0],
+            targetSlug: r.productId?.slug,
+            targetLink: `/product/detail/${r.productId?.slug}`
+        }));
+
+        // 2. Lấy review dịch vụ (BookingReview)
+        const serviceReviews = (await BookingReview.find({ userId, deleted: false })
+            .populate("serviceId", "name images")
+            .sort({ createdAt: -1 })
+            .lean()) as any[];
+
+        const formattedServiceReviews = serviceReviews.map((r: any) => ({
+            ...r,
+            reviewType: "service",
+            targetName: r.serviceId?.name,
+            targetImage: r.serviceId?.images?.[0],
+            targetLink: "#", // Có thể thêm link sau
+            images: r.photos || [] // Chuẩn hóa photos thành images
+        }));
+
+        // 3. Lấy review khách sạn (BoardingCageReview)
+        const boardingReviews = (await BoardingCageReview.find({ userId, deleted: false })
+            .populate("cageId", "cageCode avatar")
+            .sort({ createdAt: -1 })
+            .lean()) as any[];
+
+        const formattedBoardingReviews = boardingReviews.map((r: any) => ({
+            ...r,
+            reviewType: "boarding",
+            targetName: r.cageId ? `Phòng ${r.cageId.cageCode}` : "Phòng khách sạn",
+            targetImage: r.cageId?.avatar || "https://wdtsweetheart.wpengine.com/wp-content/uploads/2025/06/boarding-single-img-02.jpg",
+            targetLink: "#"
+        }));
+
+        // Hợp nhất và sắp xếp theo thời gian mới nhất
+        const allReviews = [
+            ...formattedProductReviews,
+            ...formattedServiceReviews,
+            ...formattedBoardingReviews
+        ].sort((a: any, b: any) =>
+            new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+        );
 
         return res.json({
             success: true,
-            data: reviews
+            data: allReviews
         });
     } catch (error) {
+        console.error("Error getMyReviews:", error);
         return res.status(500).json({
             success: false,
             message: "Lỗi Server"
