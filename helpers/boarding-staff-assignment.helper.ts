@@ -26,12 +26,17 @@ async function getBoardingHotelDepartmentIds() {
                 name.includes("cham soc") ||
                 name.includes("boarding") ||
                 name.includes("hotel") ||
+                name.includes("noi tru") ||
+                name.includes("phong") ||
+                name.includes("dich vu") ||
                 code.includes("hotel") ||
                 code.includes("boarding") ||
                 code.includes("khachsan") ||
                 code.includes("khach-san") ||
                 code.includes("cs") ||
-                code.includes("ks")
+                code.includes("ks") ||
+                code.includes("nt") ||
+                code.includes("bc")
             );
         })
         .map((item: any) => item._id);
