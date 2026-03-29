@@ -1,4 +1,4 @@
-﻿import { Request, Response } from 'express';
+import { Request, Response } from 'express';
 import Product from '../../models/product.model';
 import Order from '../../models/order.model';
 import Booking from '../../models/booking.model';
@@ -383,5 +383,46 @@ export const getStaffingStatus = async (req: Request, res: Response) => {
         });
     } catch (error) {
         res.status(500).json({ code: 500, message: "Lỗi kiểm tra định mức nhân sự" });
+    }
+};
+export const getBoardingStats = async (req: Request, res: Response) => {
+    try {
+        const date = req.query.date ? new Date(req.query.date as string) : new Date();
+        const startOfDay = dayjs(date).startOf('day').toDate();
+        const endOfDay = dayjs(date).endOf('day').toDate();
+
+        const [totalBookings, checkedInBookings, confirmedBookings] = await Promise.all([
+            BoardingBooking.countDocuments({ deleted: false }),
+            BoardingBooking.countDocuments({ boardingStatus: "checked-in", deleted: false }),
+            BoardingBooking.countDocuments({ boardingStatus: "confirmed", deleted: false }),
+        ]);
+
+        const urgentBookings = await BoardingBooking.find({
+            boardingStatus: "checked-in",
+            deleted: false
+        }).select('feedingSchedule exerciseSchedule');
+
+        let urgentFeeding = 0;
+        let urgentExercise = 0;
+
+        urgentBookings.forEach(b => {
+            const feeding = (b.feedingSchedule || []).filter((f: any) => f.status === 'pending');
+            const exercise = (b.exerciseSchedule || []).filter((e: any) => e.status === 'pending');
+            urgentFeeding += feeding.length;
+            urgentExercise += exercise.length;
+        });
+
+        res.json({
+            success: true,
+            data: {
+                totalBookings,
+                activeBookings: checkedInBookings,
+                upcomingBookings: confirmedBookings,
+                urgentFeeding,
+                urgentExercise
+            }
+        });
+    } catch (error: any) {
+        res.status(500).json({ success: false, message: error.message });
     }
 };

@@ -5,6 +5,8 @@ import slugify from "slugify";
 import jwt from "jsonwebtoken";
 import bcrypt from "bcryptjs";
 import Order from "../../models/order.model";
+import Booking from "../../models/booking.model";
+import BoardingBooking from "../../models/boarding-booking.model";
 
 // [GET] /api/v1/client/dashboard/profile
 export const profileGet = async (req: Request, res: Response) => {
@@ -490,6 +492,66 @@ export const overview = async (req: Request, res: Response) => {
         });
     } catch (error) {
         console.error(error);
+        return res.status(500).json({
+            success: false,
+            message: "Lỗi hệ thống!"
+        });
+    }
+};
+
+export const transactions = async (req: Request, res: Response) => {
+    try {
+        const userId = res.locals.accountUser.id;
+
+        const [orders, bookings, boardingBookings] = await Promise.all([
+            Order.find({ userId, deleted: false }).sort({ createdAt: -1 }).lean(),
+            Booking.find({ userId, deleted: false }).populate("serviceId", "name").sort({ createdAt: -1 }).lean(),
+            BoardingBooking.find({ userId, deleted: false }).populate("cageId", "cageCode").sort({ createdAt: -1 }).lean(),
+        ]);
+
+        const orderTx = orders.map((o: any) => ({
+            _id: o._id,
+            code: o.code,
+            type: "order",
+            description: `Thanh toán đơn hàng #${o.code}`,
+            amount: o.total || 0,
+            method: o.paymentMethod || "cod",
+            status: o.paymentStatus || (o.orderStatus === "completed" ? "completed" : "pending"),
+            createdAt: o.createdAt
+        }));
+
+        const bookingTx = bookings.map((b: any) => ({
+            _id: b._id,
+            code: b.code,
+            type: "booking",
+            description: `Thanh toán dịch vụ: ${b.serviceId?.name || "Dịch vụ"}`,
+            amount: b.total || 0,
+            method: b.paymentMethod || "cod",
+            status: b.paymentStatus || (b.bookingStatus === "completed" ? "completed" : "pending"),
+            createdAt: b.createdAt
+        }));
+
+        const boardingTx = boardingBookings.map((bb: any) => ({
+            _id: bb._id,
+            code: bb.code,
+            type: "boarding",
+            description: `Thanh toán khách sạn: ${bb.cageId?.cageCode || "Phòng nghỉ"}`,
+            amount: bb.total || bb.totalPrice || 0,
+            method: bb.paymentMethod || "pay_at_site",
+            status: bb.paymentStatus || (bb.boardingStatus === "completed" ? "completed" : "pending"),
+            createdAt: bb.createdAt
+        }));
+
+        const allTransactions = [...orderTx, ...bookingTx, ...boardingTx].sort((a, b) => 
+            new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+        );
+
+        return res.json({
+            success: true,
+            data: allTransactions
+        });
+    } catch (error) {
+        console.error("Transactions error:", error);
         return res.status(500).json({
             success: false,
             message: "Lỗi hệ thống!"
