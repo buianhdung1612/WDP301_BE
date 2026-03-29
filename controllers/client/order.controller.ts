@@ -311,7 +311,11 @@ export const paymentZaloPay = async (req: Request, res: Response) => {
     const items = [{}];
     const transID = Math.floor(Math.random() * 1000000);
     let amount = target.total;
-    if (bookingCode && target.depositAmount > 0 && target.paymentStatus === "unpaid") amount = target.depositAmount;
+    if (bookingCode && target.depositAmount > 0 && target.paymentStatus === "unpaid") {
+        // Tiền mặt có cọc → chỉ thu tiền cọc
+        amount = target.depositAmount;
+    }
+    // Online (zalopay/vnpay): depositAmount = 0 → thu full total (giữ nguyên amount = target.total)
 
     const order = {
         app_id: config.app_id,
@@ -351,7 +355,20 @@ export const paymentZalopayResult = async (req: Request, res: Response) => {
             if (code.startsWith("BK")) {
                 const booking = await Booking.findOne({ code, customerPhone: phone, deleted: false });
                 if (booking) {
-                    let updateData: any = { paymentStatus: booking.depositAmount > 0 && booking.paymentStatus === "unpaid" ? "partially_paid" : "paid", depositMethod: "zalopay", bookingStatus: "confirmed" };
+                    let updateData: any = {};
+                    if (booking.depositAmount > 0 && booking.paymentStatus === "unpaid") {
+                        // Tiền mặt có cọc: thu cọc trước
+                        updateData.paymentStatus = (booking.depositAmount || 0) >= (booking.total || 0) ? "paid" : "partially_paid";
+                        updateData.depositMethod = "zalopay";
+                        updateData.bookingStatus = "confirmed";
+                    } else if (booking.paymentStatus === "partially_paid") {
+                        // Thanh toán nốt phần còn lại
+                        updateData.paymentStatus = "paid";
+                    } else {
+                        // Online payment (depositAmount = 0): thu full tiền
+                        updateData.paymentStatus = "paid";
+                        updateData.bookingStatus = "confirmed";
+                    }
                     await Booking.updateOne({ _id: booking._id }, updateData);
                 }
             } else {
@@ -386,25 +403,37 @@ export const paymentVNPay = async (req: Request, res: Response) => {
     const ipAddr = req.headers['x-forwarded-for'] || req.connection.remoteAddress || req.socket.remoteAddress;
     const paymentSettings = await getApiPayment();
 
-    const backendUrl = process.env.BACKEND_URL?.replace(/\/+$/, "") || "http://localhost:3000";
-    const returnUrl = `${backendUrl}/api/v1/client/order/payment-vnpay-result`;
-    const orderId = `${code}_${Math.floor(Date.now() / 1000)}`;
-    const amount = (bookingCode && target.depositAmount > 0 && target.paymentStatus === "unpaid") ? target.depositAmount : target.total;
+    let tmnCode = `${paymentSettings.vnpTmnCode}`;
+    let secretKey = `${paymentSettings.vnpHashSecret}`;
+    let vnpUrl = `${paymentSettings.vnpUrl}`;
+    let returnUrl = `http://localhost:3000/api/v1/client/order/payment-vnpay-result`;
+    let orderId = `${phone}-${code}-${Date.now()}`;
+    let amount = target.total || 0;
+    if (bookingCode && target.depositAmount > 0 && target.paymentStatus === "unpaid") {
+        // Tiền mặt có cọc → chỉ thu tiền cọc
+        amount = target.depositAmount;
+    }
+    // Online (zalopay/vnpay): depositAmount = 0 → thu full total
+    let bankCode = "";
 
-    let vnp_Params: any = {
-        vnp_Version: '2.1.0',
-        vnp_Command: 'pay',
-        vnp_TmnCode: `${paymentSettings.vnpTmnCode}`,
-        vnp_Locale: 'vn',
-        vnp_CurrCode: 'VND',
-        vnp_TxnRef: orderId,
-        vnp_OrderInfo: 'Thanh toan cho ma GD:' + orderId,
-        vnp_OrderType: 'other',
-        vnp_Amount: amount * 100,
-        vnp_ReturnUrl: returnUrl,
-        vnp_IpAddr: ipAddr,
-        vnp_CreateDate: createDate
-    };
+    let locale = 'vn';
+    let currCode = 'VND';
+    let vnp_Params: any = {};
+    vnp_Params['vnp_Version'] = '2.1.0';
+    vnp_Params['vnp_Command'] = 'pay';
+    vnp_Params['vnp_TmnCode'] = tmnCode;
+    vnp_Params['vnp_Locale'] = locale;
+    vnp_Params['vnp_CurrCode'] = currCode;
+    vnp_Params['vnp_TxnRef'] = orderId;
+    vnp_Params['vnp_OrderInfo'] = 'Thanh toan cho ma GD:' + orderId;
+    vnp_Params['vnp_OrderType'] = 'other';
+    vnp_Params['vnp_Amount'] = amount * 100;
+    vnp_Params['vnp_ReturnUrl'] = returnUrl;
+    vnp_Params['vnp_IpAddr'] = ipAddr;
+    vnp_Params['vnp_CreateDate'] = createDate;
+    if (bankCode !== null && bankCode !== '') {
+        vnp_Params['vnp_BankCode'] = bankCode;
+    }
 
     vnp_Params = sortObject(vnp_Params);
     const querystring = require('qs');
@@ -434,85 +463,69 @@ export const paymentVNPayResult = async (req: Request, res: Response) => {
         const hmac = crypto.createHmac("sha512", secretKey);
         const signed = hmac.update(Buffer.from(signData, 'utf-8')).digest("hex");
 
-        if (secureHash === signed) {
-            const txnRef = String(vnp_Params['vnp_TxnRef'] || "");
-            const code = txnRef.split('_')[0];
-            const order = await Order.findOne({ code, deleted: false });
-            const phone = order?.phone || "";
+    if (secureHash === signed) {
+        const [phone, code] = (vnp_Params['vnp_TxnRef'] as string).split('-');
 
-            const responseCode = vnp_Params['vnp_ResponseCode'];
-            const transactionStatus = vnp_Params['vnp_TransactionStatus'];
-            const isSuccess = responseCode === '00' && (transactionStatus === '00' || transactionStatus === '01');
-
-            if (isSuccess) {
-                if (code.startsWith("BK")) {
-                    const booking = await Booking.findOne({ code, customerPhone: phone, deleted: false });
-                    if (booking) {
-                        let updateData: any = { paymentStatus: (booking.depositAmount || 0) >= (booking.total || 0) ? "paid" : "partially_paid", depositMethod: "vnpay", bookingStatus: "confirmed" };
-                        await Booking.updateOne({ _id: booking._id }, updateData);
+        if (vnp_Params['vnp_ResponseCode'] === '00') {
+            if (code.startsWith("BK")) {
+                const booking = await Booking.findOne({ code, customerPhone: phone, deleted: false });
+                if (booking) {
+                    let updateData: any = {};
+                    if (booking.depositAmount > 0 && booking.paymentStatus === "unpaid") {
+                        // Tiền mặt có cọc: thu cọc trước
+                        updateData.paymentStatus = (booking.depositAmount || 0) >= (booking.total || 0) ? "paid" : "partially_paid";
+                        updateData.depositMethod = "vnpay";
+                        updateData.bookingStatus = "confirmed";
+                    } else if (booking.paymentStatus === "partially_paid") {
+                        updateData.paymentStatus = "paid";
+                    } else {
+                        // Online payment (depositAmount = 0): thu full tiền
+                        updateData.paymentStatus = "paid";
+                        updateData.bookingStatus = "confirmed";
                     }
-                } else {
-                    await Order.findOneAndUpdate({ code, deleted: false }, { paymentStatus: 'paid' });
-                    await addPointAfterPayment(code);
+                    await Booking.updateOne({ _id: booking._id }, updateData);
                 }
             } else {
-                if (responseCode === '24') {
-                    await Order.findOneAndUpdate({ code, deleted: false }, { orderStatus: 'cancelled', cancelledBy: 'customer', cancelledReason: 'Khách hàng hủy thanh toán VNPay' });
-                    await refundOrderResources(code);
-                }
+                await Order.findOneAndUpdate({
+                    phone: phone,
+                    code: code,
+                    deleted: false
+                }, {
+                    paymentStatus: 'paid'
+                });
+                await addPointAfterPayment(code);
             }
 
             const successPath = code.startsWith("BK") ? `/dashboard/bookings` : `/order/success?orderCode=${code}&phone=${phone}`;
-            const failPath = code.startsWith("BK") ? `/dashboard/bookings` : `/order/success?orderCode=${code}&phone=${phone}&payment=failed&vnpCode=${responseCode}`;
-            
-            const domainWebsite = process.env.DOMAIN_WEBSITE || "http://localhost:5173";
-            const redirectUrl = isSuccess ? `${domainWebsite}${successPath}` : `${domainWebsite}${failPath}`;
-
-            let message = isSuccess ? "Thanh toán thành công!" : "Thanh toán không thành công!";
-            let subMessage = isSuccess 
-                ? `Cảm ơn bạn đã đặt hàng. Mã đơn hàng của bạn là <b>${code}</b>.` 
-                : `Đã có lỗi xảy ra trong quá trình thanh toán (Mã lỗi: ${responseCode}). Vui lòng thử lại sau.`;
-            let icon = isSuccess ? "✅" : "❌";
-            let color = isSuccess ? "#27ae60" : "#e74c3c";
-
-            res.send(`
-                <!DOCTYPE html>
-                <html lang="vi">
-                <head>
-                    <meta charset="UTF-8">
-                    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-                    <title>Kết quả thanh toán</title>
-                    <style>
-                        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f7f9fc; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; padding: 20px; box-sizing: border-box; }
-                        .card { background: white; padding: 40px; border-radius: 24px; box-shadow: 0 15px 35px rgba(0,0,0,0.1); text-align: center; max-width: 450px; width: 100%; }
-                        .icon { font-size: 80px; margin-bottom: 24px; }
-                        h1 { color: #1a1a1a; font-size: 28px; margin: 0 0 16px 0; font-weight: 800; }
-                        p { color: #555; line-height: 1.6; margin-bottom: 32px; font-size: 16px; }
-                        .btn { display: inline-block; background-color: ${color}; color: white; padding: 14px 40px; border-radius: 50px; text-decoration: none; font-weight: 700; transition: all 0.3s; box-shadow: 0 4px 15px ${color}44; }
-                        .btn:hover { transform: translateY(-2px); box-shadow: 0 6px 20px ${color}66; }
-                        .btn:active { transform: translateY(0); }
-                        .footer { margin-top: 32px; font-size: 14px; color: #888; border-top: 1px solid #eee; padding-top: 24px; }
-                    </style>
-                </head>
-                <body>
-                    <div class="card">
-                        <div class="icon">${icon}</div>
-                        <h1>${message}</h1>
-                        <p>${subMessage}</p>
-                        <a href="${redirectUrl}" class="btn">Quay lại ứng dụng</a>
-                        <div class="footer">Trang sẽ tự động chuyển hướng sau 5 giây...</div>
-                    </div>
-                    <script>
-                        setTimeout(() => { window.location.href = "${redirectUrl}"; }, 5000);
-                    </script>
-                </body>
-                </html>
-            `);
+            res.redirect(`${process.env.DOMAIN_WEBSITE}${successPath}`);
         } else {
-            res.status(400).send("Chữ ký không hợp lệ!");
+            // Nếu thanh toán thất bại hoặc người dùng hủy
+            if (code.startsWith("BK")) {
+                await Booking.findOneAndUpdate({
+                    customerPhone: phone,
+                    code: code,
+                    deleted: false
+                }, {
+                    paymentStatus: 'unpaid',
+                    bookingStatus: 'cancelled'
+                });
+            } else {
+                await Order.findOneAndUpdate({
+                    phone: phone,
+                    code: code,
+                    deleted: false
+                }, {
+                    paymentStatus: 'unpaid',
+                    orderStatus: 'cancelled'
+                });
+                await refundOrderResources(code);
+            }
+            // Redirect back to shopping or order history if failed
+            const failPath = code.startsWith("BK") ? `/dashboard/bookings` : `/cart`;
+            res.redirect(`${process.env.DOMAIN_WEBSITE}${failPath}`);
         }
-    } catch (error: any) {
-        res.status(500).send(`<h1>Lỗi hệ thống</h1><p>${error.message}</p>`);
+    } else {
+        res.render('success', { code: '97' })
     }
 }
 

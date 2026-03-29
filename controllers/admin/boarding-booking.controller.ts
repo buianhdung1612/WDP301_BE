@@ -505,7 +505,13 @@ export const batchCreateBoardingBooking = async (req: Request, res: Response) =>
             const total = Math.max(subTotal - finalDiscount, 0);
 
             const defaultStaff = await getFreestBoardingStaffForDate(checkIn);
-            const defaultCareSchedule = buildDefaultBoardingCareSchedule([pet as any], defaultStaff);
+            const defaultCareSchedule = buildDefaultBoardingCareSchedule(
+                [pet as any],
+                defaultStaff,
+                undefined,
+                undefined,
+                { careDate: checkIn, checkInDate: checkIn }
+            );
 
             const depositAmount = getDepositAmount(total, paymentMethod, totalDays, config);
             const depositPercent = depositAmount > 0 ? (config.depositPercentage || 20) : 0;
@@ -643,7 +649,13 @@ export const createBoardingBooking = async (req: Request, res: Response) => {
         const total = Math.max(subTotal - finalDiscount, 0);
 
         const defaultStaff = await getFreestBoardingStaffForDate(checkIn);
-        const defaultCareSchedule = buildDefaultBoardingCareSchedule([pet as any], defaultStaff);
+        const defaultCareSchedule = buildDefaultBoardingCareSchedule(
+            [pet as any],
+            defaultStaff,
+            undefined,
+            undefined,
+            { careDate: checkIn, checkInDate: checkIn }
+        );
 
         const config = await BoardingConfig.findOne() || { depositPercentage: 20, minDaysForDeposit: 2 };
 
@@ -1115,7 +1127,10 @@ export const updateBoardingCareSchedule = async (req: Request, res: Response) =>
 
             const template = buildDefaultBoardingCareSchedule(
                 pets as any[],
-                await getFreestBoardingStaffForDate(careDate || booking.checkInDate)
+                await getFreestBoardingStaffForDate(careDate || booking.checkInDate),
+                undefined,
+                undefined,
+                { careDate: careDate || booking.checkInDate, checkInDate: booking.checkInDate }
             );
             booking.feedingSchedule = template.feedingSchedule;
             booking.exerciseSchedule = template.exerciseSchedule;

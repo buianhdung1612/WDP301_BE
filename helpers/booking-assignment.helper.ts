@@ -211,3 +211,61 @@ export const autoAssignPetsToStaff = (petIds: any[], staffIds: any[]) => {
         staffId: sIds[index % sIds.length]
     }));
 };
+
+/**
+ * Kiểm tra xem nhân viên có rảnh để nhận thêm một việc (Task) ngay bây giờ không
+ * @param staffId ID nhân viên
+ * @param duration Phút dự kiến thực hiện
+ * @param startTime Thời điểm bắt đầu (mặc định là now)
+ * @param excludeBookingId ID đơn hàng hiện tại cần loại trừ khỏi kiểm tra trùng
+ */
+export const checkOptimizedStaffAvailability = async (
+    staffId: string,
+    duration: number,
+    startTime: Date = new Date(),
+    excludeBookingId?: string
+) => {
+    const dStart = dayjs(startTime);
+    const dEnd = dStart.add(duration, 'minute');
+
+    // 1. Kiểm tra lịch trực (WorkSchedule)
+    const schedule = await WorkSchedule.findOne({
+        staffId,
+        date: {
+            $gte: dStart.startOf('day').toDate(),
+            $lte: dStart.endOf('day').toDate()
+        },
+        status: { $in: ["scheduled", "checked-in"] }
+    }).populate("shiftId");
+
+    if (!schedule || !schedule.shiftId) return false;
+
+    const shift = schedule.shiftId as any;
+    const [sH, sM] = shift.startTime.split(':').map(Number);
+    const [eH, eM] = shift.endTime.split(':').map(Number);
+
+    // Tạo mốc thời gian tuyệt đối cho ca làm
+    const shiftEnd = dStart.clone().hour(eH).minute(eM).second(0);
+
+    // Nếu thời gian kết thúc task vượt quá ca làm -> Không ổn
+    if (dEnd.isAfter(shiftEnd)) return false;
+
+    // 2. Kiểm tra trùng các booking khác trong tương lai
+    const query: any = {
+        staffIds: staffId,
+        deleted: false,
+        bookingStatus: { $in: ["pending", "confirmed", "delayed", "in-progress"] },
+        $or: [
+            { start: { $lt: dEnd.toDate() }, end: { $gt: dStart.toDate() } },
+            { actualStart: { $lt: dEnd.toDate() }, expectedFinish: { $gt: dStart.toDate() } }
+        ]
+    };
+
+    if (excludeBookingId) {
+        query._id = { $ne: excludeBookingId };
+    }
+
+    const overlappingBooking = await Booking.findOne(query);
+
+    return !overlappingBooking;
+};

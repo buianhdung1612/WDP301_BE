@@ -6,7 +6,7 @@ import ServiceCategory from "../../models/category-service.model";
 export const listServices = async (req: Request, res: Response) => {
     try {
         const page = parseInt(req.query.page as string) || 1;
-        const limit = parseInt(req.query.limit as string) || 10;
+        const limit = parseInt(req.query.limit as string) || 20;
         const skip = (page - 1) * limit;
         const categoryId = req.query.categoryId as string;
         const petTypes = req.query.petTypes as string;
