@@ -9,6 +9,7 @@ import BookingConfig from "../../models/booking-config.model";
 import AccountAdmin from "../../models/account-admin.model";
 import dayjs from "dayjs";
 import puppeteer from 'puppeteer';
+import { convertToSlug } from "../../helpers/slug.helper";
 import moment from "moment";
 import { findBestStaffForBooking, autoAssignPetsToStaff } from "../../helpers/booking-assignment.helper";
 
@@ -130,7 +131,7 @@ export const getAvailableTimeSlots = async (req: Request, res: Response) => {
                 endTime: (s.shiftId as any).endTime,
                 canDoService,
                 bookings: bookings.filter(b => {
-                    const bStaffIds = b.staffIds?.map((id: any) => id.toString()) || [];
+                    const bStaffIds = b.petStaffMap?.map((m: any) => String(m.staffId?._id || m.staffId)) || [];
                     return bStaffIds.includes(staffStrId);
                 })
             });
@@ -479,10 +480,6 @@ export const createBooking = async (req: Request, res: Response) => {
         const newBooking = new Booking({
             code: bookingCode,
             userId,
-            customerName: res.locals.accountUser?.fullName || "Khách hàng",
-            customerPhone: res.locals.accountUser?.phone || "",
-            serviceId,
-            staffIds: bestStaffList.map(s => s._id) as any,
             petStaffMap,
             petIds,
             start,
@@ -497,6 +494,10 @@ export const createBooking = async (req: Request, res: Response) => {
             paymentStatus: "unpaid",
             paymentExpireAt: paymentExpireAt
         });
+
+        const name = res.locals.accountUser?.fullName || "";
+        const phone = res.locals.accountUser?.phone || "";
+        newBooking.search = convertToSlug(`${bookingCode} ${name} ${phone}`).replace(/-/g, " ");
 
         await newBooking.save();
         const populatedBooking = await Booking.findById(newBooking._id).populate("userId");

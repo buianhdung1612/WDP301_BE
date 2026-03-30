@@ -21,6 +21,7 @@ export const createBooking = async (req: Request, res: Response) => {
         const {
             serviceId,
             staffId,
+            staffIds: inputStaffIds,
             userId,
             petIds,
             notes,
@@ -32,11 +33,9 @@ export const createBooking = async (req: Request, res: Response) => {
             subTotal,
             total,
             discount,
-            staffIds,
-            petStaffMap,
-            customerName,
-            customerPhone
+            petStaffMap
         } = req.body;
+        // Legacy staffIds/customer fields removed - fallbacks handled by populated user data
 
         // Validate required fields
         if (!serviceId) {
@@ -77,7 +76,7 @@ export const createBooking = async (req: Request, res: Response) => {
             },
             status: { $in: ["scheduled", "checked-in"] }
         }).populate("shiftId");
-
+    
         const dynamicBlocks = schedules.map(s => {
             if (s.shiftId) {
                 const [sH, sM] = (s.shiftId as any).startTime.split(':').map(Number);
@@ -86,22 +85,22 @@ export const createBooking = async (req: Request, res: Response) => {
             }
             return null;
         }).filter(Boolean) as { start: number, end: number, label: string }[];
-
+    
         const uniqueShiftLabels = Array.from(new Set(dynamicBlocks.map(b => b.label))).sort();
-
+    
         let workingBlocks = dynamicBlocks.length > 0 ? dynamicBlocks : [
             { start: 8 * 60, end: 12 * 60 },
             { start: 13 * 60, end: 17 * 60 },
             { start: 17 * 60, end: 23 * 60 }
         ];
-
+    
         const startTotalMinutes = startDate.getHours() * 60 + startDate.getMinutes();
         const endTotalMinutes = endDate.getHours() * 60 + endDate.getMinutes();
-
+    
         const isValidBlock = workingBlocks.some(block =>
             startTotalMinutes >= block.start && endTotalMinutes <= block.end
         );
-
+    
         if (!isValidBlock) {
             const shiftInfo = uniqueShiftLabels.length > 0 ? uniqueShiftLabels.join(", ") : "08:00-12:00, 13:00-17:00, 17:00-23:00";
             return res.status(400).json({
@@ -128,9 +127,9 @@ export const createBooking = async (req: Request, res: Response) => {
 
         // 5. Staff Assignment Logic
         let finalStaffIds: string[] = [];
-        const providedStaffIds = (Array.isArray(staffIds) && staffIds.length > 0)
-            ? staffIds
-            : (staffId ? [staffId] : []);
+        const providedStaffIds = (Array.isArray(inputStaffIds) && (inputStaffIds as string[]).length > 0)
+            ? inputStaffIds as string[]
+            : (staffId ? [staffId as string] : []);
 
         let finalDuration = service.duration || 30;
         const numPets = Array.isArray(petIds) ? petIds.filter((id: string) => id != null && id !== "").length : 1;
@@ -206,12 +205,11 @@ export const createBooking = async (req: Request, res: Response) => {
         const newBooking = new Booking({
             code: bookingCode,
             serviceId,
-            staffIds: (Array.isArray(staffIds) && staffIds.length > 0) ? staffIds : finalStaffIds,
             petStaffMap: (petStaffMap && petStaffMap.length > 0)
                 ? petStaffMap
                 : autoAssignPetsToStaff(
                     Array.isArray(petIds) ? petIds.filter((id: string) => id != null && id !== "") : [],
-                    (Array.isArray(staffIds) && staffIds.length > 0) ? staffIds : finalStaffIds
+                    (Array.isArray(inputStaffIds) && (inputStaffIds as string[]).length > 0) ? (inputStaffIds as string[]) : finalStaffIds
                 ),
             userId: userId || null,
             petIds: Array.isArray(petIds) ? petIds.filter((id: string) => id != null && id !== "") : [],
@@ -224,14 +222,12 @@ export const createBooking = async (req: Request, res: Response) => {
             subTotal: subTotal || (service as any).basePrice || 0,
             total: total || (service as any).basePrice * numPets || 0,
             discount: discount || 0,
-            customerName: customerName || userDetail?.fullName || "",
-            customerPhone: customerPhone || userDetail?.phone || "",
             deleted: false,
             paymentExpireAt: new Date(Date.now() + (config?.bookingGracePeriod || 15) * 60 * 1000)
         });
 
-        const name = newBooking.customerName || "";
-        const phone = newBooking.customerPhone || "";
+        const name = userDetail?.fullName || "";
+        const phone = userDetail?.phone || "";
         newBooking.search = convertToSlug(`${bookingCode} ${name} ${phone}`).replace(/-/g, " ");
 
         await newBooking.save();
@@ -351,7 +347,7 @@ export const assignStaff = async (req: Request, res: Response) => {
             }
         }
 
-        booking.staffIds = finalStaffIds;
+        // staffIds field removed – petStaffMap is the source of truth for staff assignment
         await booking.save();
 
         res.json({
@@ -388,7 +384,7 @@ export const listBookings = async (req: Request, res: Response) => {
         }
 
         if (req.query.staffId) {
-            filter.staffIds = req.query.staffId;
+            filter["petStaffMap.staffId"] = req.query.staffId;
         }
 
         // Filter by appointment date (start field)
@@ -422,8 +418,6 @@ export const listBookings = async (req: Request, res: Response) => {
 
             filter.$or = [
                 { search: new RegExp(slugKeyword, "i") },
-                { customerName: keywordRegex },
-                { customerPhone: keywordRegex },
                 { code: codeRegex }
             ];
         }
@@ -431,7 +425,6 @@ export const listBookings = async (req: Request, res: Response) => {
         let query = Booking.find(filter)
             .populate("serviceId", "name basePrice duration")
             .populate("userId", "fullName phone email")
-            .populate("staffIds", "fullName")
             .populate("petStaffMap.staffId", "fullName")
             .populate("petStaffMap.petId", "name avatar breed image")
             .sort({ createdAt: -1 });
@@ -528,7 +521,7 @@ export const autoAssignBookings = async (req: Request, res: Response) => {
         );
 
         if (bestStaffList.length > 0) {
-            booking.staffIds = bestStaffList.map(s => s._id);
+            // staffIds field removed – petStaffMap is source of truth; just update status
             booking.bookingStatus = autoConfirm ? "confirmed" : "pending";
             await booking.save();
 
@@ -566,9 +559,7 @@ export const listStaffTasks = async (req: Request, res: Response) => {
 
         let filter: any = {
             deleted: false,
-            $or: [
-                { staffIds: staffId }
-            ]
+            "petStaffMap.staffId": staffId
         };
 
         if (req.query.status) {
@@ -655,12 +646,12 @@ export const getStaffBookingDetail = async (req: Request, res: Response) => {
         const staffId = res.locals.accountAdmin._id;
         const booking = await Booking.findOne({
             _id: req.params.id,
-            staffIds: staffId,
+            "petStaffMap.staffId": staffId,
             deleted: false
         })
             .populate("serviceId", "name basePrice duration")
             .populate("userId", "fullName phone email avatar")
-            .populate("staffIds", "fullName email avatar")
+            .populate("petStaffMap.staffId", "fullName email avatar")
             .populate("petIds");
 
         if (!booking) {
@@ -689,7 +680,7 @@ export const getBooking = async (req: Request, res: Response) => {
         const booking = await Booking.findById(req.params.id)
             .populate("serviceId", "name basePrice duration")
             .populate("userId", "fullName phone email avatar")
-            .populate("staffIds", "fullName email avatar")
+            .populate("petStaffMap.staffId", "fullName email avatar")
             .populate("petIds");
 
         if (!booking || booking.deleted) {
@@ -1042,9 +1033,10 @@ export const rescheduleBooking = async (req: Request, res: Response) => {
 
         const newStart = start ? new Date(start) : booking.start as Date;
         const newEnd = end ? new Date(end) : booking.end as Date;
+        const existingStaffIds = (booking.petStaffMap || []).map((m: any) => String(m.staffId?._id || m.staffId));
         const finalStaffIds = (staffIds && Array.isArray(staffIds) && staffIds.length > 0)
             ? staffIds
-            : (staffId ? [staffId] : (booking.staffIds as any[]));
+            : (staffId ? [staffId] : existingStaffIds);
 
         // 1. Kiểm tra trùng lịch nhân viên
         if (finalStaffIds.length > 0) {
@@ -1092,7 +1084,7 @@ export const rescheduleBooking = async (req: Request, res: Response) => {
         // Cập nhật thời gian mới
         booking.start = newStart;
         booking.end = newEnd;
-        booking.staffIds = finalStaffIds;
+        // staffIds removed – petStaffMap is the source of truth
         booking.bookingStatus = "confirmed";
 
         await booking.save();
@@ -1281,7 +1273,8 @@ export const updateBooking = async (req: Request, res: Response) => {
         }
 
         // Staff overlap check
-        const checkStaffIds = req.body.staffIds || (req.body.staffId ? [req.body.staffId] : (booking.staffIds as any[]));
+        const existingStaffIds = (booking.petStaffMap || []).map((m: any) => String(m.staffId?._id || m.staffId));
+        const checkStaffIds = req.body.staffIds || (req.body.staffId ? [req.body.staffId] : existingStaffIds);
         if (checkStaffIds && checkStaffIds.length > 0) {
             const staffOverlap = await Booking.findOne({
                 _id: { $ne: id },
@@ -1309,8 +1302,8 @@ export const updateBooking = async (req: Request, res: Response) => {
 
         const allowedUpdates = [
             "serviceId", "userId", "petIds", "notes",
-            "start", "end", "staffIds", "petStaffMap", "discount",
-            "paymentMethod", "paymentStatus", "customerName", "customerPhone"
+            "start", "end", "petStaffMap", "discount",
+            "paymentMethod", "paymentStatus"
         ];
 
         allowedUpdates.forEach(update => {
@@ -1324,9 +1317,6 @@ export const updateBooking = async (req: Request, res: Response) => {
             console.log(`[UpdateBooking] Updating petStaffMap for ${id}:`, JSON.stringify(req.body.petStaffMap, null, 2));
             booking.markModified('petStaffMap');
         }
-        if (req.body.staffIds) {
-            booking.markModified('staffIds');
-        }
 
         // Tự động hủy lịch nếu đã hoàn tiền (refunded) và chưa bị hủy trước đó
         if (booking.paymentStatus === "refunded" && booking.bookingStatus !== "cancelled") {
@@ -1336,10 +1326,6 @@ export const updateBooking = async (req: Request, res: Response) => {
             booking.cancelledBy = "system";
         }
 
-        // Sync staffId if staffIds updated
-        if (req.body.staffId && (!req.body.staffIds || req.body.staffIds.length === 0)) {
-            (booking as any).staffIds = [req.body.staffId];
-        }
 
         // Auto-fix petStaffMap if pets or staff changed but petStaffMap wasn't provided
         const petsChanged = req.body.petIds !== undefined;
@@ -1347,11 +1333,13 @@ export const updateBooking = async (req: Request, res: Response) => {
         const mapProvided = req.body.petStaffMap !== undefined && req.body.petStaffMap.length > 0;
 
         if ((petsChanged || staffChanged) && !mapProvided) {
-            (booking as any).petStaffMap = autoAssignPetsToStaff(booking.petIds as any, booking.staffIds as any);
+            const staffForMap = req.body.staffIds || (req.body.staffId ? [req.body.staffId] : (booking.petStaffMap || []).map((m: any) => m.staffId?._id || m.staffId));
+            (booking as any).petStaffMap = autoAssignPetsToStaff(booking.petIds as any, staffForMap as any);
         }
 
-        const name = booking.customerName || "";
-        const phone = booking.customerPhone || "";
+        const populatedUser = await AccountUser.findById(booking.userId).select("fullName phone").lean();
+        const name = (populatedUser as any)?.fullName || "";
+        const phone = (populatedUser as any)?.phone || "";
         booking.search = convertToSlug(`${booking.code} ${name} ${phone}`).replace(/-/g, " ");
 
         await booking.save();
@@ -1412,7 +1400,7 @@ export const getAvailableSlots = async (req: Request, res: Response) => {
 
         // 3. Tính toán ô trống cho từng nhân viên
         schedules.forEach(schedule => {
-            const staffBookings = bookings.filter(b => b.staffIds?.includes(schedule.staffId?._id));
+            const staffBookings = bookings.filter(b => b.petStaffMap?.some((m: any) => String(m.staffId?._id || m.staffId) === String(schedule.staffId?._id)));
 
             // Giả định ca làm việc từ schedule.startTime đến schedule.endTime (ví dụ "08:00" đến "17:00")
             // Ở đây tôi dùng service duration để kiểm tra xem có đủ chỗ không
@@ -1606,7 +1594,8 @@ export const completeBooking = async (req: Request, res: Response) => {
                             console.log(`[Optimization] Staff ${freeStaffId} has conflicts, skipping.`);
                         }
                     }
-                }            } catch (optError) {
+                }
+            } catch (optError) {
                 console.error("Optimization Suggestion Error:", optError);
                 // Không throw lỗi ở đây để tránh làm gián đoạn luồng hoàn thành dịch vụ chính
             }
@@ -1678,7 +1667,7 @@ export const getRecommendedStaff = async (req: Request, res: Response) => {
 
             // 2.2 Kiểm tra trùng lịch (bận hay rảnh)
             const staffBookings = allBookingsToday.filter(b =>
-                b.staffIds?.includes(staff._id) &&
+                b.petStaffMap?.some((m: any) => String(m.staffId?._id || m.staffId) === String(staff._id)) &&
                 b._id.toString() !== booking._id.toString()
             );
 
@@ -1758,7 +1747,7 @@ export const exportDailyStaffSchedule = async (req: Request, res: Response) => {
             },
             bookingStatus: { $in: ["pending", "confirmed", "delayed", "in-progress", "completed"] }
         })
-            .populate("staffIds", "fullName")
+            .populate("petStaffMap.staffId", "fullName")
             .populate("serviceId", "name")
             .populate("petIds", "name")
             .sort({ start: 1 });
@@ -1768,7 +1757,7 @@ export const exportDailyStaffSchedule = async (req: Request, res: Response) => {
         // Group by staff
         const staffGroups: any = {};
         bookings.forEach((b: any) => {
-            const staffName = b.staffIds?.[0]?.fullName || "Chưa phân công";
+            const staffName = b.petStaffMap?.[0]?.staffId?.fullName || "Chưa phân công";
             if (!staffGroups[staffName]) staffGroups[staffName] = [];
             staffGroups[staffName].push(b);
         });
@@ -1930,10 +1919,7 @@ export const reassignPetStaff = async (req: Request, res: Response) => {
         }
 
         mapItem.staffId = staffId;
-        const allStaffIds = Array.from(new Set((booking as any).petStaffMap.map((m: any) => m.staffId?.toString()).filter((x: any) => x)));
-        (booking as any).staffIds = allStaffIds;
         booking.markModified("petStaffMap");
-        booking.markModified("staffIds");
         await booking.save();
 
         res.json({ code: 200, message: "Đã đổi nhân viên thành công", data: booking });
@@ -1947,7 +1933,7 @@ export const reassignPetStaff = async (req: Request, res: Response) => {
 export const getOverrunImpactAnalysis = async (req: Request, res: Response) => {
     try {
         const { id } = req.params;
-        const booking = await Booking.findById(id).populate("staffIds").populate("petIds").populate("serviceId");
+        const booking = await Booking.findById(id).populate("petStaffMap.staffId").populate("petIds").populate("serviceId");
         if (!booking || booking.deleted) {
             return res.status(404).json({ code: 404, message: "Không tìm thấy đơn hàng" });
         }
@@ -1983,10 +1969,7 @@ export const applyOptimization = async (req: Request, res: Response) => {
         }
 
         petMapping.staffId = newStaffId;
-        const currentStaffIds = (booking as any).petStaffMap.map((m: any) => m.staffId?.toString()).filter((x: any) => x);
-        (booking as any).staffIds = Array.from(new Set(currentStaffIds));
         booking.markModified("petStaffMap");
-        booking.markModified("staffIds");
         await booking.save();
 
         if (notificationId) {

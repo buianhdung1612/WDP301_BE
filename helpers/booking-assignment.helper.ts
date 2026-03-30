@@ -113,7 +113,7 @@ export const findBestStaffForBooking = async (
 
         // C. Kiểm tra trùng lịch
         const isOverlapping = assignedBookings.some(b => {
-            const bStaffIds = b.staffIds?.map((id: any) => id.toString()) || [];
+            const bStaffIds = (b.petStaffMap || []).map((m: any) => String(m.staffId?._id || m.staffId));
             if (!bStaffIds.includes(staff._id.toString())) return false;
 
             const bStart = dayjs(b.actualStart || b.start);
@@ -131,20 +131,20 @@ export const findBestStaffForBooking = async (
 
         // 1. Số đơn nhận trong ngày hôm nay (Cân bằng tải)
         const todayCount = assignedBookings.filter(b => {
-            const bStaffIds = b.staffIds?.map((id: any) => id.toString()) || [];
+            const bStaffIds = (b.petStaffMap || []).map((m: any) => String(m.staffId?._id || m.staffId));
             return bStaffIds.includes(staff._id.toString());
         }).length;
 
         // 2. Tổng số đơn đã làm trong quá khứ
         const totalPastCount = await Booking.countDocuments({
-            staffIds: staff._id,
+            "petStaffMap.staffId": staff._id,
             bookingStatus: "completed",
             deleted: false
         });
 
         // 3. Kinh nghiệm làm dịch vụ này (Số đơn dịch vụ này đã hoàn thành)
         const experienceServiceCount = await Booking.countDocuments({
-            staffIds: staff._id,
+            "petStaffMap.staffId": staff._id,
             serviceId: serviceId,
             bookingStatus: "completed",
             deleted: false
@@ -252,7 +252,7 @@ export const checkOptimizedStaffAvailability = async (
 
     // 2. Kiểm tra trùng các booking khác trong tương lai
     const query: any = {
-        staffIds: staffId,
+        "petStaffMap.staffId": staffId,
         deleted: false,
         bookingStatus: { $in: ["pending", "confirmed", "delayed", "in-progress"] },
         $or: [
