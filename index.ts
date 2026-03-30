@@ -31,10 +31,7 @@ const app = express()
 const server = http.createServer(app);
 const io = new Server(server, {
     cors: {
-        origin: [
-            'http://localhost:5173',
-            'http://127.0.0.1:5173'
-        ],
+        origin: true, // Cho phép tất cả các nguồn trong quá trình dev cho nhanh
         methods: ["GET", "POST"],
         credentials: true
     }
@@ -74,10 +71,7 @@ app.use(cookieParser());
 
 // CORS
 app.use(cors({
-    origin: [
-        'http://localhost:5173',
-        'http://127.0.0.1:5173'
-    ],
+    origin: true, // Cho phép tất cả các nguồn cho mobile dev
     credentials: true
 }));
 

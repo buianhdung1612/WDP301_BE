@@ -471,7 +471,7 @@ export const initiateBoardingPayment = async (req: Request, res: Response) => {
         const secretKey = `${paymentSettings.vnpHashSecret}`;
         let vnpUrl = `${paymentSettings.vnpUrl}`;
         const returnUrl = `${resolvePublicBackendUrl(req)}/api/v1/client/boarding/payment-vnpay-result`;
-        const orderId = `${booking._id}_${Date.now()}`;
+        const orderId = `${(booking.code || "").slice(-8)}_${Math.floor(Date.now() / 1000)}`; // Max 24 chars
         const amount = Number(booking.depositAmount || 0) > 0 ? Number(booking.depositAmount || 0) : Number(booking.total || 0);
 
         let vnpParams: any = {
@@ -646,12 +646,13 @@ export const paymentBoardingVNPayResult = async (req: Request, res: Response) =>
         const txnRef = String(pickFirstQueryValue(vnpParams.vnp_TxnRef) || "");
         const responseCode = String(pickFirstQueryValue(vnpParams.vnp_ResponseCode) || "");
         const transactionStatus = String(pickFirstQueryValue(vnpParams.vnp_TransactionStatus) || "");
-        const bookingId = txnRef.split("_")[0];
-        const isPaymentSuccess = responseCode === "00" && (!transactionStatus || transactionStatus === "00");
+        const code = txnRef.split("_")[0];
+        const booking = await BoardingBooking.findOne({ code: { $regex: code, $options: 'i' }, deleted: false });
+        const isPaymentSuccess = responseCode === "00" && (!transactionStatus || transactionStatus === "00" || transactionStatus === "01");
 
-        if (isPaymentSuccess) {
-            const booking = await BoardingBooking.findOne({ _id: bookingId, deleted: false });
-            if (booking && booking.paymentStatus !== "paid") {
+        if (isPaymentSuccess && booking) {
+            const bookingId = booking._id;
+            if (booking.paymentStatus !== "paid" && booking.paymentStatus !== "partial") {
                 await BoardingBooking.updateOne(
                     { _id: bookingId, deleted: false },
                     { $set: buildSuccessfulPaymentUpdate(booking) }
@@ -660,7 +661,8 @@ export const paymentBoardingVNPayResult = async (req: Request, res: Response) =>
             return res.redirect(`${process.env.DOMAIN_WEBSITE}/hotels/success?bookingId=${bookingId}&payment=success`);
         }
 
-        return res.redirect(`${process.env.DOMAIN_WEBSITE}/hotels/success?bookingId=${bookingId}&payment=failed`);
+        const safeBookingId = booking?._id || "";
+        return res.redirect(`${process.env.DOMAIN_WEBSITE}/hotels/success?bookingId=${safeBookingId}&payment=failed`);
     }
     return res.status(400).json({ message: "Invalid signature" });
 };
