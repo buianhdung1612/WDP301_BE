@@ -260,7 +260,7 @@ export const createPost = async (req: Request, res: Response) => {
                 metadata: { orderId: newRecord._id, orderCode: dataFinal.code },
                 status: "unread"
             });
-        } catch (e) {}
+        } catch (e) { }
 
         res.json({ code: "success", message: "Đặt hàng thành công!", orderCode: dataFinal.code, phone: dataFinal.phone });
     } catch (error: any) {
@@ -404,10 +404,7 @@ export const paymentVNPay = async (req: Request, res: Response) => {
     const createDate = moment(date).format('YYYYMMDDHHmmss');
     const ipAddr = req.headers['x-forwarded-for'] || req.connection.remoteAddress || req.socket.remoteAddress;
     const paymentSettings = await getApiPayment();
-
     let tmnCode = `${paymentSettings.vnpTmnCode}`;
-    let secretKey = `${paymentSettings.vnpHashSecret}`;
-    let vnpUrl = `${paymentSettings.vnpUrl}`;
     let returnUrl = `http://localhost:3000/api/v1/client/order/payment-vnpay-result`;
     let orderId = `${phone}-${code}-${Date.now()}`;
     let amount = target.total || 0;
@@ -465,72 +462,75 @@ export const paymentVNPayResult = async (req: Request, res: Response) => {
         const hmac = crypto.createHmac("sha512", secretKey);
         const signed = hmac.update(Buffer.from(signData, 'utf-8')).digest("hex");
 
-    if (secureHash === signed) {
-        const [phone, code] = (vnp_Params['vnp_TxnRef'] as string).split('-');
+        if (secureHash === signed) {
+            const [phone, code] = (vnp_Params['vnp_TxnRef'] as string).split('-');
 
-        if (vnp_Params['vnp_ResponseCode'] === '00') {
-            if (code.startsWith("BK")) {
-                const booking = await Booking.findOne({ code, deleted: false }).populate("userId");
-                if (booking && (booking as any).userId?.phone === phone) {
-                    let updateData: any = {};
-                    if (booking.depositAmount > 0 && booking.paymentStatus === "unpaid") {
-                        // Tiền mặt có cọc: thu cọc trước
-                        updateData.paymentStatus = (booking.depositAmount || 0) >= (booking.total || 0) ? "paid" : "partially_paid";
-                        updateData.depositMethod = "vnpay";
-                        updateData.bookingStatus = "confirmed";
-                    } else if (booking.paymentStatus === "partially_paid") {
-                        updateData.paymentStatus = "paid";
-                    } else {
-                        // Online payment (depositAmount = 0): thu full tiền
-                        updateData.paymentStatus = "paid";
-                        updateData.bookingStatus = "confirmed";
+            if (vnp_Params['vnp_ResponseCode'] === '00') {
+                if (code.startsWith("BK")) {
+                    const booking = await Booking.findOne({ code, deleted: false }).populate("userId");
+                    if (booking && (booking as any).userId?.phone === phone) {
+                        let updateData: any = {};
+                        if (booking.depositAmount > 0 && booking.paymentStatus === "unpaid") {
+                            // Tiền mặt có cọc: thu cọc trước
+                            updateData.paymentStatus = (booking.depositAmount || 0) >= (booking.total || 0) ? "paid" : "partially_paid";
+                            updateData.depositMethod = "vnpay";
+                            updateData.bookingStatus = "confirmed";
+                        } else if (booking.paymentStatus === "partially_paid") {
+                            updateData.paymentStatus = "paid";
+                        } else {
+                            // Online payment (depositAmount = 0): thu full tiền
+                            updateData.paymentStatus = "paid";
+                            updateData.bookingStatus = "confirmed";
+                        }
+                        await Booking.updateOne({ _id: booking._id }, updateData);
                     }
-                    await Booking.updateOne({ _id: booking._id }, updateData);
-                }
-            } else {
-                await Order.findOneAndUpdate({
-                    phone: phone,
-                    code: code,
-                    deleted: false
-                }, {
-                    paymentStatus: 'paid'
-                });
-                await addPointAfterPayment(code);
-            }
-
-            const successPath = code.startsWith("BK") ? `/dashboard/bookings` : `/order/success?orderCode=${code}&phone=${phone}`;
-            res.redirect(`${process.env.DOMAIN_WEBSITE}${successPath}`);
-        } else {
-            // Nếu thanh toán thất bại hoặc người dùng hủy
-            if (code.startsWith("BK")) {
-                const booking = await Booking.findOne({
-                    code: code,
-                    deleted: false
-                }).populate("userId");
-
-                if (booking && (booking as any).userId?.phone === phone) {
-                    await Booking.updateOne({ _id: booking._id }, {
-                        paymentStatus: 'unpaid',
-                        bookingStatus: 'cancelled'
+                } else {
+                    await Order.findOneAndUpdate({
+                        phone: phone,
+                        code: code,
+                        deleted: false
+                    }, {
+                        paymentStatus: 'paid'
                     });
+                    await addPointAfterPayment(code);
                 }
+
+                const successPath = code.startsWith("BK") ? `/dashboard/bookings` : `/order/success?orderCode=${code}&phone=${phone}`;
+                res.redirect(`${process.env.DOMAIN_WEBSITE}${successPath}`);
             } else {
-                await Order.findOneAndUpdate({
-                    phone: phone,
-                    code: code,
-                    deleted: false
-                }, {
-                    paymentStatus: 'unpaid',
-                    orderStatus: 'cancelled'
-                });
-                await refundOrderResources(code);
+                // Nếu thanh toán thất bại hoặc người dùng hủy
+                if (code.startsWith("BK")) {
+                    const booking = await Booking.findOne({
+                        code: code,
+                        deleted: false
+                    }).populate("userId");
+
+                    if (booking && (booking as any).userId?.phone === phone) {
+                        await Booking.updateOne({ _id: booking._id }, {
+                            paymentStatus: 'unpaid',
+                            bookingStatus: 'cancelled'
+                        });
+                    }
+                } else {
+                    await Order.findOneAndUpdate({
+                        phone: phone,
+                        code: code,
+                        deleted: false
+                    }, {
+                        paymentStatus: 'unpaid',
+                        orderStatus: 'cancelled'
+                    });
+                    await refundOrderResources(code);
+                }
+                // Redirect back to shopping or order history if failed
+                const failPath = code.startsWith("BK") ? `/dashboard/bookings` : `/cart`;
+                res.redirect(`${process.env.DOMAIN_WEBSITE}${failPath}`);
             }
-            // Redirect back to shopping or order history if failed
-            const failPath = code.startsWith("BK") ? `/dashboard/bookings` : `/cart`;
-            res.redirect(`${process.env.DOMAIN_WEBSITE}${failPath}`);
+        } else {
+            res.render('success', { code: '97' })
         }
-    } else {
-        res.render('success', { code: '97' })
+    } catch (error) {
+        res.status(500).json({ code: 500, message: "Lỗi thanh toán VNPay" });
     }
 }
 
