@@ -7,8 +7,6 @@ const schema = new mongoose.Schema(
             type: mongoose.Schema.Types.ObjectId,
             ref: "AccountUser"
         },
-        customerName: String,
-        customerPhone: String,
         serviceId: {
             type: mongoose.Schema.Types.ObjectId,
             ref: "Service"
@@ -16,10 +14,6 @@ const schema = new mongoose.Schema(
         petIds: [{
             type: mongoose.Schema.Types.ObjectId,
             ref: "Pet"
-        }],
-        staffIds: [{
-            type: mongoose.Schema.Types.ObjectId,
-            ref: "AccountAdmin"
         }],
         petStaffMap: [{
             petId: { type: mongoose.Schema.Types.ObjectId, ref: "Pet" },

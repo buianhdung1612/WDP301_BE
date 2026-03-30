@@ -95,9 +95,10 @@ export const autoUpdateBookingStatuses = async () => {
             if (now > deadline) {
                 if (!b.isOverrun) {
                     // Tìm các đơn hàng sau của cùng nhân viên (nếu có) bị ảnh hưởng
+                    const staffIdsFromMap = (b.petStaffMap || []).map((m: any) => String(m.staffId?._id || m.staffId));
                     const affectedBookings = await Booking.find({
                         bookingStatus: { $in: ["pending", "confirmed"] },
-                        staffIds: { $in: b.staffIds },
+                        "petStaffMap.staffId": { $in: staffIdsFromMap },
                         start: { $lt: new Date(now.getTime() + 10 * 60000) }, // Dưới 10p tới là bị chồng lấn
                         _id: { $ne: b._id },
                         deleted: false
@@ -137,7 +138,7 @@ export const autoUpdateBookingStatuses = async () => {
                         (global as any).io.to('admin').emit('overrun-alert', {
                             bookingId: booking._id,
                             bookingCode: booking.code,
-                            staffIds: booking.staffIds,
+                            staffIds: staffIdsFromMap,
                             affectedCount: affectedBookings.length,
                             message: notificationContent
                         });

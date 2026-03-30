@@ -289,7 +289,8 @@ export const paymentZaloPay = async (req: Request, res: Response) => {
         target = await Order.findOne({ code: orderCode, phone, deleted: false });
         code = orderCode;
     } else if (bookingCode) {
-        target = await Booking.findOne({ code: bookingCode, customerPhone: phone, deleted: false });
+        target = await Booking.findOne({ code: bookingCode, deleted: false }).populate("userId");
+        if (target && (target as any).userId?.phone !== phone) target = null;
         code = bookingCode;
     }
 
@@ -353,8 +354,8 @@ export const paymentZalopayResult = async (req: Request, res: Response) => {
             let dataJson = JSON.parse(dataStr);
             const [phone, code] = dataJson.app_user.split("-");
             if (code.startsWith("BK")) {
-                const booking = await Booking.findOne({ code, customerPhone: phone, deleted: false });
-                if (booking) {
+                const booking = await Booking.findOne({ code, deleted: false }).populate("userId");
+                if (booking && (booking as any).userId?.phone === phone) {
                     let updateData: any = {};
                     if (booking.depositAmount > 0 && booking.paymentStatus === "unpaid") {
                         // Tiền mặt có cọc: thu cọc trước
@@ -393,7 +394,8 @@ export const paymentVNPay = async (req: Request, res: Response) => {
         target = await Order.findOne({ code: orderCode, phone, deleted: false });
         code = orderCode;
     } else if (bookingCode) {
-        target = await Booking.findOne({ code: bookingCode, customerPhone: phone, deleted: false });
+        target = await Booking.findOne({ code: bookingCode, deleted: false }).populate("userId");
+        if (target && (target as any).userId?.phone !== phone) target = null;
         code = bookingCode;
     }
     if (!target) return res.json({ success: false, message: "Không tìm thấy đơn hàng!" });
@@ -468,8 +470,8 @@ export const paymentVNPayResult = async (req: Request, res: Response) => {
 
         if (vnp_Params['vnp_ResponseCode'] === '00') {
             if (code.startsWith("BK")) {
-                const booking = await Booking.findOne({ code, customerPhone: phone, deleted: false });
-                if (booking) {
+                const booking = await Booking.findOne({ code, deleted: false }).populate("userId");
+                if (booking && (booking as any).userId?.phone === phone) {
                     let updateData: any = {};
                     if (booking.depositAmount > 0 && booking.paymentStatus === "unpaid") {
                         // Tiền mặt có cọc: thu cọc trước
@@ -501,14 +503,17 @@ export const paymentVNPayResult = async (req: Request, res: Response) => {
         } else {
             // Nếu thanh toán thất bại hoặc người dùng hủy
             if (code.startsWith("BK")) {
-                await Booking.findOneAndUpdate({
-                    customerPhone: phone,
+                const booking = await Booking.findOne({
                     code: code,
                     deleted: false
-                }, {
-                    paymentStatus: 'unpaid',
-                    bookingStatus: 'cancelled'
-                });
+                }).populate("userId");
+
+                if (booking && (booking as any).userId?.phone === phone) {
+                    await Booking.updateOne({ _id: booking._id }, {
+                        paymentStatus: 'unpaid',
+                        bookingStatus: 'cancelled'
+                    });
+                }
             } else {
                 await Order.findOneAndUpdate({
                     phone: phone,
