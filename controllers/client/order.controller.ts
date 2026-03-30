@@ -441,7 +441,7 @@ export const paymentVNPay = async (req: Request, res: Response) => {
     const hmac = crypto.createHmac("sha512", `${paymentSettings.vnpHashSecret}`);
     const signed = hmac.update(Buffer.from(signData, 'utf-8')).digest("hex");
     vnp_Params['vnp_SecureHash'] = signed;
-    const vnpUrl = `${paymentSettings.vnpUrl}?${querystring.stringify(vnp_Params, { encode: false })}`;
+    vnpUrl = `${paymentSettings.vnpUrl}?${querystring.stringify(vnp_Params, { encode: false })}`;
     res.redirect(vnpUrl);
 }
 
@@ -531,6 +531,10 @@ export const paymentVNPayResult = async (req: Request, res: Response) => {
         }
     } catch (error) {
         res.status(500).json({ code: 500, message: "Lỗi thanh toán VNPay" });
+    }
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ code: "error", message: "Lỗi hệ thống!" });
     }
 }
 
