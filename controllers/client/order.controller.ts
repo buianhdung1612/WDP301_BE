@@ -15,6 +15,19 @@ import { getApiPayment, getApiShipping, getPointConfig } from '../../configs/set
 import { addPointAfterPayment } from '../../helpers/point.helper';
 import { refundOrderResources } from '../../helpers/order.helper';
 
+function sortObject(obj: any) {
+    let sorted: any = {};
+    let str = Object.keys(obj).sort();
+    for (let i = 0; i < str.length; i++) {
+        const key = str[i];
+        const val = obj[key];
+        if (val !== undefined && val !== null && val !== "") {
+            sorted[key] = encodeURIComponent(val).replace(/%20/g, "+");
+        }
+    }
+    return sorted;
+}
+
 // [POST] /api/v1/client/order/create
 export const createPost = async (req: Request, res: Response) => {
     const dataFinal: any = {};
@@ -441,7 +454,7 @@ export const paymentVNPay = async (req: Request, res: Response) => {
     const hmac = crypto.createHmac("sha512", `${paymentSettings.vnpHashSecret}`);
     const signed = hmac.update(Buffer.from(signData, 'utf-8')).digest("hex");
     vnp_Params['vnp_SecureHash'] = signed;
-    vnpUrl = `${paymentSettings.vnpUrl}?${querystring.stringify(vnp_Params, { encode: false })}`;
+    const vnpUrl = `${paymentSettings.vnpUrl}?${querystring.stringify(vnp_Params, { encode: false })}`;
     res.redirect(vnpUrl);
 }
 
@@ -471,72 +484,40 @@ export const paymentVNPayResult = async (req: Request, res: Response) => {
                     if (booking && (booking as any).userId?.phone === phone) {
                         let updateData: any = {};
                         if (booking.depositAmount > 0 && booking.paymentStatus === "unpaid") {
-                            // Tiền mặt có cọc: thu cọc trước
                             updateData.paymentStatus = (booking.depositAmount || 0) >= (booking.total || 0) ? "paid" : "partially_paid";
                             updateData.depositMethod = "vnpay";
                             updateData.bookingStatus = "confirmed";
-                        } else if (booking.paymentStatus === "partially_paid") {
-                            updateData.paymentStatus = "paid";
                         } else {
-                            // Online payment (depositAmount = 0): thu full tiền
                             updateData.paymentStatus = "paid";
                             updateData.bookingStatus = "confirmed";
                         }
                         await Booking.updateOne({ _id: booking._id }, updateData);
                     }
                 } else {
-                    await Order.findOneAndUpdate({
-                        phone: phone,
-                        code: code,
-                        deleted: false
-                    }, {
-                        paymentStatus: 'paid'
-                    });
+                    await Order.findOneAndUpdate({ phone, code, deleted: false }, { paymentStatus: 'paid' });
                     await addPointAfterPayment(code);
                 }
-
-                const successPath = code.startsWith("BK") ? `/dashboard/bookings` : `/order/success?orderCode=${code}&phone=${phone}`;
-                res.redirect(`${process.env.DOMAIN_WEBSITE}${successPath}`);
+                res.redirect(`${process.env.DOMAIN_WEBSITE}${code.startsWith("BK") ? '/dashboard/bookings' : `/order/success?orderCode=${code}&phone=${phone}`}`);
             } else {
-                // Nếu thanh toán thất bại hoặc người dùng hủy
                 if (code.startsWith("BK")) {
-                    const booking = await Booking.findOne({
-                        code: code,
-                        deleted: false
-                    }).populate("userId");
-
+                    const booking = await Booking.findOne({ code, deleted: false }).populate("userId");
                     if (booking && (booking as any).userId?.phone === phone) {
-                        await Booking.updateOne({ _id: booking._id }, {
-                            paymentStatus: 'unpaid',
-                            bookingStatus: 'cancelled'
-                        });
+                        await Booking.updateOne({ _id: booking._id }, { paymentStatus: 'unpaid', bookingStatus: 'cancelled' });
                     }
                 } else {
-                    await Order.findOneAndUpdate({
-                        phone: phone,
-                        code: code,
-                        deleted: false
-                    }, {
-                        paymentStatus: 'unpaid',
-                        orderStatus: 'cancelled'
-                    });
+                    await Order.findOneAndUpdate({ phone, code, deleted: false }, { paymentStatus: 'unpaid', orderStatus: 'cancelled' });
                     await refundOrderResources(code);
                 }
-                // Redirect back to shopping or order history if failed
-                const failPath = code.startsWith("BK") ? `/dashboard/bookings` : `/cart`;
-                res.redirect(`${process.env.DOMAIN_WEBSITE}${failPath}`);
+                res.redirect(`${process.env.DOMAIN_WEBSITE}${code.startsWith("BK") ? '/dashboard/bookings' : '/cart'}`);
             }
         } else {
-            res.render('success', { code: '97' })
+            res.render('success', { code: '97' });
         }
     } catch (error) {
-        res.status(500).json({ code: 500, message: "Lỗi thanh toán VNPay" });
+        console.error("VNPAY RESULT ERROR:", error);
+        res.status(500).json({ code: "error", message: "Lỗi hệ thống khi xử lý thanh toán VNPay" });
     }
-    } catch (error) {
-        console.error(error);
-        res.status(500).json({ code: "error", message: "Lỗi hệ thống!" });
-    }
-}
+};
 
 export const exportPdf = async (req: Request, res: Response) => {
     try {
@@ -657,15 +638,3 @@ export const confirmReceipt = async (req: Request, res: Response) => {
     }
 };
 
-function sortObject(obj: any) {
-    let sorted: any = {};
-    let str = Object.keys(obj).sort();
-    for (let i = 0; i < str.length; i++) {
-        const key = str[i];
-        const val = obj[key];
-        if (val !== undefined && val !== null && val !== "") {
-            sorted[key] = encodeURIComponent(val).replace(/%20/g, "+");
-        }
-    }
-    return sorted;
-}
