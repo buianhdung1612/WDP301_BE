@@ -5,7 +5,9 @@ import { checkPermission } from "../../middlewares/admin/auth.middleware";
 const router = Router();
 
 router.get("/hotel-staffs", controller.listBoardingHotelStaffs);
+router.get("/busy-pets", controller.listBusyPetIdsForRange);
 router.get("/", controller.listBoardingBookings);
+router.get("/availability", controller.checkBoardingAvailability);
 router.post("/batch-create", checkPermission("boarding_booking_create"), controller.batchCreateBoardingBooking);
 router.post("/create", checkPermission("boarding_booking_create"), controller.createBoardingBooking);
 router.get("/:id", controller.getBoardingBookingDetail);
