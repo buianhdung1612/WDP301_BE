@@ -1,4 +1,4 @@
-﻿import { Request, Response } from "express";
+import { Request, Response } from "express";
 import mongoose from "mongoose";
 import dayjs from "dayjs";
 import BoardingBooking from "../../models/boarding-booking.model";
@@ -403,18 +403,44 @@ export const listBoardingHotelStaffs = async (_req: Request, res: Response) => {
             return res.json({ code: 200, data: [] });
         }
 
-        // 3. Tính toán "tải trọng" (workload) để sắp xếp người rảnh lên đầu
+        // 3. Tính toán "tải trọng" (workload) dựa trên số lượng thú cưng (item) đang được gán
+        const config = await BoardingConfig.findOne() || { maxCagesPerStaff: 10 };
+        const maxLimit = config.maxCagesPerStaff || 10;
+
         const staffWorkloads = await Promise.all(staffs.map(async (staff) => {
             const staffIdStr = String(staff._id);
-            const bookingCount = await BoardingBooking.countDocuments({
+
+            const activeBookings = await BoardingBooking.find({
                 deleted: false,
                 boardingStatus: { $in: ["confirmed", "checked-in"] },
                 $or: [
                     { "feedingSchedule.staffId": staffIdStr },
                     { "exerciseSchedule.staffId": staffIdStr }
                 ]
+            }).select("feedingSchedule exerciseSchedule").lean();
+
+            let itemWorkload = 0;
+            activeBookings.forEach(b => {
+                const petsForStaff = new Set<string>();
+                (b.feedingSchedule || []).forEach((f: any) => {
+                    if (String(f.staffId?._id || f.staffId) === staffIdStr && f.petId) {
+                        petsForStaff.add(String(f.petId?._id || f.petId));
+                    }
+                });
+                (b.exerciseSchedule || []).forEach((e: any) => {
+                    if (String(e.staffId?._id || e.staffId) === staffIdStr && e.petId) {
+                        petsForStaff.add(String(e.petId?._id || e.petId));
+                    }
+                });
+                itemWorkload += petsForStaff.size;
             });
-            return { ...staff, workload: bookingCount };
+
+            return {
+                ...staff,
+                workload: itemWorkload,
+                maxLimit,
+                isFull: itemWorkload >= maxLimit
+            };
         }));
 
         // Sắp xếp: workload thấp nhất lên đầu
@@ -467,6 +493,7 @@ export const batchCreateBoardingBooking = async (req: Request, res: Response) =>
 
         const totalDays = Math.ceil((checkOut.getTime() - checkIn.getTime()) / (1000 * 60 * 60 * 24));
         const createdBookings = [];
+        const sharedCode = generateBoardingCode();
 
         // Pre-fetch all pets and cages to validate and use later
         const petIds = items.map(i => i.petId);
@@ -474,6 +501,39 @@ export const batchCreateBoardingBooking = async (req: Request, res: Response) =>
 
         const pets = await Pet.find({ _id: { $in: petIds }, userId, deleted: false }).select("name type breed weight age avatar").lean();
         const cages = await BoardingCage.find({ _id: { $in: cageIds }, deleted: false }).lean();
+
+        // Check if any pet already has a booking in this period
+        const overlappingBookings = await BoardingBooking.find({
+            deleted: false,
+            boardingStatus: { $nin: ["cancelled"] },
+            $or: [
+                { petIds: { $in: petIds } },
+                { petId: { $in: petIds } }
+            ],
+            checkInDate: { $lt: checkOut },
+            checkOutDate: { $gt: checkIn }
+        }).select("petIds petId code").lean();
+
+        if (overlappingBookings.length > 0) {
+            const allBusyPetIds = new Set([
+                ...overlappingBookings.flatMap(b => (b.petIds || []).map(id => String(id))),
+                ...overlappingBookings.map(b => (b as any).petId ? String((b as any).petId) : "").filter(Boolean)
+            ]);
+            const foundPet = pets.find(p => allBusyPetIds.has(String(p._id)));
+            const bookingRef = overlappingBookings[0].code ? ` (Đơn #${overlappingBookings[0].code})` : "";
+            return res.status(400).json({
+                code: 400,
+                message: `Thú cưng ${foundPet?.name || "của bạn"} đã có lịch đặt khách sạn trong thời gian này${bookingRef}. Vui lòng kiểm tra lại.`
+            });
+        }
+
+        const allOrderItems: any[] = [];
+        const allFeeding: any[] = [];
+        const allExercise: any[] = [];
+        const batchWorkload: Record<string, number> = {};
+        let totalSubTotal = 0;
+        let totalDiscount = 0;
+        let totalOrderTotal = 0;
 
         for (const item of items) {
             const pet = pets.find(p => String(p._id) === String(item.petId));
@@ -493,8 +553,17 @@ export const batchCreateBoardingBooking = async (req: Request, res: Response) =>
                 boardingStatus: { $in: ["held", "confirmed", "checked-in"] },
                 checkInDate: { $lt: checkOut },
                 checkOutDate: { $gt: checkIn }
-            }).select("quantity petIds").lean();
-            const bookedRooms = overlapBookings.reduce((sum, b) => sum + getBookingQuantity(b), 0);
+            }).select("quantity petIds items").lean();
+
+            const bookedRooms = overlapBookings.reduce((sum, b) => {
+                // If the booking has items, we should count relevant cage usage
+                if (Array.isArray(b.items) && b.items.length > 0) {
+                    const cageItems = b.items.filter((ci: any) => String(ci.cageId) === String(item.cageId));
+                    return sum + cageItems.reduce((s: number, ci: any) => s + (Array.isArray(ci.petIds) ? ci.petIds.length : 1), 0);
+                }
+                return sum + getBookingQuantity(b);
+            }, 0);
+
             if (bookedRooms >= MAX_ROOMS_PER_CAGE) {
                 return res.status(400).json({ code: 400, message: `Chuồng ${cage.cageCode} đã hết chỗ trong khoảng thời gian này` });
             }
@@ -504,7 +573,16 @@ export const batchCreateBoardingBooking = async (req: Request, res: Response) =>
             const finalDiscount = Math.max(Number(item.discount || 0), 0);
             const total = Math.max(subTotal - finalDiscount, 0);
 
-            const defaultStaff = await getFreestBoardingStaffForDate(checkIn);
+            totalSubTotal += subTotal;
+            totalDiscount += finalDiscount;
+            totalOrderTotal += total;
+
+            const defaultStaff = await getFreestBoardingStaffForDate(checkIn, batchWorkload);
+            if (!defaultStaff) {
+                (item as any).noStaffWarning = true;
+            } else {
+                batchWorkload[defaultStaff.staffId] = (batchWorkload[defaultStaff.staffId] || 0) + 1;
+            }
             const defaultCareSchedule = buildDefaultBoardingCareSchedule(
                 [pet as any],
                 defaultStaff,
@@ -513,47 +591,70 @@ export const batchCreateBoardingBooking = async (req: Request, res: Response) =>
                 { careDate: checkIn, checkInDate: checkIn }
             );
 
-            const depositAmount = getDepositAmount(total, paymentMethod, totalDays, config);
-            const depositPercent = depositAmount > 0 ? (config.depositPercentage || 20) : 0;
-            const paidAmount = getPaidAmountByStatus({ total, depositAmount }, paymentStatus);
-
-            const booking = await BoardingBooking.create({
-                code: generateBoardingCode(),
-                userId,
-                petIds: [item.petId],
+            allOrderItems.push({
                 cageId: item.cageId,
-                checkInDate: checkIn,
-                checkOutDate: checkOut,
-                numberOfDays: totalDays,
-                fullName: String(fullName || user.fullName || "").trim(),
-                phone: String(phone || user.phone || "").trim(),
-                email: String(email || user.email || "").trim(),
+                petIds: [item.petId],
                 pricePerDay,
                 subTotal,
                 discount: finalDiscount,
                 total,
-                depositPercent,
-                depositAmount,
-                paidAmount,
-                paymentMethod,
-                paymentStatus,
                 notes: String(item.notes || "").trim(),
-                specialCare: String(item.specialCare || "").trim(),
-                feedingSchedule: defaultCareSchedule.feedingSchedule,
-                exerciseSchedule: defaultCareSchedule.exerciseSchedule,
-                boardingStatus: boardingStatus,
-                holdExpiresAt: boardingStatus === "held" ? new Date(Date.now() + DEFAULT_HOLD_MINUTES * 60 * 1000) : null,
-                actualCheckInDate: boardingStatus === "checked-in" ? new Date() : null,
-                actualCheckOutDate: boardingStatus === "checked-out" ? new Date() : null,
-                search: ""
+                specialCare: String(item.specialCare || "").trim()
             });
 
-            booking.search = convertToSlug(`${booking.code} ${booking.fullName || ""} ${booking.phone || ""}`).replace(/-/g, " ");
-            await booking.save();
-            createdBookings.push(booking);
+            allFeeding.push(...defaultCareSchedule.feedingSchedule);
+            allExercise.push(...defaultCareSchedule.exerciseSchedule);
         }
 
-        return res.json({ code: 200, message: `Đã tạo thành công ${createdBookings.length} đơn đặt`, data: createdBookings });
+        const depositAmount = getDepositAmount(totalOrderTotal, paymentMethod, totalDays, config);
+        const depositPercent = depositAmount > 0 ? (config.depositPercentage || 20) : 0;
+        const paidAmount = getPaidAmountByStatus({ total: totalOrderTotal, depositAmount }, paymentStatus);
+
+        const booking = await BoardingBooking.create({
+            code: sharedCode,
+            userId,
+            petIds: Array.from(new Set(items.map(i => i.petId))),
+            cageId: items[0].cageId, // Representative cage for listing/backward-compat
+            items: allOrderItems,
+            checkInDate: checkIn,
+            checkOutDate: checkOut,
+            numberOfDays: totalDays,
+            fullName: String(fullName || user.fullName || "").trim(),
+            phone: String(phone || user.phone || "").trim(),
+            email: String(email || user.email || "").trim(),
+            pricePerDay: allOrderItems[0].pricePerDay,
+            subTotal: totalSubTotal,
+            discount: totalDiscount,
+            total: totalOrderTotal,
+            depositPercent,
+            depositAmount,
+            paidAmount,
+            paymentMethod,
+            paymentStatus,
+            notes: "",
+            specialCare: "",
+            feedingSchedule: allFeeding,
+            exerciseSchedule: allExercise,
+            boardingStatus: boardingStatus,
+            holdExpiresAt: boardingStatus === "held" ? new Date(Date.now() + DEFAULT_HOLD_MINUTES * 60 * 1000) : null,
+            actualCheckInDate: boardingStatus === "checked-in" ? new Date() : null,
+            actualCheckOutDate: boardingStatus === "checked-out" ? new Date() : null,
+            search: ""
+        });
+
+        booking.search = convertToSlug(`${booking.code} ${booking.fullName || ""} ${booking.phone || ""}`).replace(/-/g, " ");
+        await booking.save();
+        createdBookings.push(booking);
+
+        const hasStaffWarning = items.some(i => (i as any).noStaffWarning);
+        const warningSuffix = hasStaffWarning ? ". LƯU Ý: Đã hết nhân viên rảnh, một số đơn chưa được gán người phụ trách!" : "";
+
+        return res.json({
+            code: 200,
+            message: `Đã tạo thành công ${createdBookings.length} đơn đặt${warningSuffix}`,
+            data: createdBookings,
+            warning: hasStaffWarning ? "staff_limit_exceeded" : null
+        });
     } catch (error: any) {
         return res.status(500).json({ code: 500, message: error.message || "Lỗi hệ thống" });
     }
@@ -609,6 +710,23 @@ export const createBoardingBooking = async (req: Request, res: Response) => {
             return res.status(400).json({ code: 400, message: "Thu cung khong thuoc khach hang da chon" });
         }
 
+        // Check if pet already has a booking in this period
+        const busyPet = await BoardingBooking.findOne({
+            deleted: false,
+            boardingStatus: { $nin: ["cancelled"] },
+            petIds: petId,
+            checkInDate: { $lt: checkOut },
+            checkOutDate: { $gt: checkIn }
+        }).select("code").lean();
+
+        if (busyPet) {
+            const bookingRef = busyPet.code ? ` (Đơn #${busyPet.code})` : "";
+            return res.status(400).json({
+                code: 400,
+                message: `Thú cưng ${pet?.name || "của bạn"} đã có lịch đặt khách sạn trong thời gian này${bookingRef}. Vui lòng kiểm tra lại.`
+            });
+        }
+
         const lockedCage = await acquireCageBookingLock(String(cageId));
         if (!lockedCage) {
             return res.status(409).json({
@@ -649,6 +767,9 @@ export const createBoardingBooking = async (req: Request, res: Response) => {
         const total = Math.max(subTotal - finalDiscount, 0);
 
         const defaultStaff = await getFreestBoardingStaffForDate(checkIn);
+        let staffWarning = false;
+        if (!defaultStaff) staffWarning = true;
+
         const defaultCareSchedule = buildDefaultBoardingCareSchedule(
             [pet as any],
             defaultStaff,
@@ -726,10 +847,12 @@ export const createBoardingBooking = async (req: Request, res: Response) => {
             .populate("petIds", "name type breed avatar weight age")
             .populate("cageId", "cageCode type size dailyPrice status");
 
+        const warningSuffix = staffWarning ? ". LƯU Ý: Hiện không có nhân viên rảnh, đơn chưa được gán người phụ trách!" : "";
         return res.json({
             code: 200,
-            message: "Tao don khach san thanh cong",
-            data: created || booking
+            message: `Tạo đơn khách sạn thành công${warningSuffix}`,
+            data: created || booking,
+            warning: staffWarning ? "staff_limit_exceeded" : null
         });
     } catch (error: any) {
         return res.status(500).json({ code: 500, message: error.message || "Loi he thong" });
@@ -797,6 +920,8 @@ export const listBoardingBookings = async (req: Request, res: Response) => {
                 .populate("userId", "fullName phone email avatar")
                 .populate("petIds", "name type breed avatar weight age")
                 .populate("cageId", "cageCode type size dailyPrice status")
+                .populate("items.cageId", "cageCode type size dailyPrice status")
+                .populate("items.petIds", "name type breed avatar weight age")
                 .populate("feedingSchedule.staffId", "fullName phone employeeCode")
                 .populate("exerciseSchedule.staffId", "fullName phone employeeCode")
                 .sort({ createdAt: -1 })
@@ -859,6 +984,69 @@ export const listBoardingBookings = async (req: Request, res: Response) => {
     }
 };
 
+// [GET] /api/v1/admin/boarding-booking/busy-pets
+export const listBusyPetIdsForRange = async (req: Request, res: Response) => {
+    try {
+        const userId = pickParam(req.query.userId);
+        const checkInDate = pickParam(req.query.checkInDate);
+        const checkOutDate = pickParam(req.query.checkOutDate);
+
+        if (!userId || !checkInDate || !checkOutDate) {
+            return res.json({ code: 200, data: [] });
+        }
+
+        const start = dayjs(checkInDate).startOf("day").toDate();
+        const end = dayjs(checkOutDate).startOf("day").toDate();
+
+        const busyBookings = await BoardingBooking.find({
+            deleted: false,
+            boardingStatus: { $nin: ["cancelled"] },
+            checkInDate: { $lt: end },
+            checkOutDate: { $gt: start }
+        }).select("petIds cageId items quantity").lean();
+
+        // Occupancy calculation
+        const allBusyPetIds = new Set([
+            ...busyBookings.flatMap(b => (b.petIds || []).map(id => String(id))),
+            ...busyBookings.map(b => (b as any).petId ? String((b as any).petId) : "").filter(Boolean)
+        ]);
+
+        const busyPetIds = Array.from(allBusyPetIds).filter(id => {
+            const b = busyBookings.find(bk => (bk.petIds || []).map(pid => String(pid)).includes(String(id)) || String((bk as any).petId) === String(id));
+            return b && String(b.userId || "") === String(userId);
+        });
+
+        // Busy Cage Ids (regardless of user, for all cages in the hotel)
+        const cageOccupancy: Record<string, number> = {};
+        busyBookings.forEach(b => {
+            if (Array.isArray(b.items) && b.items.length > 0) {
+                b.items.forEach((ci: any) => {
+                    const cid = String(ci.cageId?._id || ci.cageId);
+                    cageOccupancy[cid] = (cageOccupancy[cid] || 0) + (Array.isArray(ci.petIds) ? ci.petIds.length : 1);
+                });
+            } else if (b.cageId) {
+                const cid = String(b.cageId?._id || b.cageId);
+                const qty = Math.max(1, (b.quantity || 1), (b.petIds?.length || 0));
+                cageOccupancy[cid] = (cageOccupancy[cid] || 0) + qty;
+            }
+        });
+
+        const busyCageIds = Object.entries(cageOccupancy)
+            .filter(([_, count]) => count >= MAX_ROOMS_PER_CAGE)
+            .map(([cid]) => cid);
+
+        return res.json({
+            code: 200,
+            data: {
+                busyPetIds,
+                busyCageIds
+            }
+        });
+    } catch (error: any) {
+        return res.status(500).json({ code: 500, message: error.message || "Loi he thong" });
+    }
+};
+
 // [GET] /api/v1/admin/boarding-booking/:id
 export const getBoardingBookingDetail = async (req: Request, res: Response) => {
     try {
@@ -874,6 +1062,8 @@ export const getBoardingBookingDetail = async (req: Request, res: Response) => {
             .populate("userId", "fullName phone email avatar")
             .populate("petIds", "name type breed avatar weight age")
             .populate("cageId", "cageCode type size dailyPrice status description avatar amenities")
+            .populate("items.cageId", "cageCode type size dailyPrice status description avatar amenities")
+            .populate("items.petIds", "name type breed avatar weight age")
             .populate("feedingSchedule.staffId", "fullName phone employeeCode")
             .populate("exerciseSchedule.staffId", "fullName phone employeeCode")
             .lean();
@@ -920,11 +1110,24 @@ export const updateBoardingBookingStatus = async (req: Request, res: Response) =
             });
         }
 
+        const updateAllCageStatus = async (status: string) => {
+            const cageIds = new Set<string>();
+            if (booking.cageId) cageIds.add(String(booking.cageId));
+            if (Array.isArray(booking.items)) {
+                booking.items.forEach((item: any) => {
+                    if (item.cageId) cageIds.add(String(item.cageId?._id || item.cageId));
+                });
+            }
+            if (cageIds.size > 0) {
+                await BoardingCage.updateMany({ _id: { $in: Array.from(cageIds) } }, { status });
+            }
+        };
+
         booking.boardingStatus = boardingStatus;
 
         if (boardingStatus === "checked-in") {
             booking.actualCheckInDate = new Date();
-            await BoardingCage.findByIdAndUpdate(booking.cageId, { status: "occupied" });
+            await updateAllCageStatus("occupied");
         } else if (boardingStatus === "checked-out") {
             const actualOut = new Date();
             booking.actualCheckOutDate = actualOut;
@@ -970,7 +1173,7 @@ export const updateBoardingBookingStatus = async (req: Request, res: Response) =
             }
             // Luôn cập nhật lại total để tránh sai sót
             booking.total = Math.max(0, (booking.subTotal || 0) - (booking.discount || 0) + (booking.surcharge || 0));
-            await BoardingCage.findByIdAndUpdate(booking.cageId, { status: "under-cleaning" });
+            await updateAllCageStatus("under-cleaning");
         } else {
             // Nếu đổi sang trạng thái khác (Confirmed, Pending...) thì reset thông tin checkout/phụ phí
             if (boardingStatus !== "cancelled") {
@@ -984,10 +1187,9 @@ export const updateBoardingBookingStatus = async (req: Request, res: Response) =
                 booking.cancelledAt = new Date();
                 booking.cancelledBy = "admin";
                 booking.cancelledReason = booking.cancelledReason || "Admin cap nhat";
-                await BoardingCage.findByIdAndUpdate(booking.cageId, { status: "available" });
-            } else if (boardingStatus !== "checked-in") {
-                // Ví dụ từ checked-in quay lại confirmed
-                await BoardingCage.findByIdAndUpdate(booking.cageId, { status: "available" });
+                await updateAllCageStatus("available");
+            } else if (["held", "confirmed", "pending"].includes(boardingStatus)) {
+                await updateAllCageStatus("occupied");
             }
         }
 
@@ -1052,11 +1254,41 @@ export const updateBoardingBookingDetail = async (req: Request, res: Response) =
         }
 
         // Nếu chuồng thay đổi, giải phóng chuồng cũ và chuyển sang chuồng mới
-        if (data.cageId && data.cageId !== booking.cageId?.toString()) {
-            if (booking.cageId) {
-                await BoardingCage.findByIdAndUpdate(booking.cageId, { status: "empty" });
+        if (booking.boardingStatus === "checked-in") {
+            const oldCageIds = new Set<string>();
+            const newCageIds = new Set<string>();
+
+            if (booking.cageId) oldCageIds.add(booking.cageId.toString());
+            if (Array.isArray(booking.items)) {
+                booking.items.forEach((item: any) => {
+                    if (item.cageId) oldCageIds.add(item.cageId.toString());
+                });
             }
-            await BoardingCage.findByIdAndUpdate(data.cageId, { status: "occupied" });
+
+            if (data.cageId) newCageIds.add(data.cageId.toString());
+            if (Array.isArray(data.items)) {
+                data.items.forEach((item: any) => {
+                    if (item.cageId) newCageIds.add(item.cageId.toString());
+                });
+            }
+
+            const toEmpty = Array.from(oldCageIds).filter(id => !newCageIds.has(id));
+            const toOccupied = Array.from(newCageIds).filter(id => !oldCageIds.has(id));
+
+            if (toEmpty.length > 0) {
+                await BoardingCage.updateMany({ _id: { $in: toEmpty } }, { status: "empty" });
+            }
+            if (toOccupied.length > 0) {
+                await BoardingCage.updateMany({ _id: { $in: toOccupied } }, { status: "occupied" });
+            }
+        } else {
+            // Cập nhật lại logic cũ để an toàn cho trường hợp khác
+            if (data.cageId && data.cageId !== booking.cageId?.toString()) {
+                if (booking.cageId) {
+                    await BoardingCage.findByIdAndUpdate(booking.cageId, { status: "empty" });
+                }
+                await BoardingCage.findByIdAndUpdate(data.cageId, { status: "occupied" });
+            }
         }
 
         // Tính lại số ngày nếu ngày nhận/trả thay đổi
@@ -1064,6 +1296,30 @@ export const updateBoardingBookingDetail = async (req: Request, res: Response) =
             const checkIn = dayjs(data.checkInDate || booking.checkInDate);
             const checkOut = dayjs(data.checkOutDate || booking.checkOutDate);
             data.numberOfDays = checkOut.diff(checkIn, 'day') + 1;
+        }
+
+        // Check occupancy for pets (excluding current booking)
+        const petIdsToCheck = data.petIds || booking.petIds;
+        if (petIdsToCheck) {
+            const targetIn = dayjs(data.checkInDate || booking.checkInDate).toDate();
+            const targetOut = dayjs(data.checkOutDate || booking.checkOutDate).toDate();
+
+            const busyPet = await BoardingBooking.findOne({
+                _id: { $ne: booking._id },
+                deleted: false,
+                boardingStatus: { $nin: ["cancelled"] },
+                petIds: { $in: Array.isArray(petIdsToCheck) ? petIdsToCheck : [petIdsToCheck] },
+                checkInDate: { $lt: targetOut },
+                checkOutDate: { $gt: targetIn }
+            }).select("code").lean();
+
+            if (busyPet) {
+                const bookingRef = busyPet.code ? ` (Đơn #${busyPet.code})` : "";
+                return res.status(400).json({
+                    code: 400,
+                    message: `Thú cưng đã có lịch đặt khách sạn trong thời gian này${bookingRef}.`
+                });
+            }
         }
 
         // Cập nhật các trường thông tin
@@ -1344,5 +1600,84 @@ export const updateBoardingCareSchedule = async (req: Request, res: Response) =>
         });
     } catch (error: any) {
         return res.status(500).json({ code: 500, message: error.message || "Loi he thong" });
+    }
+};
+
+// [GET] /api/v1/admin/boarding-booking/availability
+export const checkBoardingAvailability = async (req: Request, res: Response) => {
+    try {
+        const { checkInDate, checkOutDate } = req.query;
+        if (!checkInDate || !checkOutDate) {
+            return res.status(400).json({ code: 400, message: "Thiếu ngày check-in hoặc check-out" });
+        }
+
+        // Use dayjs to match client-side date parsing for consistency
+        const start = dayjs(checkInDate as string).hour(9).minute(0).second(0).millisecond(0).toDate();
+        const end = dayjs(checkOutDate as string).hour(9).minute(0).second(0).millisecond(0).toDate();
+
+        // Get all active bookings in this period to calculate occupancy
+        // Including "pending" and "held" to match client-side availability logic
+        const overlappingBookings = await BoardingBooking.find({
+            deleted: false,
+            boardingStatus: { $in: ["pending", "held", "confirmed", "checked-in"] },
+            checkInDate: { $lt: end },
+            checkOutDate: { $gt: start }
+        }).select("cageId quantity items petIds petId").lean();
+
+        // Calculate occupancy map: cageId -> roomsUsed
+        const occupancyMap: Record<string, number> = {};
+        overlappingBookings.forEach(b => {
+            if (Array.isArray((b as any).items) && (b as any).items.length > 0) {
+                (b as any).items.forEach((item: any) => {
+                    const cid = String(item.cageId?._id || item.cageId);
+                    const itemQty = Array.isArray(item.petIds) ? item.petIds.length : (item.petId ? 1 : 1);
+                    occupancyMap[cid] = (occupancyMap[cid] || 0) + itemQty;
+                });
+            } else {
+                const cageIdStr = String(b.cageId?._id || b.cageId);
+                let qty = Number(b.quantity || 0);
+                if (qty <= 0) {
+                    if (Array.isArray(b.petIds) && b.petIds.length > 0) qty = b.petIds.length;
+                    else if ((b as any).petId) qty = 1;
+                    else qty = 1;
+                }
+                occupancyMap[cageIdStr] = (occupancyMap[cageIdStr] || 0) + qty;
+            }
+        });
+
+        // Get all cages to know their totalRooms
+        const allCages = await BoardingCage.find({ deleted: false }).select("_id totalRooms").lean();
+
+        const cageAvailability: Record<string, number> = {};
+        const busyCageIds: string[] = [];
+
+        allCages.forEach(cage => {
+            const cageIdStr = String(cage._id);
+            const total = Number((cage as any).totalRooms || 4);
+            const used = occupancyMap[cageIdStr] || 0;
+            const remaining = Math.max(0, total - used);
+
+            cageAvailability[cageIdStr] = remaining;
+            if (remaining <= 0) {
+                busyCageIds.push(cageIdStr);
+            }
+        });
+
+        // Calculate busy pets
+        const busyPetIds = Array.from(new Set([
+            ...overlappingBookings.flatMap(b => (b.petIds || []).map(id => String(id))),
+            ...overlappingBookings.map(b => (b as any).petId ? String((b as any).petId) : "").filter(Boolean)
+        ]));
+
+        return res.json({
+            code: 200,
+            data: {
+                busyCageIds,
+                busyPetIds,
+                cageAvailability
+            }
+        });
+    } catch (error: any) {
+        return res.status(500).json({ code: 500, message: error.message || "Lỗi hệ thống" });
     }
 };
