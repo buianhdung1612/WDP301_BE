@@ -15,7 +15,7 @@ const schema = new mongoose.Schema(
         },
         breed: String, // Giống (Poodle, Corgi, Mèo Anh, etc.)
         weight: Number, // Cân nặng (kg) - quan trọng cho tính giá
-        age: Number, // Tuổi
+        age: Number, // Tuổi (số tháng)
         color: String, // Màu lông
         avatar: String, // Ảnh thú cưng
         gender: {

@@ -6,7 +6,7 @@ export const refundOrderResources = async (orderCode: string) => {
     const order = await Order.findOne({ code: orderCode });
     if (!order) return;
 
-    // 1. Hoàn lại điểm (usedPoint)
+    // 1. Hoàn lại số điểm khách đã bỏ ra để được giảm giá (usedPoint)
     if (order.userId && order.usedPoint > 0) {
         await AccountUser.updateOne(
             { _id: order.userId },
@@ -15,6 +15,18 @@ export const refundOrderResources = async (orderCode: string) => {
         // Đánh dấu đã hoàn điểm trong đơn hàng để tránh hoàn 2 lần
         await Order.updateOne({ _id: order._id }, { usedPoint: 0 });
     }
+
+    // 1b. Khấu trừ (thu hồi) lại điểm tích lũy đã tặng - Phòng trường hợp trả hàng sau khi đã nhận
+    if (order.userId && order.earnedPoint > 0) {
+        await AccountUser.updateOne(
+            { _id: order.userId },
+            { $inc: { totalPoint: -order.earnedPoint } }
+        );
+        // Đánh dấu đã khấu trừ để tránh làm 2 lần
+        await Order.updateOne({ _id: order._id }, { earnedPoint: 0 });
+    }
+
+
 
     // 2. Hoàn lại tồn kho (Stock)
     if (order.items && order.items.length > 0) {

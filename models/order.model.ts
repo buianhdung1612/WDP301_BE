@@ -87,8 +87,14 @@ const schema = new mongoose.Schema(
             default: 0 // số điểm tích được từ đơn này
         },
         cancelledReason: String,
+        confirmedAt: Date,
+        shippingAt: Date,
+        shippedAt: Date,
+        completedAt: Date,
+        returnedAt: Date,
         cancelledAt: Date,
         cancelledBy: String,
+
         deletedBy: String,
         deletedAt: Date
     },

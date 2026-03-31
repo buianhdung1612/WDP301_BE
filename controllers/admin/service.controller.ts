@@ -375,13 +375,12 @@ export const serviceDetail = async (req: Request, res: Response) => {
     }
 };
 
-// [POST] /api/v1/admin/services/create
 export const serviceCreate = async (req: Request, res: Response) => {
     try {
         const {
             categoryId, departmentId, name, description, duration, petTypes,
             pricingType, basePrice, priceList, images,
-            minDuration, maxExtensionMinutes, procedure
+            minDuration, maxExtensionMinutes, procedure, minAgeMonths
         } = req.body;
 
         const category = await ServiceCategory.findById(categoryId);
@@ -417,6 +416,7 @@ export const serviceCreate = async (req: Request, res: Response) => {
             minDuration,
             maxExtensionMinutes,
             procedure,
+            minAgeMonths: minAgeMonths || 0,
             status: "active"
         });
 
@@ -460,13 +460,13 @@ export const serviceEdit = async (req: Request, res: Response) => {
         const {
             name, slug, categoryId, departmentId, description, duration,
             petTypes, pricingType, basePrice, priceList, status, images,
-            minDuration, maxExtensionMinutes, procedure
+            minDuration, maxExtensionMinutes, procedure, minAgeMonths
         } = req.body;
 
         const updateData: any = {
             name, slug, categoryId, departmentId, description, duration,
             petTypes, pricingType, basePrice, priceList, status, images,
-            minDuration, maxExtensionMinutes, procedure
+            minDuration, maxExtensionMinutes, procedure, minAgeMonths
         };
 
         Object.keys(updateData).forEach(key => {

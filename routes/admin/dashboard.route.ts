@@ -9,4 +9,10 @@ router.get('/system-stats', controller.getSystemStats);
 router.get('/staffing-status', controller.getStaffingStatus);
 router.get('/boarding-stats', controller.getBoardingStats);
 
+// New Detailed Stats
+router.get('/detailed-service-stats', controller.getServiceStats);
+router.get('/detailed-order-stats', controller.getOrderStats);
+router.get('/detailed-boarding-stats', controller.getDetailedBoardingStats);
+router.get('/detailed-staff-stats', controller.getStaffStats);
+
 export default router;

@@ -100,13 +100,40 @@ export const detail = async (req: Request, res: Response) => {
     }
 };
 
+/**
+ * Kiểm tra tính hợp lệ của việc chuyển đổi trạng thái đơn hàng (State Machine)
+ */
+const validateTransition = (current: string, next: string): { isValid: boolean; message?: string } => {
+    if (current === next) return { isValid: true };
+
+    // Trạng thái cuối: Không được chuyển đi bất cứ đâu
+    if (["completed", "cancelled", "returned"].includes(current)) {
+        return { isValid: false, message: `Đơn hàng đã ở trạng thái kết thúc (${current}), không thể thay đổi!` };
+    }
+
+    const transitions: Record<string, string[]> = {
+        pending: ["confirmed", "cancelled"],
+        confirmed: ["shipping", "cancelled"],
+        shipping: ["shipped"], // Đang ship thì không được cancel ngang xương
+        shipped: ["completed", "returned"], // Đã giao thì chỉ có Thẩm định nhận hàng hoặc Trả hàng
+        request_cancel: ["cancelled", "confirmed"]
+    };
+
+    const allowed = transitions[current] || [];
+    if (!allowed.includes(next)) {
+        return { isValid: false, message: `Không thể chuyển trạng thái từ "${current}" sang "${next}"!` };
+    }
+
+    return { isValid: true };
+};
+
 // [PATCH] /api/v1/admin/orders/:id/status
 export const updateStatus = async (req: Request, res: Response) => {
     try {
         const { status } = req.body;
         const id = req.params.id;
 
-        // Kiểm tra đơn hàng tồn tại
+        // Tìm đơn hàng theo ID
         const order = await Order.findOne({
             _id: id,
             deleted: false
@@ -116,22 +143,30 @@ export const updateStatus = async (req: Request, res: Response) => {
             return res.status(404).json({ code: 404, message: "Không tìm thấy đơn hàng" });
         }
 
-        // 1. Không cho thay đổi đơn đã hoàn thành hoặc đã hủy
-        if (["completed", "cancelled"].includes(order.orderStatus) && status !== order.orderStatus) {
-            return res.status(400).json({
-                code: 400,
-                message: "Không thể thay đổi trạng thái đơn hàng đã hoàn thành hoặc đã hủy!"
-            });
+        // Kiểm tra State Machine xem việc chuyển trạng thái có hợp lệ không
+        const transition = validateTransition(order.orderStatus as string, status);
+        if (!transition.isValid) {
+            return res.status(400).json({ code: 400, message: transition.message });
         }
 
+        // Nếu hoàn thành đơn hàng thì tích điểm thưởng cho khách
         if (status === "completed" && order.orderStatus !== "completed" && order.code) {
             await addPointAfterPayment(order.code);
         }
 
-        // Hoàn lại tài nguyên nếu hủy đơn
-        if (status === "cancelled" && order.orderStatus !== "cancelled" && order.code) {
+        // Hoàn lại tài nguyên (kho/điểm) cho trạng thái Hủy hoặc Trả hàng
+        if (["cancelled", "returned"].includes(status) && !["cancelled", "returned"].includes(order.orderStatus as string) && order.code) {
             await refundOrderResources(order.code);
         }
+
+        // Cập nhật mốc thời gian tương ứng với trạng thái mới
+        const now = new Date();
+        if (status === "confirmed") (order as any).confirmedAt = now;
+        if (status === "shipping") (order as any).shippingAt = now;
+        if (status === "shipped") (order as any).shippedAt = now;
+        if (status === "completed") (order as any).completedAt = now;
+        if (status === "returned") (order as any).returnedAt = now;
+        if (status === "cancelled") (order as any).cancelledAt = now;
 
         order.orderStatus = status;
         await order.save();
@@ -197,12 +232,32 @@ export const editPatch = async (req: Request, res: Response) => {
             await addPointAfterPayment(order.code);
         }
 
-        // Hoàn lại tài nguyên nếu hủy đơn
-        if (orderStatus === "cancelled" && order.orderStatus !== "cancelled" && order.code) {
+        // Hoàn lại tài nguyên cho trạng thái Hủy hoặc Trả hàng
+        if (orderStatus && ["cancelled", "returned"].includes(orderStatus) && !["cancelled", "returned"].includes(order.orderStatus as string) && order.code) {
             await refundOrderResources(order.code);
         }
 
-        if (orderStatus) order.orderStatus = orderStatus;
+        if (orderStatus) {
+            // Kiểm tra State Machine cho edit
+            const transition = validateTransition(order.orderStatus as string, orderStatus);
+            if (!transition.isValid) {
+                return res.status(400).json({ code: 400, message: transition.message });
+            }
+
+            // Cập nhật mốc thời gian nếu trạng thái thay đổi
+            if (orderStatus !== order.orderStatus) {
+                const now = new Date();
+                if (orderStatus === "confirmed") (order as any).confirmedAt = now;
+                if (orderStatus === "shipping") (order as any).shippingAt = now;
+                if (orderStatus === "shipped") (order as any).shippedAt = now;
+                if (orderStatus === "completed") (order as any).completedAt = now;
+                if (orderStatus === "returned") (order as any).returnedAt = now;
+                if (orderStatus === "cancelled") (order as any).cancelledAt = now;
+            }
+
+            order.orderStatus = orderStatus;
+        }
+
         if (paymentStatus) order.paymentStatus = paymentStatus;
 
         // Tự động hủy đơn nếu đã hoàn tiền (refunded) và chưa bị hủy trước đó

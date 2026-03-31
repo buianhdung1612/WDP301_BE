@@ -1,98 +1,50 @@
 import { Request, Response } from 'express';
-import Product from '../../models/product.model';
 import Order from '../../models/order.model';
 import Booking from '../../models/booking.model';
 import BoardingBooking from '../../models/boarding-booking.model';
+import Product from '../../models/product.model';
+import AccountAdmin from '../../models/account-admin.model';
 import AccountUser from '../../models/account-user.model';
-import AccountAdmin from "../../models/account-admin.model";
 import Pet from "../../models/pet.model";
 import BookingConfig from "../../models/booking-config.model";
 import WorkSchedule from "../../models/work-schedule.model";
+import CategoryProduct from '../../models/category-product.model';
 import dayjs from 'dayjs';
 
+/**
+ * [GET] /api/v1/admin/dashboard/ecommerce-stats
+ * Cập nhật logic: Nhóm Doanh thu theo DANH MỤC CẤP CHA CAO NHẤT (Root Category)
+ */
 export const getEcommerceStats = async (req: Request, res: Response) => {
     try {
-        const TIMEZONE_OFFSET = 7 * 60 * 60 * 1000;
         const now = new Date();
+        const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+        const startOfLastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+        const endOfLastMonth = new Date(now.getFullYear(), now.getMonth(), 0);
 
-        // Time ranges (Vietnam Timezone)
-        const startToday = new Date(new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0).getTime() - TIMEZONE_OFFSET);
-        const endToday = new Date(new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999).getTime() - TIMEZONE_OFFSET);
-        const startYesterday = new Date(startToday.getTime() - 24 * 60 * 60 * 1000);
-        const endYesterday = new Date(endToday.getTime() - 24 * 60 * 60 * 1000);
-
-        const startThisMonth = new Date(new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0).getTime() - TIMEZONE_OFFSET);
-        const endThisMonth = new Date(new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999).getTime() - TIMEZONE_OFFSET);
-        const startLastMonth = new Date(new Date(now.getFullYear(), now.getMonth() - 1, 1, 0, 0, 0, 0).getTime() - TIMEZONE_OFFSET);
-        const endLastMonth = new Date(new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59, 999).getTime() - TIMEZONE_OFFSET);
-
-        const baseMatch = { paymentStatus: "paid", orderStatus: "completed", deleted: false };
+        const baseMatch = { orderStatus: "completed", deleted: false };
 
         const [
-            todayRevenueRes, yesterdayRevenueRes,
-            thisMonthRevenueRes, lastMonthRevenueRes,
-            todayOrders, yesterdayOrders,
-            thisMonthOrders, lastMonthOrders,
-            totalProducts, totalOrders, totalUsers,
-            totalServiceBookings, totalBoardingBookings,
-            totalPendingReviews,
-            recentOrders, recentProducts, topProducts,
-            topCustomersRes, revenueByMonthRes, topCategoriesRes
+            currentStats, lastStats, yearlyData, topCategoriesRes,
+            totalProducts, totalUsers, recentOrders, recentProducts, topProducts
         ] = await Promise.all([
-            Order.aggregate([{ $match: { ...baseMatch, createdAt: { $gte: startToday, $lte: endToday } } }, { $group: { _id: null, total: { $sum: "$total" } } }]),
-            Order.aggregate([{ $match: { ...baseMatch, createdAt: { $gte: startYesterday, $lte: endYesterday } } }, { $group: { _id: null, total: { $sum: "$total" } } }]),
-            Order.aggregate([{ $match: { ...baseMatch, createdAt: { $gte: startThisMonth, $lte: endThisMonth } } }, { $group: { _id: null, total: { $sum: "$total" } } }]),
-            Order.aggregate([{ $match: { ...baseMatch, createdAt: { $gte: startLastMonth, $lte: endLastMonth } } }, { $group: { _id: null, total: { $sum: "$total" } } }]),
-            Order.countDocuments({ deleted: false, createdAt: { $gte: startToday, $lte: endToday } }),
-            Order.countDocuments({ deleted: false, createdAt: { $gte: startYesterday, $lte: endYesterday } }),
-            Order.countDocuments({ deleted: false, createdAt: { $gte: startThisMonth, $lte: endThisMonth } }),
-            Order.countDocuments({ deleted: false, createdAt: { $gte: startLastMonth, $lte: endLastMonth } }),
-            Product.countDocuments({ deleted: false }),
-            Order.countDocuments({ deleted: false }),
-            AccountUser.countDocuments({ deleted: false }),
-            Booking.countDocuments({ deleted: false }),
-            BoardingBooking.countDocuments({ deleted: false }),
-            (async () => {
-                try {
-                    const Review = (await import("../../models/review.model")).default;
-                    return await Review.countDocuments({ status: "pending", deleted: false });
-                } catch (e) {
-                    return 0;
-                }
-            })(),
-            Order.find({ deleted: false }).sort({ createdAt: -1 }).limit(5).populate('userId', 'fullName avatar'),
-            Product.find({ deleted: false }).sort({ createdAt: -1 }).limit(5),
+            // 1. Doanh thu tháng này
             Order.aggregate([
-                { $match: baseMatch },
-                { $unwind: "$items" },
-                { $group: { _id: "$items.productId", name: { $first: "$items.name" }, totalQuantity: { $sum: "$items.quantity" }, totalRevenue: { $sum: { $multiply: ["$items.quantity", "$items.price"] } } } },
-                { $sort: { totalQuantity: -1 } },
-                { $limit: 10 }
+                { $match: { createdAt: { $gte: startOfMonth }, ...baseMatch } },
+                { $group: { _id: null, total: { $sum: { $subtract: ["$total", { $ifNull: ["$shipping.fee", 0] }] } }, count: { $sum: 1 } } }
             ]),
+            // 2. Doanh thu tháng trước
             Order.aggregate([
-                { $match: baseMatch },
-                { $group: { _id: "$userId", fullName: { $first: "$userId" }, totalSpent: { $sum: "$total" }, totalOrders: { $sum: 1 } } },
-                { $sort: { totalSpent: -1 } },
-                { $limit: 5 }
+                { $match: { createdAt: { $gte: startOfLastMonth, $lte: endOfLastMonth }, ...baseMatch } },
+                { $group: { _id: null, total: { $sum: { $subtract: ["$total", { $ifNull: ["$shipping.fee", 0] }] } }, count: { $sum: 1 } } }
             ]),
+            // 3. Doanh thu theo tháng
             Order.aggregate([
-                {
-                    $match: {
-                        ...baseMatch,
-                        createdAt: {
-                            $gte: new Date(now.getFullYear(), 0, 1),
-                            $lte: new Date(now.getFullYear(), 11, 31, 23, 59, 59, 999)
-                        }
-                    }
-                },
-                {
-                    $group: {
-                        _id: { month: { $month: "$createdAt" } },
-                        total: { $sum: "$total" }
-                    }
-                },
-                { $sort: { "_id.month": 1 } }
+                { $match: { createdAt: { $gte: new Date(now.getFullYear(), 0, 1) }, ...baseMatch } },
+                { $group: { _id: { $month: "$createdAt" }, total: { $sum: { $subtract: ["$total", { $ifNull: ["$shipping.fee", 0] }] } } } },
+                { $sort: { "_id": 1 } }
             ]),
+            // 4. Doanh thu theo DANH MỤC CẤP CAO NHẤT (Sử dụng $graphLookup để tìm cha gốc)
             Order.aggregate([
                 { $match: baseMatch },
                 { $unwind: "$items" },
@@ -105,98 +57,113 @@ export const getEcommerceStats = async (req: Request, res: Response) => {
                     }
                 },
                 { $unwind: "$productInfo" },
-                { $unwind: "$productInfo.category" },
+                // Tìm tất cả tổ tiên của danh mục hiện tại
                 {
-                    $lookup: {
+                    $graphLookup: {
                         from: "categories-product",
-                        localField: "productInfo.category",
-                        foreignField: "_id",
-                        as: "catInfo"
+                        startWith: "$productInfo.categoryId",
+                        connectFromField: "parent",
+                        connectToField: "_id",
+                        as: "ancestors"
                     }
                 },
-                { $unwind: "$catInfo" },
+                // Chọn danh mục cha gốc (là danh mục trong ancestors mà có parent == null hoặc chính là danh mục đó nếu nó là gốc)
+                {
+                    $addFields: {
+                        rootCategory: {
+                            $reduce: {
+                                input: "$ancestors",
+                                initialValue: null,
+                                in: {
+                                    $cond: [
+                                        { $eq: ["$$this.parent", null] },
+                                        "$$this.name",
+                                        "$$value"
+                                    ]
+                                }
+                            }
+                        }
+                    }
+                },
                 {
                     $group: {
-                        _id: "$catInfo.name",
+                        _id: { $ifNull: ["$rootCategory", "Khác"] },
                         total: { $sum: { $multiply: ["$items.quantity", "$items.price"] } }
                     }
                 },
                 { $sort: { total: -1 } },
-                { $limit: 2 }
+                { $limit: 10 }
+            ]),
+            Product.countDocuments({ deleted: false }),
+            AccountUser.countDocuments({ deleted: false }),
+            Order.find({ deleted: false }).sort({ createdAt: -1 }).limit(5).populate('userId', 'fullName avatar'),
+            Product.find({ deleted: false }).sort({ createdAt: -1 }).limit(5),
+            Order.aggregate([
+                { $match: baseMatch },
+                { $unwind: "$items" },
+                { $group: { _id: "$items.productId", name: { $first: "$items.name" }, totalQuantity: { $sum: "$items.quantity" }, totalRevenue: { $sum: { $multiply: ["$items.quantity", "$items.price"] } } } },
+                { $sort: { totalQuantity: -1 } },
+                { $limit: 5 }
             ])
         ]);
 
-        const chartData = Array(12).fill(0);
-        revenueByMonthRes.forEach(item => {
-            chartData[item._id.month - 1] = item.total;
-        });
+        const topCustomersRaw = await Order.aggregate([
+            { $match: baseMatch },
+            { $group: { _id: "$userId", totalSpent: { $sum: "$total" }, totalOrders: { $sum: 1 } } },
+            { $sort: { totalSpent: -1 } },
+            { $limit: 5 }
+        ]);
 
-        const topCategories = topCategoriesRes.map(item => ({
-            label: item._id,
-            total: item.total
-        }));
-
-        const topCustomers = await Promise.all(topCustomersRes.map(async (c) => {
+        const topCustomers = await Promise.all(topCustomersRaw.map(async (c) => {
             const user = await AccountUser.findById(c._id).select('fullName avatar');
-            return {
-                ...c,
-                fullName: user?.fullName || 'Khách vãng lai',
-                avatar: user?.avatar
-            };
+            return { ...c, fullName: user?.fullName || 'Khách vãng lai', avatar: user?.avatar };
         }));
 
-        const todayRevenue = todayRevenueRes[0]?.total || 0;
-        const yesterdayRevenue = yesterdayRevenueRes[0]?.total || 0;
-        const thisMonthRevenue = thisMonthRevenueRes[0]?.total || 0;
-        const lastMonthRevenue = lastMonthRevenueRes[0]?.total || 0;
+        const yearlyRevenueChart = Array(12).fill(0);
+        yearlyData.forEach(item => { yearlyRevenueChart[item._id - 1] = item.total; });
 
-        const revenueTodayPercent = yesterdayRevenue === 0 ? 100 : ((todayRevenue - yesterdayRevenue) / yesterdayRevenue) * 100;
-        const revenueMonthPercent = lastMonthRevenue === 0 ? 100 : ((thisMonthRevenue - lastMonthRevenue) / lastMonthRevenue) * 100;
-        const orderTodayPercent = yesterdayOrders === 0 ? 100 : ((todayOrders - yesterdayOrders) / yesterdayOrders) * 100;
-        const orderMonthPercent = lastMonthOrders === 0 ? 100 : ((thisMonthOrders - lastMonthOrders) / lastMonthOrders) * 100;
+        const [serviceCount, boardingCount] = await Promise.all([
+            Booking.countDocuments({ bookingStatus: 'completed', deleted: false }),
+            BoardingBooking.countDocuments({ boardingStatus: 'checked-out', deleted: false })
+        ]);
+
+        const currentRevenue = currentStats[0]?.total || 0;
+        const lastRevenue = lastStats[0]?.total || 0;
+        const revenueMonthPercent = lastRevenue === 0 ? 100 : ((currentRevenue - lastRevenue) / lastRevenue) * 100;
 
         res.json({
             success: true,
             data: {
                 summary: {
-                    totalProducts,
-                    totalOrders,
-                    totalUsers,
-                    totalServiceBookings,
-                    totalBoardingBookings,
-                    totalPendingReviews,
-                    monthlyRevenue: thisMonthRevenue,
-                    revenueTodayPercent,
+                    monthlyRevenue: currentRevenue,
                     revenueMonthPercent,
-                    orderTodayPercent,
-                    orderMonthPercent,
+                    totalOrders: currentStats[0]?.count || 0,
+                    totalServiceBookings: serviceCount,
+                    totalBoardingBookings: boardingCount,
+                    totalProducts,
+                    totalUsers
                 },
                 recentOrders,
                 recentProducts,
                 topSellingProducts: topProducts,
                 topCustomers,
-                yearlyRevenueChart: chartData,
-                topCategories
+                yearlyRevenueChart,
+                topCategories: topCategoriesRes.map(c => ({ label: c._id, total: c.total }))
             }
         });
     } catch (error: any) {
+        console.error("Ecommerce Stats Error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };
 
+/**
+ * [GET] /api/v1/admin/dashboard/analytics-stats
+ */
 export const getAnalyticsStats = async (req: Request, res: Response) => {
     try {
-        const now = new Date();
-        const startOfToday = dayjs().startOf('day').toDate();
         const sevenDaysAgo = dayjs().subtract(7, 'day').startOf('day').toDate();
-
-        const [
-            weeklyRevenueRes,
-            totalUsers,
-            totalOrders,
-            ordersByStatus,
-            monthlyVisitsRes
-        ] = await Promise.all([
+        const [weeklyRevenueRes, totalUsers, totalOrders, ordersByStatus, monthlyVisitsRes] = await Promise.all([
             Order.aggregate([
                 { $match: { createdAt: { $gte: sevenDaysAgo }, deleted: false } },
                 { $group: { _id: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } }, total: { $sum: "$total" } } },
@@ -204,17 +171,9 @@ export const getAnalyticsStats = async (req: Request, res: Response) => {
             ]),
             AccountUser.countDocuments({ deleted: false }),
             Order.countDocuments({ deleted: false }),
+            Order.aggregate([{ $match: { deleted: false } }, { $group: { _id: "$orderStatus", count: { $sum: 1 } } }]),
             Order.aggregate([
-                { $match: { deleted: false } },
-                { $group: { _id: "$orderStatus", count: { $sum: 1 } } }
-            ]),
-            Order.aggregate([
-                {
-                    $match: {
-                        deleted: false,
-                        createdAt: { $gte: dayjs().startOf('year').toDate() }
-                    }
-                },
+                { $match: { deleted: false, createdAt: { $gte: dayjs().startOf('year').toDate() } } },
                 { $group: { _id: { month: { $month: "$createdAt" } }, count: { $sum: 1 } } },
                 { $sort: { "_id.month": 1 } }
             ])
@@ -223,51 +182,34 @@ export const getAnalyticsStats = async (req: Request, res: Response) => {
         const weeklyRevenueTable: Record<string, number> = {};
         weeklyRevenueRes.forEach(item => weeklyRevenueTable[item._id] = item.total);
         const weeklyRevenue = Array.from({ length: 7 }).map((_, i) => {
-            const date = dayjs().subtract(6 - i, 'day').format('Y-M-D'); 
             const d = dayjs().subtract(6 - i, 'day').format('YYYY-MM-DD');
             return weeklyRevenueTable[d] || 0;
         });
 
         const monthlyVisits = Array(12).fill(0);
-        monthlyVisitsRes.forEach(item => {
-            monthlyVisits[item._id.month - 1] = item.count;
-        });
+        monthlyVisitsRes.forEach(item => { monthlyVisits[item._id.month - 1] = item.count; });
 
         res.json({
             success: true,
             data: {
-                weeklySales: {
-                    total: weeklyRevenue.reduce((a, b) => a + b, 0),
-                    data: weeklyRevenue
-                },
+                weeklySales: { total: weeklyRevenue.reduce((a, b) => a + b, 0), data: weeklyRevenue },
                 newUsers: totalUsers,
                 purchaseOrders: totalOrders,
-                messages: 234, 
+                messages: 234,
                 orderDistribution: ordersByStatus.map(o => ({ label: o._id, value: o.count })),
                 websiteVisits: monthlyVisits
             }
         });
-    } catch (error: any) {
-        res.status(500).json({ success: false, message: error.message });
-    }
+    } catch (error: any) { res.status(500).json({ success: false, message: error.message }); }
 };
 
+/**
+ * [GET] /api/v1/admin/dashboard/system-stats
+ */
 export const getSystemStats = async (req: Request, res: Response) => {
     try {
-        const [
-            petStats,
-            totalUsers,
-            totalAdmins,
-            totalPets,
-            newProducts,
-            topProducts,
-            topCustomersRes,
-            serviceUsageRes
-        ] = await Promise.all([
-            Pet.aggregate([
-                { $match: { deleted: false } },
-                { $group: { _id: "$type", count: { $sum: 1 } } }
-            ]),
+        const [petStats, totalUsers, totalAdmins, totalPets, newProducts, topProducts, topCustomersRes, serviceUsageRes] = await Promise.all([
+            Pet.aggregate([{ $match: { deleted: false } }, { $group: { _id: "$type", count: { $sum: 1 } } }]),
             AccountUser.countDocuments({ deleted: false }),
             AccountAdmin.countDocuments({ deleted: false }),
             Pet.countDocuments({ deleted: false }),
@@ -287,14 +229,7 @@ export const getSystemStats = async (req: Request, res: Response) => {
             ]),
             Booking.aggregate([
                 { $match: { deleted: false } },
-                {
-                    $lookup: {
-                        from: "services",
-                        localField: "serviceId",
-                        foreignField: "_id",
-                        as: "serviceInfo"
-                    }
-                },
+                { $lookup: { from: "services", localField: "serviceId", foreignField: "_id", as: "serviceInfo" } },
                 { $unwind: "$serviceInfo" },
                 { $group: { _id: "$serviceInfo.name", count: { $sum: 1 } } },
                 { $sort: { count: -1 } },
@@ -311,118 +246,152 @@ export const getSystemStats = async (req: Request, res: Response) => {
             success: true,
             data: {
                 petDistribution: petStats.map(p => ({ label: p._id === 'dog' ? 'Chó' : p._id === 'cat' ? 'Mèo' : 'Khác', count: p.count })),
-                systemStats: {
-                    totalUsers,
-                    totalAdmins,
-                    totalPets
-                },
+                systemStats: { totalUsers, totalAdmins, totalPets },
                 newProducts,
                 topSellingProducts: topProducts,
                 topCustomers,
                 serviceUsage: serviceUsageRes.map(s => ({ name: s._id, count: s.count }))
             }
         });
-    } catch (error: any) {
-        res.status(500).json({ success: false, message: error.message });
-    }
+    } catch (error: any) { res.status(500).json({ success: false, message: error.message }); }
 };
 
+/**
+ * [GET] /api/v1/admin/dashboard/staffing-status
+ */
 export const getStaffingStatus = async (req: Request, res: Response) => {
     try {
         const date = req.query.date ? new Date(req.query.date as string) : new Date();
         const startOfDay = dayjs(date).startOf('day').toDate();
         const endOfDay = dayjs(date).endOf('day').toDate();
-
         const [config, schedules] = await Promise.all([
             BookingConfig.findOne({}),
-            WorkSchedule.find({
-                date: { $gte: startOfDay, $lte: endOfDay },
-                status: { $in: ["scheduled", "checked-in"] }
-            }).populate({
-                path: 'staffId',
-                select: 'fullName roles',
-                populate: { path: 'roles', select: 'name' }
-            })
+            WorkSchedule.find({ date: { $gte: startOfDay, $lte: endOfDay }, status: { $in: ["scheduled", "checked-in"] } }).populate({ path: 'staffId', select: 'fullName roles', populate: { path: 'roles', select: 'name' } })
         ]);
-
-        if (!config || !config.staffingRules || config.staffingRules.length === 0) {
-            return res.json({
-                code: 200,
-                data: [],
-                message: "Chưa cấu hình định mức nhân sự."
-            });
-        }
+        if (!config || !config.staffingRules || config.staffingRules.length === 0) { return res.json({ code: 200, data: [], message: "Chưa cấu hình định mức nhân sự." }); }
 
         const results = config.staffingRules.map((rule: any) => {
             const shiftSchedules = schedules.filter(s => s.shiftId.toString() === rule.shiftId.toString());
-            
-            const requirements = rule.roleRequirements.map((req: any) => {
+            const requirements = rule.roleRequirements.map((reqRef: any) => {
                 const actualStaffCount = shiftSchedules.filter(s => {
                     const staff = s.staffId as any;
-                    return staff?.roles?.some((r: any) => r._id.toString() === req.roleId.toString());
+                    return staff?.roles?.some((r: any) => r._id.toString() === reqRef.roleId.toString());
                 }).length;
-
-                return {
-                    roleId: req.roleId,
-                    required: req.minStaff,
-                    actual: actualStaffCount,
-                    status: actualStaffCount >= req.minStaff ? "vừa đủ" : "thiếu",
-                    diff: actualStaffCount - req.minStaff
-                };
+                return { roleId: reqRef.roleId, required: reqRef.minStaff, actual: actualStaffCount, status: actualStaffCount >= reqRef.minStaff ? "vừa đủ" : "thiếu", diff: actualStaffCount - reqRef.minStaff };
             });
-
-            return {
-                shiftId: rule.shiftId,
-                requirements
-            };
+            return { shiftId: rule.shiftId, requirements };
         });
-
-        res.json({
-            code: 200,
-            data: results
-        });
-    } catch (error) {
-        res.status(500).json({ code: 500, message: "Lỗi kiểm tra định mức nhân sự" });
-    }
+        res.json({ code: 200, data: results });
+    } catch (error) { res.status(500).json({ code: 500, message: "Lỗi kiểm tra định mức nhân sự" }); }
 };
+
+/**
+ * [GET] /api/v1/admin/dashboard/boarding-stats
+ */
 export const getBoardingStats = async (req: Request, res: Response) => {
     try {
-        const date = req.query.date ? new Date(req.query.date as string) : new Date();
-        const startOfDay = dayjs(date).startOf('day').toDate();
-        const endOfDay = dayjs(date).endOf('day').toDate();
-
         const [totalBookings, checkedInBookings, confirmedBookings] = await Promise.all([
             BoardingBooking.countDocuments({ deleted: false }),
             BoardingBooking.countDocuments({ boardingStatus: "checked-in", deleted: false }),
             BoardingBooking.countDocuments({ boardingStatus: "confirmed", deleted: false }),
         ]);
-
-        const urgentBookings = await BoardingBooking.find({
-            boardingStatus: "checked-in",
-            deleted: false
-        }).select('feedingSchedule exerciseSchedule');
-
-        let urgentFeeding = 0;
-        let urgentExercise = 0;
-
+        const urgentBookings = await BoardingBooking.find({ boardingStatus: "checked-in", deleted: false }).select('feedingSchedule exerciseSchedule');
+        let urgentFeeding = 0; let urgentExercise = 0;
         urgentBookings.forEach(b => {
-            const feeding = (b.feedingSchedule || []).filter((f: any) => f.status === 'pending');
-            const exercise = (b.exerciseSchedule || []).filter((e: any) => e.status === 'pending');
-            urgentFeeding += feeding.length;
-            urgentExercise += exercise.length;
+            urgentFeeding += (b.feedingSchedule || []).filter((f: any) => f.status === 'pending').length;
+            urgentExercise += (b.exerciseSchedule || []).filter((e: any) => e.status === 'pending').length;
         });
+        res.json({ success: true, data: { totalBookings, activeBookings: checkedInBookings, upcomingBookings: confirmedBookings, urgentFeeding, urgentExercise } });
+    } catch (error: any) { res.status(500).json({ success: false, message: error.message }); }
+};
 
-        res.json({
-            success: true,
-            data: {
-                totalBookings,
-                activeBookings: checkedInBookings,
-                upcomingBookings: confirmedBookings,
-                urgentFeeding,
-                urgentExercise
-            }
-        });
-    } catch (error: any) {
-        res.status(500).json({ success: false, message: error.message });
-    }
+export const getServiceStats = async (req: Request, res: Response) => {
+    try {
+        const { startDate, endDate } = req.query;
+        const match: any = { deleted: false };
+        if (startDate && endDate) { match.createdAt = { $gte: new Date(startDate as string), $lte: new Date(endDate as string) }; }
+        const [popularServices, staffPerformance, revenueByCategory] = await Promise.all([
+            // Top 10 dịch vụ được đặt nhiều nhất
+            Booking.aggregate([
+                { $match: match },
+                { $lookup: { from: "services", localField: "serviceId", foreignField: "_id", as: "serviceInfo" } },
+                { $unwind: "$serviceInfo" },
+                { $group: { _id: "$serviceInfo.name", count: { $sum: 1 } } },
+                { $sort: { count: -1 } },
+                { $limit: 10 }
+            ]),
+            // Hiệu suất nhân viên: Số dịch vụ đã xử lý hoàn thành
+            Booking.aggregate([
+                { $match: { ...match, bookingStatus: "completed" } },
+                { $unwind: "$petStaffMap" },
+                { $match: { "petStaffMap.status": "completed" } },
+                { $group: { _id: "$petStaffMap.staffId", count: { $sum: 1 } } },
+                { $lookup: { from: "accounts-admin", localField: "_id", foreignField: "_id", as: "staff" } },
+                { $unwind: "$staff" },
+                { $project: { _id: 1, count: 1, name: "$staff.fullName" } }
+            ]),
+            // Doanh mục dịch vụ mang lại doanh thu cao nhất
+            Booking.aggregate([
+                { $match: { ...match, bookingStatus: "completed" } },
+                { $lookup: { from: "services", localField: "serviceId", foreignField: "_id", as: "serviceInfo" } },
+                { $unwind: "$serviceInfo" },
+                { $lookup: { from: "categories-service", localField: "serviceInfo.categoryId", foreignField: "_id", as: "cat" } },
+                { $unwind: "$cat" },
+                { $group: { _id: "$cat.name", total: { $sum: "$total" }, count: { $sum: 1 } } }
+            ])
+        ]);
+        res.json({ success: true, data: { popularServices, staffPerformance, revenueByCategory } });
+    } catch (error: any) { res.status(500).json({ success: false, message: error.message }); }
+};
+
+export const getOrderStats = async (req: Request, res: Response) => {
+    try {
+        const { startDate, endDate } = req.query;
+        const match: any = { deleted: false, orderStatus: 'completed' };
+        if (startDate && endDate) { match.createdAt = { $gte: new Date(startDate as string), $lte: new Date(endDate as string) }; }
+        const [revenueByCategory, topProducts, orderDistribution] = await Promise.all([
+            Order.aggregate([
+                { $match: match },
+                { $unwind: "$items" },
+                { $lookup: { from: "products", localField: "items.productId", foreignField: "_id", as: "product" } },
+                { $unwind: "$product" },
+                { $lookup: { from: "categories-product", localField: "product.categoryId", foreignField: "_id", as: "cat" } },
+                { $unwind: "$cat" },
+                { $group: { _id: "$cat.name", total: { $sum: { $multiply: ["$items.quantity", "$items.price"] } } } }
+            ]),
+            Order.aggregate([
+                { $match: match },
+                { $unwind: "$items" },
+                { $group: { _id: "$items.productId", name: { $first: "$items.name" }, totalQuantity: { $sum: "$items.quantity" }, revenue: { $sum: { $multiply: ["$items.quantity", "$items.price"] } } } },
+                { $sort: { totalQuantity: -1 } },
+                { $limit: 5 }
+            ]),
+            Order.aggregate([{ $match: { deleted: false } }, { $group: { _id: "$orderStatus", count: { $sum: 1 } } }])
+        ]);
+        res.json({ success: true, data: { revenueByCategory, topProducts, orderDistribution } });
+    } catch (error: any) { res.status(500).json({ success: false, message: error.message }); }
+};
+
+export const getDetailedBoardingStats = async (req: Request, res: Response) => {
+    try {
+        const [occupancyRes, revenueByCageType, stayDuration] = await Promise.all([
+            BoardingBooking.aggregate([{ $match: { boardingStatus: "checked-in", deleted: false } }, { $group: { _id: "$cageId", count: { $sum: 1 } } }]),
+            BoardingBooking.aggregate([{ $match: { boardingStatus: "checked-out", deleted: false } }, { $lookup: { from: "boarding-cages", localField: "cageId", foreignField: "_id", as: "cage" } }, { $unwind: "$cage" }, { $group: { _id: "$cage.name", total: { $sum: "$total" } } }]),
+            BoardingBooking.aggregate([{ $match: { boardingStatus: "checked-out", deleted: false } }, { $group: { _id: null, avgDays: { $avg: "$numberOfDays" } } }])
+        ]);
+        res.json({ success: true, data: { occupancyRes, revenueByCageType, avgStayDuration: stayDuration[0]?.avgDays || 0 } });
+    } catch (error: any) { res.status(500).json({ success: false, message: error.message }); }
+};
+
+export const getStaffStats = async (req: Request, res: Response) => {
+    try {
+        const { startDate, endDate } = req.query;
+        const match: any = { deleted: false };
+        if (startDate && endDate) { match.createdAt = { $gte: new Date(startDate as string), $lte: new Date(endDate as string) }; }
+        const [servicePerformance, workAttendance] = await Promise.all([
+            Booking.aggregate([{ $match: { ...match, bookingStatus: "completed" } }, { $unwind: "$petStaffMap" }, { $match: { "petStaffMap.status": "completed" } }, { $group: { _id: "$petStaffMap.staffId", count: { $sum: 1 } } }, { $lookup: { from: "accounts-admin", localField: "_id", foreignField: "_id", as: "staff" } }, { $unwind: "$staff" }, { $project: { name: "$staff.fullName", count: 1 } }, { $sort: { count: -1 } }]),
+            WorkSchedule.aggregate([{ $match: { date: { $gte: new Date(new Date().setHours(0, 0, 0, 0)) }, status: "scheduled" } }, { $group: { _id: "$staffId", count: { $sum: 1 } } }, { $lookup: { from: "accounts-admin", localField: "_id", foreignField: "_id", as: "staff" } }, { $unwind: "$staff" }, { $project: { name: "$staff.fullName", count: 1 } }])
+        ]);
+        res.json({ success: true, data: { servicePerformance, workAttendance } });
+    } catch (error: any) { res.status(500).json({ success: false, message: error.message }); }
 };

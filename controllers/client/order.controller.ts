@@ -59,17 +59,17 @@ export const createPost = async (req: Request, res: Response) => {
         dataFinal.note = req.body.note;
         dataFinal.coupon = req.body.coupon;
 
-        // Map paymentMethod
+        // Lấy phương thức thanh toán
         let paymentMethod = req.body.paymentMethod || "money";
         if (paymentMethod === "COD") paymentMethod = "money";
         if (paymentMethod === "ZALOPAY") paymentMethod = "zalopay";
         if (paymentMethod === "VNPAY") paymentMethod = "vnpay";
 
         dataFinal.paymentMethod = paymentMethod;
-        dataFinal.paymentStatus = "unpaid";
-        dataFinal.orderStatus = "pending";
+        dataFinal.paymentStatus = "unpaid"; // Mặc định là chưa thanh toán
+        dataFinal.orderStatus = "pending"; // Mặc định là chờ xác nhận
 
-        // Mảng items
+        // Duyệt qua danh sách sản phẩm khách mua
         dataFinal.items = [];
         for (const item of req.body.items) {
             const productDetail: any = await Product.findOne({
@@ -163,8 +163,10 @@ export const createPost = async (req: Request, res: Response) => {
             }
         }
 
+        // Tính tổng tiền tạm tính
         dataFinal.subTotal = dataFinal.items.reduce((total: number, item: any) => total + (item.price * item.quantity), 0);
 
+        // Xử lý mã giảm giá (Coupon)
         dataFinal.discount = 0;
         const couponCodeRaw = req.body.coupon;
         if (couponCodeRaw && typeof couponCodeRaw === 'string' && couponCodeRaw.trim() !== "") {
@@ -194,6 +196,7 @@ export const createPost = async (req: Request, res: Response) => {
             }
         }
 
+        // Xử lý dùng điểm tích lũy để giảm giá
         dataFinal.usedPoint = 0;
         dataFinal.pointDiscount = 0;
 
@@ -207,6 +210,7 @@ export const createPost = async (req: Request, res: Response) => {
                 dataFinal.usedPoint = usedPointBody;
                 dataFinal.pointDiscount = usedPointBody * (pointConfig.POINT_TO_MONEY || 0);
 
+                // Trừ điểm của người dùng ngay
                 await AccountUser.updateOne({ _id: user.id }, { $inc: { usedPoint: usedPointBody } });
             }
         }
@@ -215,6 +219,10 @@ export const createPost = async (req: Request, res: Response) => {
         const shopInfoAddress = await getInfoAddress(shopLocation.lat, shopLocation.lng);
         const userInfoAddress = await getInfoAddress(dataFinal.latitude, dataFinal.longitude);
         const totalWeight = dataFinal.items.reduce((total: number, item: any) => total + item.quantity * 500, 0);
+
+        // Tiết kiệm đơn hàng sớm để có thể hoàn trả tài nguyên nếu các bước sau (GoShip) lỗi
+        const newRecord = new Order(dataFinal);
+        await newRecord.save();
 
         const dataGoShip = {
             shipment: {
@@ -245,12 +253,13 @@ export const createPost = async (req: Request, res: Response) => {
             }
         };
 
+        // Tính phí vận chuyển qua GoShip
         const shippingSettings = await getApiShipping();
         const goshipRes = await axios.post("https://sandbox.goship.io/api/v2/shipments", dataGoShip, {
             headers: { Authorization: `Bearer ${shippingSettings?.tokenGoShip || ""}`, "Content-Type": "application/json" }
         });
 
-        dataFinal.shipping = {
+        const shippingData = {
             goshipOrderId: goshipRes.data.id,
             carrierName: goshipRes.data.carrier,
             carrierCode: goshipRes.data.carrier_short_name,
@@ -258,10 +267,14 @@ export const createPost = async (req: Request, res: Response) => {
             cod: goshipRes.data.cod,
         };
 
-        dataFinal.total = dataFinal.subTotal + dataFinal.shipping.fee - dataFinal.discount - dataFinal.pointDiscount;
+        // Tính tổng tiền cuối cùng phải trả
+        const totalFinal = dataFinal.subTotal + shippingData.fee - dataFinal.discount - dataFinal.pointDiscount;
 
-        const newRecord = new Order(dataFinal);
-        await newRecord.save();
+        // Cập nhật thông tin vận chuyển và tổng tiền vào đơn hàng đã lưu
+        await Order.updateOne({ _id: newRecord._id }, {
+            shipping: shippingData,
+            total: totalFinal
+        });
 
         try {
             const Notification = (await import("../../models/notification.model")).default;
@@ -277,7 +290,15 @@ export const createPost = async (req: Request, res: Response) => {
 
         res.json({ code: "success", message: "Đặt hàng thành công!", orderCode: dataFinal.code, phone: dataFinal.phone });
     } catch (error: any) {
-        res.json({ code: "error", message: error.message });
+        // Bây giờ mã đơn đã được tạo nên refundOrderResources sẽ hoạt động chính xác!
+        const order = await Order.findOne({ code: dataFinal.code });
+        if (order && order.code) {
+            await refundOrderResources(order.code);
+            order.orderStatus = "cancelled";
+            (order as any).cancelledAt = new Date();
+            await order.save();
+        }
+        res.json({ code: "error", message: "Đặt hàng thất bại: " + error.message });
     }
 };
 
@@ -386,8 +407,16 @@ export const paymentZalopayResult = async (req: Request, res: Response) => {
                     await Booking.updateOne({ _id: booking._id }, updateData);
                 }
             } else {
-                await Order.updateOne({ phone, code, deleted: false }, { paymentStatus: "paid" });
-                await addPointAfterPayment(code);
+                const order = await Order.findOne({ phone, code, deleted: false });
+                if (order) {
+                    if (order.orderStatus !== "completed") {
+                        await addPointAfterPayment(code);
+                    }
+                    order.paymentStatus = "paid";
+                    order.orderStatus = "completed";
+                    (order as any).completedAt = new Date();
+                    await order.save();
+                }
             }
             result.return_code = 1;
             result.return_message = "success";
@@ -494,7 +523,9 @@ export const paymentVNPayResult = async (req: Request, res: Response) => {
                         await Booking.updateOne({ _id: booking._id }, updateData);
                     }
                 } else {
-                    await Order.findOneAndUpdate({ phone, code, deleted: false }, { paymentStatus: 'paid' });
+                    await Order.findOneAndUpdate({ phone, code, deleted: false }, {
+                        paymentStatus: 'paid'
+                    });
                     await addPointAfterPayment(code);
                 }
                 res.redirect(`${process.env.DOMAIN_WEBSITE}${code.startsWith("BK") ? '/dashboard/bookings' : `/order/success?orderCode=${code}&phone=${phone}`}`);
@@ -505,7 +536,12 @@ export const paymentVNPayResult = async (req: Request, res: Response) => {
                         await Booking.updateOne({ _id: booking._id }, { paymentStatus: 'unpaid', bookingStatus: 'cancelled' });
                     }
                 } else {
-                    await Order.findOneAndUpdate({ phone, code, deleted: false }, { paymentStatus: 'unpaid', orderStatus: 'cancelled' });
+                    await Order.findOneAndUpdate({ phone, code, deleted: false }, {
+                        paymentStatus: 'unpaid',
+                        orderStatus: 'cancelled',
+                        cancelledAt: new Date(),
+                        cancelledBy: "system"
+                    });
                     await refundOrderResources(code);
                 }
                 res.redirect(`${process.env.DOMAIN_WEBSITE}${code.startsWith("BK") ? '/dashboard/bookings' : '/cart'}`);
@@ -616,7 +652,12 @@ export const cancelMyOrder = async (req: Request, res: Response) => {
             return res.json({ code: "success", message: "Yêu cầu hủy đã được gửi! Admin sẽ kiểm tra và hoàn tiền sớm nhất." });
         }
         await refundOrderResources(order.code as string);
-        await Order.updateOne({ _id: id }, { orderStatus: "cancelled", cancelledReason: reason || "Khách hàng hủy", cancelledAt: new Date(), cancelledBy: "customer" });
+        await Order.updateOne({ _id: id }, {
+            orderStatus: "cancelled",
+            cancelledReason: reason || "Khách hàng hủy",
+            cancelledAt: new Date(),
+            cancelledBy: "customer"
+        });
         res.json({ code: "success", message: "Hủy đơn hàng thành công!" });
     } catch (error) {
         res.json({ code: "error", message: "Lỗi hệ thống!" });
@@ -630,8 +671,13 @@ export const confirmReceipt = async (req: Request, res: Response) => {
         const order = await Order.findOne({ _id: id, userId: userId, deleted: false });
         if (!order) return res.json({ code: "error", message: "Đơn hàng không tồn tại!" });
         if (order.orderStatus !== "shipped") return res.json({ code: "error", message: "Chỉ có thể xác nhận khi đơn hàng đang ở trạng thái đã giao!" });
-        await Order.updateOne({ _id: id }, { orderStatus: "completed" });
-        if (order.code) await addPointAfterPayment(order.code);
+        if (order) {
+            order.orderStatus = "completed";
+            (order as any).completedAt = new Date();
+            await order.save();
+        }
+
+        if (order?.code) await addPointAfterPayment(order.code);
         res.json({ code: "success", message: "Xác nhận nhận hàng thành công. Đơn hàng đã hoàn thành!" });
     } catch (error) {
         res.json({ code: "error", message: "Lỗi hệ thống!" });

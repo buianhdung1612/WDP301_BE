@@ -50,6 +50,10 @@ const schema = new mongoose.Schema(
         maxExtensionMinutes: {
             type: Number,
             default: 30
+        },
+        minAgeMonths: {
+            type: Number,
+            default: 0
         }
     },
     {
