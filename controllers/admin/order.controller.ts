@@ -201,31 +201,23 @@ export const editPatch = async (req: Request, res: Response) => {
         }
 
         // 1. Không cho thay đổi trạng thái đơn hàng khi đã hoàn thành hoặc đã hủy
-        if (["completed", "cancelled"].includes(order.orderStatus) && orderStatus !== order.orderStatus) {
+        if (orderStatus && ["completed", "cancelled"].includes(order.orderStatus) && orderStatus !== order.orderStatus) {
             return res.status(400).json({
                 code: 400,
                 message: "Không thể thay đổi trạng thái đơn hàng đã hoàn thành hoặc đã hủy!"
             });
         }
 
-        // 2. Không cho paid thành unpaid
-        if (order.paymentStatus === "paid" && paymentStatus === "unpaid") {
+        // 2. Một khi đã ở trạng thái kết thúc của thanh toán (paid, refunded), không cho phép quay đầu hoặc sửa đổi
+        if (["paid", "refunded"].includes(order.paymentStatus) && paymentStatus && paymentStatus !== order.paymentStatus) {
             return res.status(400).json({
                 code: 400,
-                message: "Không thể chuyển đơn đã thanh toán về chưa thanh toán!"
+                message: `Trạng thái thanh toán đang là "${order.paymentStatus === 'paid' ? 'Đã thanh toán' : 'Đã hoàn tiền'}", không thể thay đổi!`
             });
         }
 
-        // 3. Nếu đơn hàng đã hoàn thành hoặc hủy, không cho phép thay đổi trạng thái thanh toán hoặc ghi chú (tùy chọn)
-        if (["completed", "cancelled"].includes(order.orderStatus)) {
-            // Nếu vẫn muốn cho phép sửa ghi chú thì bỏ note ra
-            if (paymentStatus && paymentStatus !== order.paymentStatus) {
-                return res.status(400).json({
-                    code: 400,
-                    message: "Không thể thay đổi trạng thái thanh toán của đơn hàng đã kết thúc!"
-                });
-            }
-        }
+        // 3. Nếu đơn hàng đã hoàn thành hoặc hủy, vẫn cho phép thay đổi trạng thái thanh toán (để đánh dấu hoàn lại hoặc COD thực thu)
+        // Bỏ qua check cũ ở đây
 
         // Tích điểm cho người dùng nếu đơn hàng hoàn thành
         if (orderStatus === "completed" && order.orderStatus !== "completed" && order.code) {

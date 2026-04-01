@@ -539,6 +539,15 @@ export const createPost = async (req: Request, res: Response) => {
         req.body.images = parseIfString(req.body.images);
         req.body.attributes = parseIfString(req.body.attributes);
         req.body.variants = parseIfString(req.body.variants);
+        if (req.body.variants && Array.isArray(req.body.variants)) {
+            req.body.variants = req.body.variants.map((v: any) => ({
+                ...v,
+                stock: parseInt(v.stock) || 0,
+                priceOld: parseInt(v.priceOld) || 0,
+                priceNew: parseInt(v.priceNew) || 0,
+                status: String(v.status) === 'true' || v.status === true
+            }));
+        }
         req.body.suitableBreeds = parseIfString(req.body.suitableBreeds);
 
         req.body.search = convertToSlug(`${req.body.name}`).replace(/-/g, " ");
@@ -699,6 +708,15 @@ export const editPatch = async (req: Request, res: Response) => {
         req.body.images = parseIfString(req.body.images);
         req.body.attributes = parseIfString(req.body.attributes);
         req.body.variants = parseIfString(req.body.variants);
+        if (req.body.variants && Array.isArray(req.body.variants)) {
+            req.body.variants = req.body.variants.map((v: any) => ({
+                ...v,
+                stock: parseInt(v.stock) || 0,
+                priceOld: parseInt(v.priceOld) || 0,
+                priceNew: parseInt(v.priceNew) || 0,
+                status: String(v.status) === 'true' || v.status === true
+            }));
+        }
         req.body.suitableBreeds = parseIfString(req.body.suitableBreeds);
 
         if (req.body.name) {
