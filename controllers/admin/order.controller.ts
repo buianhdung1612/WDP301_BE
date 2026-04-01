@@ -149,6 +149,11 @@ export const updateStatus = async (req: Request, res: Response) => {
             return res.status(400).json({ code: 400, message: transition.message });
         }
 
+        // CHẶN: Phải thanh toán mới được Hoàn thành
+        if (status === "completed" && order.paymentStatus !== "paid") {
+            return res.status(400).json({ code: 400, message: "Đơn hàng chưa thanh toán, không thể chuyển sang Hoàn thành!" });
+        }
+
         // Nếu hoàn thành đơn hàng thì tích điểm thưởng cho khách
         if (status === "completed" && order.orderStatus !== "completed" && order.code) {
             await addPointAfterPayment(order.code);
@@ -234,6 +239,11 @@ export const editPatch = async (req: Request, res: Response) => {
             const transition = validateTransition(order.orderStatus as string, orderStatus);
             if (!transition.isValid) {
                 return res.status(400).json({ code: 400, message: transition.message });
+            }
+
+            // CHẶN: Phải thanh toán mới được Hoàn thành
+            if (orderStatus === "completed" && (paymentStatus !== "paid" && order.paymentStatus !== "paid")) {
+                return res.status(400).json({ code: 400, message: "Đơn hàng chưa thanh toán, không thể chuyển sang Hoàn thành!" });
             }
 
             // Cập nhật mốc thời gian nếu trạng thái thay đổi
