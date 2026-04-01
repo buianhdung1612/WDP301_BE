@@ -54,6 +54,22 @@ const pickFirstQueryValue = (value: unknown): string | undefined => {
     }
     return undefined;
 };
+const isMobileSource = (value: unknown) => String(value || "").toLowerCase() === "mobile";
+const sendMobilePaymentPage = (res: Response, success: boolean) => {
+    const title = success ? "Thanh toán thành công" : "Thanh toán chưa thành công";
+    const desc = success
+        ? "Bạn có thể quay lại ứng dụng TeddyPet, hệ thống sẽ tự cập nhật trạng thái."
+        : "Vui lòng quay lại ứng dụng TeddyPet để thử lại hoặc kiểm tra trạng thái.";
+    const color = success ? "#05A845" : "#E24A4A";
+    return res.status(200).send(`<!doctype html>
+<html lang="vi"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>${title}</title></head>
+<body style="font-family:Arial,sans-serif;background:#fff7f7;padding:24px;">
+<div style="max-width:560px;margin:60px auto;background:#fff;border:1px solid #f0e6e6;border-radius:12px;padding:22px;">
+<h2 style="margin:0 0 8px;color:${color};">${title}</h2>
+<p style="margin:0;color:#444;line-height:1.6">${desc}</p>
+</div></body></html>`);
+};
 
 const trimTrailingSlash = (value: string) => value.replace(/\/+$/, "");
 
@@ -405,7 +421,7 @@ export const initiateBoardingPayment = async (req: Request, res: Response) => {
         await releaseExpiredHolds();
         const userId = res.locals.accountUser?._id?.toString();
         const { id } = req.params;
-        const { gateway } = req.body as { gateway: "zalopay" | "vnpay" };
+        const { gateway, source } = req.body as { gateway: "zalopay" | "vnpay"; source?: string };
 
         if (!userId) return res.status(401).json({ message: "Vui long dang nhap" });
         if (!gateway || !["zalopay", "vnpay"].includes(gateway)) {
@@ -448,7 +464,8 @@ export const initiateBoardingPayment = async (req: Request, res: Response) => {
             };
 
             const publicBackendUrl = resolvePublicBackendUrl(req);
-            const backendReturnUrl = `${publicBackendUrl}/api/v1/client/boarding/payment-zalopay-return?bookingId=${booking._id}`;
+            const mobileQuery = isMobileSource(source) ? "&source=mobile" : "";
+            const backendReturnUrl = `${publicBackendUrl}/api/v1/client/boarding/payment-zalopay-return?bookingId=${booking._id}${mobileQuery}`;
 
             const embed_data = {
                 redirecturl: backendReturnUrl
@@ -498,7 +515,8 @@ export const initiateBoardingPayment = async (req: Request, res: Response) => {
         const tmnCode = `${paymentSettings.vnpTmnCode}`;
         const secretKey = `${paymentSettings.vnpHashSecret}`;
         let vnpUrl = `${paymentSettings.vnpUrl}`;
-        const returnUrl = `${resolvePublicBackendUrl(req)}/api/v1/client/boarding/payment-vnpay-result`;
+        const mobileQuery = isMobileSource(source) ? "?source=mobile" : "";
+        const returnUrl = `${resolvePublicBackendUrl(req)}/api/v1/client/boarding/payment-vnpay-result${mobileQuery}`;
         const orderId = `${(booking.code || "").slice(-8)}_${Math.floor(Date.now() / 1000)}`; // Max 24 chars
         const amount = Number(booking.depositAmount || 0) > 0 ? Number(booking.depositAmount || 0) : Number(booking.total || 0);
 
@@ -638,6 +656,7 @@ export const paymentBoardingZalopayReturn = async (req: Request, res: Response) 
             String(returnCode || "").toLowerCase() === "success" ||
             String(resultCode || "").toLowerCase() === "success";
 
+        const fromMobile = isMobileSource(req.query?.source);
         if (bookingId && mongoose.Types.ObjectId.isValid(bookingId) && isPaymentSuccess) {
             const booking = await BoardingBooking.findOne({ _id: bookingId, deleted: false });
             if (booking && booking.paymentStatus !== "paid") {
@@ -646,10 +665,12 @@ export const paymentBoardingZalopayReturn = async (req: Request, res: Response) 
                     { $set: buildSuccessfulPaymentUpdate(booking) }
                 );
             }
+            if (fromMobile) return sendMobilePaymentPage(res, true);
             return res.redirect(`${process.env.DOMAIN_WEBSITE}/hotels/success?bookingId=${bookingId}&payment=success`);
         }
 
         const safeBookingId = bookingId && mongoose.Types.ObjectId.isValid(bookingId) ? bookingId : "";
+        if (fromMobile) return sendMobilePaymentPage(res, false);
         return res.redirect(`${process.env.DOMAIN_WEBSITE}/hotels/success?bookingId=${safeBookingId}&payment=failed`);
     } catch (error: any) {
         return res.redirect(`${process.env.DOMAIN_WEBSITE}/hotels/success?payment=failed`);
@@ -657,10 +678,14 @@ export const paymentBoardingZalopayReturn = async (req: Request, res: Response) 
 };
 
 export const paymentBoardingVNPayResult = async (req: Request, res: Response) => {
-    let vnpParams = req.query as Record<string, any>;
-    const secureHash = pickFirstQueryValue(vnpParams.vnp_SecureHash);
-    delete vnpParams.vnp_SecureHash;
-    delete vnpParams.vnp_SecureHashType;
+    const rawParams = req.query as Record<string, any>;
+    const secureHash = pickFirstQueryValue(rawParams.vnp_SecureHash);
+    let vnpParams: Record<string, string> = {};
+    for (const [key, value] of Object.entries(rawParams)) {
+        if (!key.startsWith("vnp_")) continue;
+        if (key === "vnp_SecureHash" || key === "vnp_SecureHashType") continue;
+        vnpParams[key] = String(pickFirstQueryValue(value) || "");
+    }
     vnpParams = sortObject(vnpParams);
 
     const querystring = require("qs");
@@ -670,6 +695,7 @@ export const paymentBoardingVNPayResult = async (req: Request, res: Response) =>
     const hmac = crypto.createHmac("sha512", `${paymentSettings.vnpHashSecret}`);
     const signed = hmac.update(Buffer.from(signData, "utf-8")).digest("hex");
 
+    const fromMobile = isMobileSource(req.query?.source);
     if (secureHash === signed) {
         const txnRef = String(pickFirstQueryValue(vnpParams.vnp_TxnRef) || "");
         const responseCode = String(pickFirstQueryValue(vnpParams.vnp_ResponseCode) || "");
@@ -686,12 +712,15 @@ export const paymentBoardingVNPayResult = async (req: Request, res: Response) =>
                     { $set: buildSuccessfulPaymentUpdate(booking) }
                 );
             }
+            if (fromMobile) return sendMobilePaymentPage(res, true);
             return res.redirect(`${process.env.DOMAIN_WEBSITE}/hotels/success?bookingId=${bookingId}&payment=success`);
         }
 
         const safeBookingId = booking?._id || "";
+        if (fromMobile) return sendMobilePaymentPage(res, false);
         return res.redirect(`${process.env.DOMAIN_WEBSITE}/hotels/success?bookingId=${safeBookingId}&payment=failed`);
     }
+    if (fromMobile) return sendMobilePaymentPage(res, false);
     return res.status(400).json({ message: "Invalid signature" });
 };
 
