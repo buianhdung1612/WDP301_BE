@@ -113,8 +113,20 @@ export const createPost = async (req: Request, res: Response) => {
             const productDetail: any = await Product.findOne({
                 _id: item.productId,
                 deleted: false,
-                status: "active"
+                status: "active",
+                $or: [
+                    { expiryDate: { $exists: false } },
+                    { expiryDate: null },
+                    { expiryDate: { $gte: new Date() } }
+                ]
             });
+
+            if (!productDetail) {
+                return res.json({
+                    code: "error",
+                    message: "Một hoặc nhiều sản phẩm trong giỏ hàng đã hết hạn hoặc không còn kinh doanh. Vui lòng kiểm tra lại!"
+                });
+            }
 
             if (productDetail) {
                 let price = 0;
@@ -130,6 +142,11 @@ export const createPost = async (req: Request, res: Response) => {
                             _id: item.productId,
                             deleted: false,
                             status: "active",
+                            $or: [
+                                { expiryDate: { $exists: false } },
+                                { expiryDate: null },
+                                { expiryDate: { $gte: new Date() } }
+                            ],
                             variants: {
                                 $elemMatch: {
                                     attributeValue: { $all: elemsMatch, $size: item.variant.length },
@@ -175,6 +192,11 @@ export const createPost = async (req: Request, res: Response) => {
                             _id: item.productId,
                             deleted: false,
                             status: "active",
+                            $or: [
+                                { expiryDate: { $exists: false } },
+                                { expiryDate: null },
+                                { expiryDate: { $gte: new Date() } }
+                            ],
                             stock: { $gte: item.quantity }
                         },
                         { $inc: { stock: -item.quantity } }
@@ -199,6 +221,13 @@ export const createPost = async (req: Request, res: Response) => {
                 };
                 dataFinal.items.push(itemFinal);
             }
+        }
+
+        if (dataFinal.items.length === 0) {
+            return res.json({
+                code: "error",
+                message: "Đơn hàng của bạn không có sản phẩm nào hợp lệ!"
+            });
         }
 
         // Tính tổng tiền tạm tính

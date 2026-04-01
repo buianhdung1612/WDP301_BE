@@ -385,6 +385,9 @@ export const listBookings = async (req: Request, res: Response) => {
 
         if (req.query.staffId) {
             filter["petStaffMap.staffId"] = req.query.staffId;
+        } else if (req.query.staffIds) {
+            const sIds = (req.query.staffIds as string).split(",");
+            filter["petStaffMap.staffId"] = { $in: sIds.filter(id => id.length === 24) }; // Ensure valid objectIds
         }
 
         // Filter by appointment date (start field)
@@ -1571,8 +1574,8 @@ export const completeBooking = async (req: Request, res: Response) => {
         const allCompleted = booking.petStaffMap.every((m: any) => m.status === "completed");
 
         if (allCompleted) {
-            // Khi toàn bộ thú cưng đã hoàn thành, NẾU ĐÃ THANH TOÁN -> Hoàn thành tổng đơn
-            if (["paid", "partially_paid"].includes(booking.paymentStatus) && !["completed", "cancelled", "returned"].includes(booking.bookingStatus)) {
+            // Khi toàn bộ thú cưng đã hoàn thành, NẾU ĐÃ THANH TOÁN ĐỦ -> Hoàn thành tổng đơn
+            if (booking.paymentStatus === 'paid' && !["completed", "cancelled", "returned"].includes(booking.bookingStatus)) {
                 booking.bookingStatus = "completed";
                 booking.completedAt = new Date();
             }
@@ -1663,7 +1666,11 @@ export const completeBooking = async (req: Request, res: Response) => {
 
         res.json({
             code: 200,
-            message: allCompleted ? "Hoàn thành lịch đặt thành công" : "Đã cập nhật trạng thái thú cưng",
+            message: allCompleted
+                ? (booking.bookingStatus === 'completed'
+                    ? "Hoàn thành lịch đặt thành công"
+                    : "Mọi phần việc đã hoàn thành! Vui lòng thực hiện thanh toán đủ để hoàn tất đơn hàng")
+                : "Đã cập nhật trạng thái thú cưng",
             data: booking
         });
     } catch (error) {
