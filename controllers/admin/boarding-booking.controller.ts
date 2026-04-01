@@ -491,7 +491,7 @@ export const batchCreateBoardingBooking = async (req: Request, res: Response) =>
 
         const config = await BoardingConfig.findOne() || { depositPercentage: 20, minDaysForDeposit: 2 };
 
-        const totalDays = Math.ceil((checkOut.getTime() - checkIn.getTime()) / (1000 * 60 * 60 * 24));
+        const totalDays = Math.max(1, dayjs(checkOut).startOf('day').diff(dayjs(checkIn).startOf('day'), 'day'));
         const createdBookings = [];
         const sharedCode = generateBoardingCode();
 
@@ -540,6 +540,13 @@ export const batchCreateBoardingBooking = async (req: Request, res: Response) =>
             const cage = cages.find(c => String(c._id) === String(item.cageId));
 
             if (!pet) return res.status(400).json({ code: 400, message: `Thú cưng ${item.petId} không thuộc khách hàng đã chọn` });
+
+            if ((Number(pet.age) || 0) < 6) {
+                return res.status(400).json({ 
+                    code: 400, 
+                    message: `Thú cưng ${pet.name} chưa đủ 6 tháng tuổi (Hiện tại: ${pet.age} tháng). Khách sạn chỉ nhận thú cưng từ 6 tháng tuổi trở lên.` 
+                });
+            }
             if (!cage) return res.status(400).json({ code: 400, message: `Không tìm thấy chuồng ${item.cageId}` });
             if (cage.status === "maintenance") return res.status(400).json({ code: 400, message: `Chuồng ${cage.cageCode} đang bảo trì` });
             if (cage.maxWeightCapacity && Number(pet.weight || 0) > Number(cage.maxWeightCapacity)) {
@@ -694,8 +701,19 @@ export const createBoardingBooking = async (req: Request, res: Response) => {
             return res.status(400).json({ code: 400, message: "Thieu ngay nhan hoac ngay tra chuong" });
         }
 
-        const checkIn = new Date(checkInDate);
-        const checkOut = new Date(checkOutDate);
+        const config = await BoardingConfig.findOne() || { 
+            checkInTime: "14:00", 
+            checkOutTime: "12:00", 
+            depositPercentage: 20, 
+            minDaysForDeposit: 2 
+        };
+
+        const [inH, inM] = (config.checkInTime || "14:00").split(":").map(Number);
+        const [outH, outM] = (config.checkOutTime || "12:00").split(":").map(Number);
+
+        const checkIn = dayjs(checkInDate).startOf("day").set("hour", inH).set("minute", inM).toDate();
+        const checkOut = dayjs(checkOutDate).startOf("day").set("hour", outH).set("minute", outM).toDate();
+
         if (Number.isNaN(checkIn.getTime()) || Number.isNaN(checkOut.getTime()) || checkOut <= checkIn) {
             return res.status(400).json({ code: 400, message: "Khoang thoi gian luu tru khong hop le" });
         }
@@ -708,6 +726,13 @@ export const createBoardingBooking = async (req: Request, res: Response) => {
         const pet = await Pet.findOne({ _id: petId, userId, deleted: false }).select("name type breed weight age avatar").lean();
         if (!pet) {
             return res.status(400).json({ code: 400, message: "Thu cung khong thuoc khach hang da chon" });
+        }
+
+        if ((Number(pet.age) || 0) < 6) {
+            return res.status(400).json({ 
+                code: 400, 
+                message: `Thú cưng ${pet.name} chưa đủ 6 tháng tuổi (Hiện tại: ${pet.age} tháng). Khách sạn chỉ nhận thú cưng từ 6 tháng tuổi trở lên.` 
+            });
         }
 
         // Check if pet already has a booking in this period
@@ -760,7 +785,7 @@ export const createBoardingBooking = async (req: Request, res: Response) => {
             return res.status(400).json({ code: 400, message: "Chuong da het cho trong khoang thoi gian nay" });
         }
 
-        const totalDays = Math.ceil((checkOut.getTime() - checkIn.getTime()) / (1000 * 60 * 60 * 24));
+        const totalDays = Math.max(1, dayjs(checkOut).startOf('day').diff(dayjs(checkIn).startOf('day'), 'day'));
         const pricePerDay = Number(cage.dailyPrice || 0);
         const subTotal = totalDays * pricePerDay;
         const finalDiscount = Math.max(Number(discount || 0), 0);
@@ -778,7 +803,7 @@ export const createBoardingBooking = async (req: Request, res: Response) => {
             { careDate: checkIn, checkInDate: checkIn }
         );
 
-        const config = await BoardingConfig.findOne() || { depositPercentage: 20, minDaysForDeposit: 2 };
+
 
         const depositAmount = getDepositAmount(total, paymentMethod, totalDays, config);
         const depositPercent = depositAmount > 0 ? (config.depositPercentage || 20) : 0;
@@ -1088,7 +1113,7 @@ export const getBoardingBookingDetail = async (req: Request, res: Response) => {
 export const updateBoardingBookingStatus = async (req: Request, res: Response) => {
     try {
         const id = pickParam(req.params.id);
-        const { boardingStatus } = req.body as { boardingStatus: string };
+        const { boardingStatus, cancelledReason } = req.body as { boardingStatus: string, cancelledReason?: string };
         if (!id || !mongoose.Types.ObjectId.isValid(id)) {
             return res.status(400).json({ code: 400, message: "ID khong hop le" });
         }
@@ -1186,7 +1211,7 @@ export const updateBoardingBookingStatus = async (req: Request, res: Response) =
             if (boardingStatus === "cancelled") {
                 booking.cancelledAt = new Date();
                 booking.cancelledBy = "admin";
-                booking.cancelledReason = booking.cancelledReason || "Admin cap nhat";
+                booking.cancelledReason = (cancelledReason || "Admin cập nhật").trim();
                 await updateAllCageStatus("available");
             } else if (["held", "confirmed", "pending"].includes(boardingStatus)) {
                 await updateAllCageStatus("occupied");
@@ -1293,9 +1318,16 @@ export const updateBoardingBookingDetail = async (req: Request, res: Response) =
 
         // Tính lại số ngày nếu ngày nhận/trả thay đổi
         if (data.checkInDate || data.checkOutDate) {
-            const checkIn = dayjs(data.checkInDate || booking.checkInDate);
-            const checkOut = dayjs(data.checkOutDate || booking.checkOutDate);
-            data.numberOfDays = checkOut.diff(checkIn, 'day') + 1;
+            const config = await BoardingConfig.findOne() || { checkInTime: "14:00", checkOutTime: "12:00" };
+            const [inH, inM] = (config.checkInTime || "14:00").split(":").map(Number);
+            const [outH, outM] = (config.checkOutTime || "12:00").split(":").map(Number);
+
+            const checkIn = dayjs(data.checkInDate || booking.checkInDate).startOf("day").set("hour", inH).set("minute", inM);
+            const checkOut = dayjs(data.checkOutDate || booking.checkOutDate).startOf("day").set("hour", outH).set("minute", outM);
+            
+            data.checkInDate = checkIn.toDate();
+            data.checkOutDate = checkOut.toDate();
+            data.numberOfDays = Math.max(1, dayjs(checkOut).startOf('day').diff(dayjs(checkIn).startOf('day'), 'day'));
         }
 
         // Check occupancy for pets (excluding current booking)

@@ -10,6 +10,7 @@ import BoardingCage from "../../models/boarding-cage.model";
 import Pet from "../../models/pet.model";
 import BoardingConfig from "../../models/boarding-config.model";
 import AccountAdmin from "../../models/account-admin.model";
+import Notification from "../../models/notification.model";
 import { buildDefaultBoardingCareSchedule } from "../../utils/boarding-care-template.util";
 import { getFreestBoardingStaffForDate } from "../../helpers/boarding-staff-assignment.helper";
 
@@ -233,14 +234,21 @@ export const createBoardingBooking = async (req: Request, res: Response) => {
             return res.status(400).json({ message: "Cage is under maintenance" });
         }
 
-        const totalDays = Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
-        if (totalDays <= 0) {
+        const totalDays = Math.max(1, dayjs(end).startOf('day').diff(dayjs(start).startOf('day'), 'day'));
+        if (totalDays < 1) {
             return res.status(400).json({ message: "Invalid date range" });
         }
 
         const pets = await Pet.find({ _id: { $in: normalizedPetIds }, userId, deleted: false });
         if (pets.length !== normalizedPetIds.length) {
             return res.status(400).json({ message: "Một hoặc nhiều thú cưng không hợp lệ" });
+        }
+
+        const andUnderagePet = pets.find(p => (p.age || 0) < 6);
+        if (andUnderagePet) {
+            return res.status(400).json({ 
+                message: `Thú cưng ${andUnderagePet.name} chưa đủ 6 tháng tuổi. Khách sạn chỉ nhận thú cưng từ 6 tháng tuổi trở lên để đảm bảo sức khỏe và an toàn.` 
+            });
         }
 
         // Check if any pet already has a booking in this period
@@ -801,20 +809,69 @@ export const cancelBoardingBooking = async (req: Request, res: Response) => {
             return res.status(400).json({ message: "Cannot cancel after check-in" });
         }
 
-        const createdAt = (booking as any).createdAt;
-        const diffMins = dayjs().diff(dayjs(createdAt), "minute");
-        const isLostDeposit = diffMins > 30;
-
         booking.boardingStatus = "cancelled";
         booking.cancelledAt = new Date();
-        booking.cancelledReason = reason || "Khach hang huy";
-        if (isLostDeposit) {
-            booking.cancelledReason += " (Quá 30p - Mất cọc)";
-            (booking as any).isLostDeposit = true;
-        }
+        booking.cancelledReason = reason || "Khách hàng hủy";
+        booking.cancelledReason += " (Hủy bởi khách - Mất cọc 20%)";
+        booking.isLostDeposit = true;
+        
+        let notificationContent = `Bạn đã hủy đơn đặt khách sạn #${booking.code?.slice(-6).toUpperCase()}.`;
+        notificationContent += ` Lưu ý: Bạn sẽ bị khấu trừ toàn bộ tiền đặt cọc (tương đương 20% tổng giá trị đơn hàng) theo chính sách hủy.`;
+        
         booking.cancelledBy = "customer";
         await booking.save();
-        return res.json({ message: "Booking cancelled successfully" });
+
+        // Release Cage
+        if (booking.cageId) {
+            const cageId = String(booking.cageId);
+            // Check if cage is still used by other pets in the same time range (for shared cages)
+            const overlap = await BoardingBooking.findOne({
+                _id: { $ne: booking._id },
+                cageId: booking.cageId,
+                boardingStatus: { $in: ["confirmed", "checked-in", "held"] },
+                checkInDate: { $lt: booking.checkOutDate },
+                checkOutDate: { $gt: booking.checkInDate }
+            });
+            if (!overlap) {
+                await BoardingCage.findByIdAndUpdate(cageId, { status: "available" });
+            }
+        }
+
+        // Create Notification for User
+        try {
+            await Notification.create({
+                receiverId: booking.userId,
+                title: "Hủy đơn đặt khách sạn thành công",
+                content: notificationContent,
+                type: "boarding",
+                metadata: { boardingId: booking._id, code: booking.code }
+            });
+        } catch (err) {
+            console.error("Error creating user notification:", err);
+        }
+
+        // Create Notification for Admins
+        try {
+            const admins = await AccountAdmin.find({ deleted: false }).select("_id").lean();
+            if (admins.length > 0) {
+                const adminNotifications = admins.map(admin => ({
+                    receiverId: admin._id,
+                    senderId: booking.userId,
+                    title: "Có đơn đặt khách sạn vừa bị hủy",
+                    content: `Khách hàng ${booking.fullName || "vừa"} hủy đơn #${booking.code?.slice(-6).toUpperCase()}. Lý do: ${booking.cancelledReason}`,
+                    type: "boarding",
+                    metadata: { boardingId: booking._id, code: booking.code }
+                }));
+                await Notification.insertMany(adminNotifications);
+            }
+        } catch (err) {
+            console.error("Error creating admin notifications:", err);
+        }
+
+        return res.json({ 
+            code: 200, 
+            message: "Hủy đơn thành công"
+        });
     } catch (error: any) {
         return res.status(500).json({ message: error.message });
     }
