@@ -28,6 +28,44 @@ function sortObject(obj: any) {
     return sorted;
 }
 
+const trimTrailingSlash = (value: string) => value.replace(/\/+$/, "");
+const isLocalHost = (host: string) => /^(localhost|127\.0\.0\.1)(:\d+)?$/i.test(host.trim());
+const isMobileSource = (value: unknown) => String(value || "").toLowerCase() === "mobile";
+const toSingleQueryValue = (value: unknown): string => {
+    if (Array.isArray(value)) return String(value[0] || "");
+    return String(value || "");
+};
+
+const resolvePublicBackendUrl = (req: Request) => {
+    const paymentConfigured = String(process.env.PAYMENT_PUBLIC_BACKEND_URL || "").trim();
+    const configured = String(process.env.BACKEND_URL || "").trim();
+    const forwardedHost = String(req.get("x-forwarded-host") || "").split(",")[0].trim();
+    const forwardedProto = String(req.get("x-forwarded-proto") || "").split(",")[0].trim();
+    const host = forwardedHost || String(req.get("host") || "").trim();
+    const proto = forwardedProto || req.protocol || "http";
+
+    if (paymentConfigured) return trimTrailingSlash(paymentConfigured);
+    if (host && !isLocalHost(host)) return trimTrailingSlash(`${proto}://${host}`);
+    if (configured) return trimTrailingSlash(configured);
+    return trimTrailingSlash(`${proto}://${host || "localhost:3000"}`);
+};
+
+const sendMobilePaymentPage = (res: Response, success: boolean) => {
+    const title = success ? "Thanh toán thành công" : "Thanh toán chưa thành công";
+    const desc = success
+        ? "Bạn có thể quay lại ứng dụng TeddyPet, hệ thống sẽ tự cập nhật trạng thái."
+        : "Vui lòng quay lại ứng dụng TeddyPet để thử lại hoặc kiểm tra trạng thái.";
+    const color = success ? "#05A845" : "#E24A4A";
+    return res.status(200).send(`<!doctype html>
+<html lang="vi"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>${title}</title></head>
+<body style="font-family:Arial,sans-serif;background:#fff7f7;padding:24px;">
+<div style="max-width:560px;margin:60px auto;background:#fff;border:1px solid #f0e6e6;border-radius:12px;padding:22px;">
+<h2 style="margin:0 0 8px;color:${color};">${title}</h2>
+<p style="margin:0;color:#444;line-height:1.6">${desc}</p>
+</div></body></html>`);
+};
+
 // [POST] /api/v1/client/order/create
 export const createPost = async (req: Request, res: Response) => {
     const dataFinal: any = {};
@@ -436,7 +474,7 @@ export const paymentZalopayResult = async (req: Request, res: Response) => {
 }
 
 export const paymentVNPay = async (req: Request, res: Response) => {
-    const { orderCode, bookingCode, phone } = req.query;
+    const { orderCode, bookingCode, phone, source } = req.query;
     let target: any = null;
     let code: any = "";
     if (orderCode) {
@@ -454,8 +492,9 @@ export const paymentVNPay = async (req: Request, res: Response) => {
     const ipAddr = req.headers['x-forwarded-for'] || req.connection.remoteAddress || req.socket.remoteAddress;
     const paymentSettings = await getApiPayment();
     let tmnCode = `${paymentSettings.vnpTmnCode}`;
-    const cleanBackendUrl = (process.env.BACKEND_URL || "").replace(/\/$/, "");
-    let returnUrl = `${cleanBackendUrl}/api/v1/client/order/payment-vnpay-result`;
+    const cleanBackendUrl = resolvePublicBackendUrl(req);
+    const mobileQuery = isMobileSource(source) ? "?source=mobile" : "";
+    let returnUrl = `${cleanBackendUrl}/api/v1/client/order/payment-vnpay-result${mobileQuery}`;
     let orderId = `${phone}-${code}-${Date.now()}`;
     let amount = target.total || 0;
     if (bookingCode && target.depositAmount > 0 && target.paymentStatus === "unpaid") {
@@ -497,71 +536,98 @@ export const paymentVNPay = async (req: Request, res: Response) => {
 
 export const paymentVNPayResult = async (req: Request, res: Response) => {
     try {
-        const vnp_Params: any = { ...req.query };
-        const secureHash = vnp_Params['vnp_SecureHash'];
-        delete vnp_Params['vnp_SecureHash'];
-        delete vnp_Params['vnp_SecureHashType'];
+        const fromMobile = isMobileSource(req.query?.source);
+        const rawParams: Record<string, unknown> = req.query as Record<string, unknown>;
+        const secureHash = toSingleQueryValue(rawParams["vnp_SecureHash"]);
+        const vnp_Params: Record<string, string> = {};
+
+        for (const [key, value] of Object.entries(rawParams)) {
+            if (!key.startsWith("vnp_")) continue;
+            if (key === "vnp_SecureHash" || key === "vnp_SecureHashType") continue;
+            vnp_Params[key] = toSingleQueryValue(value);
+        }
 
         const sortedParams = sortObject(vnp_Params);
         const paymentSettings = await getApiPayment();
         const secretKey = `${paymentSettings?.vnpHashSecret || ""}`;
 
-        const querystring = require('qs');
+        const querystring = require("qs");
         const signData = querystring.stringify(sortedParams, { encode: false });
         const crypto = require("crypto");
         const hmac = crypto.createHmac("sha512", secretKey);
-        const signed = hmac.update(Buffer.from(signData, 'utf-8')).digest("hex");
+        const signed = hmac.update(Buffer.from(signData, "utf-8")).digest("hex");
 
-        if (secureHash === signed) {
-            const [phone, code] = (vnp_Params['vnp_TxnRef'] as string).split('-');
+        if (secureHash !== signed) {
+            if (fromMobile) return sendMobilePaymentPage(res, false);
+            return res.status(400).json({ code: "error", message: "Sai chu ky VNPay" });
+        }
 
-            if (vnp_Params['vnp_ResponseCode'] === '00') {
-                if (code.startsWith("BK")) {
-                    const booking = await Booking.findOne({ code, deleted: false }).populate("userId");
-                    if (booking && (booking as any).userId?.phone === phone) {
-                        let updateData: any = {};
-                        if (booking.depositAmount > 0 && booking.paymentStatus === "unpaid") {
-                            updateData.paymentStatus = (booking.depositAmount || 0) >= (booking.total || 0) ? "paid" : "partially_paid";
-                            updateData.depositMethod = "vnpay";
-                            updateData.bookingStatus = "confirmed";
-                        } else {
-                            updateData.paymentStatus = "paid";
-                            updateData.bookingStatus = "confirmed";
-                        }
-                        await Booking.updateOne({ _id: booking._id }, updateData);
+        const [phone, code] = String(vnp_Params["vnp_TxnRef"] || "").split("-");
+        if (!phone || !code) {
+            if (fromMobile) return sendMobilePaymentPage(res, false);
+            return res.status(400).json({ code: "error", message: "Thieu thong tin giao dich VNPay" });
+        }
+
+        if (vnp_Params["vnp_ResponseCode"] === "00") {
+            if (code.startsWith("BK")) {
+                const booking = await Booking.findOne({ code, deleted: false }).populate("userId");
+                if (booking && (booking as any).userId?.phone === phone) {
+                    const updateData: any = {};
+                    if (booking.depositAmount > 0 && booking.paymentStatus === "unpaid") {
+                        updateData.paymentStatus = (booking.depositAmount || 0) >= (booking.total || 0) ? "paid" : "partially_paid";
+                        updateData.depositMethod = "vnpay";
+                        updateData.bookingStatus = "confirmed";
+                    } else {
+                        updateData.paymentStatus = "paid";
+                        updateData.bookingStatus = "confirmed";
                     }
-                } else {
-                    await Order.findOneAndUpdate({ phone, code, deleted: false }, {
-                        paymentStatus: 'paid',
-                        orderStatus: 'confirmed',
-                        confirmedAt: new Date()
-                    });
-                    await addPointAfterPayment(code);
+                    await Booking.updateOne({ _id: booking._id }, updateData);
                 }
-                res.redirect(`${process.env.DOMAIN_WEBSITE}${code.startsWith("BK") ? '/dashboard/bookings' : `/order/success?orderCode=${code}&phone=${phone}`}`);
             } else {
-                if (code.startsWith("BK")) {
-                    const booking = await Booking.findOne({ code, deleted: false }).populate("userId");
-                    if (booking && (booking as any).userId?.phone === phone) {
-                        await Booking.updateOne({ _id: booking._id }, { paymentStatus: 'unpaid', bookingStatus: 'cancelled' });
+                await Order.findOneAndUpdate(
+                    { phone, code, deleted: false },
+                    {
+                        paymentStatus: "paid",
+                        orderStatus: "confirmed",
+                        confirmedAt: new Date()
                     }
-                } else {
-                    await Order.findOneAndUpdate({ phone, code, deleted: false }, {
-                        paymentStatus: 'unpaid',
-                        orderStatus: 'cancelled',
-                        cancelledAt: new Date(),
-                        cancelledBy: "system"
-                    });
-                    await refundOrderResources(code);
+                );
+                try {
+                    await addPointAfterPayment(code);
+                } catch (pointError) {
+                    console.error("ADD POINT AFTER VNPAY ERROR:", pointError);
                 }
-                res.redirect(`${process.env.DOMAIN_WEBSITE}${code.startsWith("BK") ? '/dashboard/bookings' : '/cart'}`);
+            }
+
+            if (fromMobile) return sendMobilePaymentPage(res, true);
+            return res.redirect(`${process.env.DOMAIN_WEBSITE}${code.startsWith("BK") ? "/dashboard/bookings" : `/order/success?orderCode=${code}&phone=${phone}`}`);
+        }
+
+        if (code.startsWith("BK")) {
+            const booking = await Booking.findOne({ code, deleted: false }).populate("userId");
+            if (booking && (booking as any).userId?.phone === phone) {
+                await Booking.updateOne({ _id: booking._id }, { paymentStatus: "unpaid", bookingStatus: "cancelled" });
             }
         } else {
-            res.render('success', { code: '97' });
+            await Order.findOneAndUpdate(
+                { phone, code, deleted: false },
+                {
+                    paymentStatus: "unpaid",
+                    orderStatus: "cancelled",
+                    cancelledAt: new Date(),
+                    cancelledBy: "system"
+                }
+            );
+            await refundOrderResources(code);
         }
+
+        if (fromMobile) return sendMobilePaymentPage(res, false);
+        return res.redirect(`${process.env.DOMAIN_WEBSITE}${code.startsWith("BK") ? "/dashboard/bookings" : "/cart"}`);
     } catch (error) {
         console.error("VNPAY RESULT ERROR:", error);
-        res.status(500).json({ code: "error", message: "Lỗi hệ thống khi xử lý thanh toán VNPay" });
+        const fromMobile = isMobileSource(req.query?.source);
+        if (fromMobile) return sendMobilePaymentPage(res, false);
+        return res.status(500).json({ code: "error", message: "Loi he thong khi xu ly thanh toan VNPay" });
     }
 };
 
@@ -693,4 +759,5 @@ export const confirmReceipt = async (req: Request, res: Response) => {
         res.json({ code: "error", message: "Lỗi hệ thống!" });
     }
 };
+
 
