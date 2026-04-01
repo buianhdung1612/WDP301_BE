@@ -242,6 +242,24 @@ export const createBoardingBooking = async (req: Request, res: Response) => {
         if (pets.length !== normalizedPetIds.length) {
             return res.status(400).json({ message: "Một hoặc nhiều thú cưng không hợp lệ" });
         }
+
+        // Check if any pet already has a booking in this period
+        const busyPets = await BoardingBooking.find({
+            deleted: false,
+            boardingStatus: { $nin: ["cancelled"] },
+            petIds: { $in: normalizedPetIds },
+            checkInDate: { $lt: end },
+            checkOutDate: { $gt: start }
+        }).select("petIds code").lean();
+
+        if (busyPets.length > 0) {
+            const busyPetIds = busyPets.flatMap(b => b.petIds.map(id => String(id)));
+            const foundPet = pets.find(p => busyPetIds.includes(String(p._id)));
+            const bookingRef = busyPets[0].code ? ` (#${busyPets[0].code})` : "";
+            return res.status(400).json({
+                message: `Thú cưng ${foundPet?.name || "của bạn"} đã có lịch đặt khách sạn trong thời gian này${bookingRef}.`
+            });
+        }
         if (cage.maxWeightCapacity) {
             const hasOverWeight = pets.some((pet) => (pet.weight || 0) > cage.maxWeightCapacity!);
             if (hasOverWeight) {
@@ -297,7 +315,8 @@ export const createBoardingBooking = async (req: Request, res: Response) => {
         const totalPrice = Math.max(basePrice - discountAmount, 0);
         const bookingCode = `BRD${new Date().toISOString().replace(/\D/g, "").slice(0, 14)}`;
 
-        const freestStaff = await getFreestBoardingStaffForDate(start);
+        const freestStaff = await getFreestBoardingStaffForDate(start, {}, normalizedPetIds.length);
+        const staffWarning = !freestStaff;
         const defaultCareSchedule = buildDefaultBoardingCareSchedule(pets as any[], freestStaff, customFeeding, customExercise);
 
         const depositAmount = getDepositAmount(totalPrice, paymentMethod, totalDays, config);
@@ -341,11 +360,12 @@ export const createBoardingBooking = async (req: Request, res: Response) => {
             await Notification.create({
                 senderId: userId,
                 type: "boarding",
-                title: "Yêu cầu đặt phòng mới",
-                content: `Yêu cầu đặt phòng mới (${bookingCode}) từ ${fullName}`,
+                title: `Yêu cầu đặt phòng mới${staffWarning ? " (Cần gán nhân viên gấp!)" : ""}`,
+                content: `Yêu cầu đặt phòng mới (${bookingCode}) từ ${fullName}.${staffWarning ? " Hầu hết nhân viên hiện đang bận hoặc đã đạt giới hạn tối đa, vui lòng kiểm tra và gán nhân viên thủ công." : ""}`,
                 metadata: {
                     boardingId: (booking as any)._id,
-                    bookingCode: bookingCode
+                    bookingCode: bookingCode,
+                    staffWarning
                 },
                 status: "unread"
             });
@@ -830,6 +850,8 @@ export const getMyBoardingBookingDetail = async (req: Request, res: Response) =>
         })
             .populate("feedingSchedule.staffId", "fullName employeeCode")
             .populate("exerciseSchedule.staffId", "fullName employeeCode")
+            .populate("items.cageId", "cageCode type size dailyPrice description amenities maxCapacity avatar gallery")
+            .populate("items.petIds", "name avatar type breed weight birthday gender specialNeeds notes")
             .lean();
 
         if (!booking) return res.status(404).json({ message: "Booking not found" });

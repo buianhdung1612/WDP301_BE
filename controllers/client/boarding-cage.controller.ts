@@ -176,7 +176,7 @@ export const listAvailableCages = async (req: Request, res: Response): Promise<v
         { boardingStatus: { $in: ["pending", "confirmed", "checked-in"] } },
         { boardingStatus: "held", holdExpiresAt: { $gt: now } }
       ]
-    }).select("cageId quantity petIds");
+    }).select("cageId quantity petIds items petId").lean();
 
     const filter: any = {
       deleted: false,
@@ -189,23 +189,35 @@ export const listAvailableCages = async (req: Request, res: Response): Promise<v
       if (sizeFilter) filter.size = sizeFilter;
     }
 
-    const cages = await BoardingCage.find(filter);
+    const cages = await BoardingCage.find(filter).lean();
 
     const bookedByCage = new Map<string, number>();
     for (const booking of overlappingBookings) {
-      const cageId = String((booking as any)?.cageId || "");
-      if (!cageId || !mongoose.Types.ObjectId.isValid(cageId)) continue;
-      const nextQty = getBookingQuantity(booking);
-      bookedByCage.set(cageId, (bookedByCage.get(cageId) || 0) + nextQty);
+      if (Array.isArray((booking as any).items) && (booking as any).items.length > 0) {
+          (booking as any).items.forEach((item: any) => {
+              const cageId = String(item.cageId?._id || item.cageId || "");
+              if (cageId && mongoose.Types.ObjectId.isValid(cageId)) {
+                  const itemQty = Array.isArray(item.petIds) ? item.petIds.length : (item.petId ? 1 : 1);
+                  bookedByCage.set(cageId, (bookedByCage.get(cageId) || 0) + itemQty);
+              }
+          });
+      } else {
+          const cageId = String((booking as any).cageId?._id || (booking as any).cageId || "");
+          if (cageId && mongoose.Types.ObjectId.isValid(cageId)) {
+              const qty = getBookingQuantity(booking);
+              bookedByCage.set(cageId, (bookedByCage.get(cageId) || 0) + qty);
+          }
+      }
     }
 
     const payload = cages.map((cage: any) => {
       const cageId = String(cage?._id || "");
       const bookedRooms = Math.max(0, Number(bookedByCage.get(cageId) || 0));
-      const remainingRooms = Math.max(0, MAX_ROOMS_PER_CAGE - bookedRooms);
+      const totalRooms = Number(cage.totalRooms || 4);
+      const remainingRooms = Math.max(0, totalRooms - bookedRooms);
       return {
-        ...cage.toObject(),
-        totalRooms: MAX_ROOMS_PER_CAGE,
+        ...cage,
+        totalRooms,
         bookedRooms,
         remainingRooms,
         soldOut: remainingRooms <= 0

@@ -83,7 +83,11 @@ export async function getBoardingHotelStaffAccounts(staffIds?: string[]) {
 /**
  * Tìm nhân viên khách sạn rảnh nhất (có ít lượt gán nhiệm vụ nhất) trong một ngày cụ thể
  */
-export async function getFreestBoardingStaffForDate(dateVal: string | Date | undefined) {
+export async function getFreestBoardingStaffForDate(
+    dateVal: string | Date | undefined, 
+    batchWorkload: Record<string, number> = {},
+    upcomingItemsCount: number = 1
+) {
     if (!dateVal) return undefined;
     const dateObj = new Date(dateVal);
     if (Number.isNaN(dateObj.getTime())) return undefined;
@@ -107,34 +111,51 @@ export async function getFreestBoardingStaffForDate(dateVal: string | Date | und
     const staffs = await getBoardingHotelStaffAccounts(scheduledStaffIds.map((id) => String(id)));
     if (staffs.length === 0) return undefined;
 
-    // 3. Tính toán "tải trọng" (workload) dựa trên số lượng đơn hàng đang được gán
+    // 3. Tính toán "tải trọng" (workload) dựa trên số lượng thú cưng (item) đang được gán
     const staffWorkloads = await Promise.all(staffs.map(async (staff) => {
         const staffIdStr = String(staff._id);
 
-        // Đếm số đơn mà nhân viên này đang phụ trách trong các trạng thái còn hiệu lực
-        const bookingCount = await BoardingBooking.countDocuments({
+        const activeBookings = await BoardingBooking.find({
             deleted: false,
             boardingStatus: { $in: ["confirmed", "checked-in"] },
             $or: [
                 { "feedingSchedule.staffId": staffIdStr },
                 { "exerciseSchedule.staffId": staffIdStr }
             ]
+        }).select("items feedingSchedule exerciseSchedule").lean();
+
+        // Count items assigned to this staff across all bookings
+        let itemWorkload = 0;
+        activeBookings.forEach(b => {
+             const petsForStaff = new Set<string>();
+             (b.feedingSchedule || []).forEach((f: any) => {
+                 if (String(f.staffId?._id || f.staffId) === staffIdStr && f.petId) {
+                     petsForStaff.add(String(f.petId?._id || f.petId));
+                 }
+             });
+             (b.exerciseSchedule || []).forEach((e: any) => {
+                 if (String(e.staffId?._id || e.staffId) === staffIdStr && e.petId) {
+                     petsForStaff.add(String(e.petId?._id || e.petId));
+                 }
+             });
+             itemWorkload += petsForStaff.size;
         });
+
+        // Add workload from current batch in progress
+        const inMemory = batchWorkload[staffIdStr] || 0;
 
         return {
             staff,
-            workload: bookingCount
+            workload: itemWorkload + inMemory
         };
     }));
 
     const config = (await BoardingConfig.findOne()) || { maxCagesPerStaff: 10 };
     const maxLimit = config.maxCagesPerStaff || 10;
 
-    // 4. Lọc bỏ người đã đạt giới hạn và chọn người có tải trọng thấp nhất
-    const eligibleWorkloads = staffWorkloads.filter((sw) => sw.workload < maxLimit);
+    // 4. Lọc bỏ người đã đạt giới hạn (tính cả đơn hàng sắp gán này)
+    const eligibleWorkloads = staffWorkloads.filter((sw) => sw.workload + upcomingItemsCount <= maxLimit);
     if (eligibleWorkloads.length === 0) {
-        // Tùy chọn: Nếu tất cả đều bận, có thể fallback hoặc cảnh báo
-        // Hiện tại trả về người ít bận nhất hoặc undefined tùy nghiệp vụ
         return undefined;
     }
 

@@ -133,6 +133,25 @@ const schema = new mongoose.Schema(
             ref: "BoardingCage"
         },
 
+        // Support multiple items (cages) in one order
+        items: [{
+            cageId: {
+                type: mongoose.Schema.Types.ObjectId,
+                ref: "BoardingCage"
+            },
+            petIds: [{
+                type: mongoose.Schema.Types.ObjectId,
+                ref: "Pet"
+            }],
+            pricePerDay: Number,
+            subTotal: Number,
+            discount: Number,
+            total: Number,
+            notes: String,
+            specialCare: String,
+            _id: false
+        }],
+
         checkInDate: Date,
         checkOutDate: Date,
         numberOfDays: Number,
