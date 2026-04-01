@@ -214,10 +214,18 @@ export const editPatch = async (req: Request, res: Response) => {
         }
 
         // 2. Một khi đã ở trạng thái kết thúc của thanh toán (paid, refunded), không cho phép quay đầu hoặc sửa đổi
-        if (["paid", "refunded"].includes(order.paymentStatus) && paymentStatus && paymentStatus !== order.paymentStatus) {
+        // 2. Một khi đã ở trạng thái kết thúc của thanh toán (paid, refunded), không cho phép quay đầu hoặc sửa đổi (trừ khi chuyển từ paid -> refunded)
+        if (order.paymentStatus === "refunded" && paymentStatus && paymentStatus !== order.paymentStatus) {
             return res.status(400).json({
                 code: 400,
-                message: `Trạng thái thanh toán đang là "${order.paymentStatus === 'paid' ? 'Đã thanh toán' : 'Đã hoàn tiền'}", không thể thay đổi!`
+                message: `Trạng thái thanh toán đang là "Đã hoàn tiền", không thể thay đổi!`
+            });
+        }
+
+        if (order.paymentStatus === "paid" && paymentStatus && !["paid", "refunded"].includes(paymentStatus)) {
+            return res.status(400).json({
+                code: 400,
+                message: `Trạng thái thanh toán đang là "Đã thanh toán", chỉ có thể chuyển sang "Đã hoàn tiền"!`
             });
         }
 

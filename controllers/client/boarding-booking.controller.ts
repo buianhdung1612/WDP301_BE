@@ -246,8 +246,8 @@ export const createBoardingBooking = async (req: Request, res: Response) => {
 
         const andUnderagePet = pets.find(p => (p.age || 0) < 6);
         if (andUnderagePet) {
-            return res.status(400).json({ 
-                message: `Thú cưng ${andUnderagePet.name} chưa đủ 6 tháng tuổi. Khách sạn chỉ nhận thú cưng từ 6 tháng tuổi trở lên để đảm bảo sức khỏe và an toàn.` 
+            return res.status(400).json({
+                message: `Thú cưng ${andUnderagePet.name} chưa đủ 6 tháng tuổi. Khách sạn chỉ nhận thú cưng từ 6 tháng tuổi trở lên để đảm bảo sức khỏe và an toàn.`
             });
         }
 
@@ -814,10 +814,10 @@ export const cancelBoardingBooking = async (req: Request, res: Response) => {
         booking.cancelledReason = reason || "Khách hàng hủy";
         booking.cancelledReason += " (Hủy bởi khách - Mất cọc 20%)";
         booking.isLostDeposit = true;
-        
+
         let notificationContent = `Bạn đã hủy đơn đặt khách sạn #${booking.code?.slice(-6).toUpperCase()}.`;
         notificationContent += ` Lưu ý: Bạn sẽ bị khấu trừ toàn bộ tiền đặt cọc (tương đương 20% tổng giá trị đơn hàng) theo chính sách hủy.`;
-        
+
         booking.cancelledBy = "customer";
         await booking.save();
 
@@ -868,8 +868,8 @@ export const cancelBoardingBooking = async (req: Request, res: Response) => {
             console.error("Error creating admin notifications:", err);
         }
 
-        return res.json({ 
-            code: 200, 
+        return res.json({
+            code: 200,
             message: "Hủy đơn thành công"
         });
     } catch (error: any) {

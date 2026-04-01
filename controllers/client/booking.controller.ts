@@ -479,6 +479,7 @@ export const createBooking = async (req: Request, res: Response) => {
 
         const newBooking = new Booking({
             code: bookingCode,
+            serviceId,
             userId,
             petStaffMap,
             petIds,
@@ -680,8 +681,8 @@ export const exportBookingPdf = async (req: Request, res: Response) => {
         </div>
         <div class="info-section">
             <div class="info-title">THÔNG TIN KHÁCH HÀNG</div>
-            <p><strong>Khách hàng:</strong> ${(booking.userId as any)?.fullName || "N/A"}</p>
-            <p><strong>Điện thoại:</strong> ${(booking.userId as any)?.phone || "N/A"}</p>
+            <p><strong>Khách hàng:</strong> ${(booking.userId as any)?.fullName || (booking as any).customerName || "N/A"}</p>
+            <p><strong>Điện thoại:</strong> ${(booking.userId as any)?.phone || (booking as any).customerPhone || "N/A"}</p>
         </div>
         <div class="info-section">
             <div class="info-title">CHI TIẾT DỊCH VỤ</div>

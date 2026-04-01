@@ -542,9 +542,9 @@ export const batchCreateBoardingBooking = async (req: Request, res: Response) =>
             if (!pet) return res.status(400).json({ code: 400, message: `Thú cưng ${item.petId} không thuộc khách hàng đã chọn` });
 
             if ((Number(pet.age) || 0) < 6) {
-                return res.status(400).json({ 
-                    code: 400, 
-                    message: `Thú cưng ${pet.name} chưa đủ 6 tháng tuổi (Hiện tại: ${pet.age} tháng). Khách sạn chỉ nhận thú cưng từ 6 tháng tuổi trở lên.` 
+                return res.status(400).json({
+                    code: 400,
+                    message: `Thú cưng ${pet.name} chưa đủ 6 tháng tuổi (Hiện tại: ${pet.age} tháng). Khách sạn chỉ nhận thú cưng từ 6 tháng tuổi trở lên.`
                 });
             }
             if (!cage) return res.status(400).json({ code: 400, message: `Không tìm thấy chuồng ${item.cageId}` });
@@ -701,11 +701,11 @@ export const createBoardingBooking = async (req: Request, res: Response) => {
             return res.status(400).json({ code: 400, message: "Thieu ngay nhan hoac ngay tra chuong" });
         }
 
-        const config = await BoardingConfig.findOne() || { 
-            checkInTime: "14:00", 
-            checkOutTime: "12:00", 
-            depositPercentage: 20, 
-            minDaysForDeposit: 2 
+        const config = await BoardingConfig.findOne() || {
+            checkInTime: "14:00",
+            checkOutTime: "12:00",
+            depositPercentage: 20,
+            minDaysForDeposit: 2
         };
 
         const [inH, inM] = (config.checkInTime || "14:00").split(":").map(Number);
@@ -729,9 +729,9 @@ export const createBoardingBooking = async (req: Request, res: Response) => {
         }
 
         if ((Number(pet.age) || 0) < 6) {
-            return res.status(400).json({ 
-                code: 400, 
-                message: `Thú cưng ${pet.name} chưa đủ 6 tháng tuổi (Hiện tại: ${pet.age} tháng). Khách sạn chỉ nhận thú cưng từ 6 tháng tuổi trở lên.` 
+            return res.status(400).json({
+                code: 400,
+                message: `Thú cưng ${pet.name} chưa đủ 6 tháng tuổi (Hiện tại: ${pet.age} tháng). Khách sạn chỉ nhận thú cưng từ 6 tháng tuổi trở lên.`
             });
         }
 
@@ -1324,7 +1324,7 @@ export const updateBoardingBookingDetail = async (req: Request, res: Response) =
 
             const checkIn = dayjs(data.checkInDate || booking.checkInDate).startOf("day").set("hour", inH).set("minute", inM);
             const checkOut = dayjs(data.checkOutDate || booking.checkOutDate).startOf("day").set("hour", outH).set("minute", outM);
-            
+
             data.checkInDate = checkIn.toDate();
             data.checkOutDate = checkOut.toDate();
             data.numberOfDays = Math.max(1, dayjs(checkOut).startOf('day').diff(dayjs(checkIn).startOf('day'), 'day'));

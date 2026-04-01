@@ -16,6 +16,7 @@ router.get("/service-categories", serviceController.getCategories);
 
 // ================= SERVICE BOOKINGS =================
 router.get("/bookings", authMiddleware.requireAuth, bookingController.listMyBookings);
+router.get("/export-pdf", bookingController.exportBookingPdf);
 router.get("/config", bookingController.getBookingConfig);
 router.get("/time-slots", bookingController.getAvailableTimeSlots);
 router.get("/bookings/:id", authMiddleware.requireAuth, bookingController.getMyBooking);

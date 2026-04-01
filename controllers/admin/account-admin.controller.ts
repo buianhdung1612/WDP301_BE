@@ -27,9 +27,9 @@ export const list = async (req: Request, res: Response) => {
             find.status = req.query.status;
         }
 
+        let finalRoleIds: any[] = [];
         if (req.query.roleIds) {
-            const roleIds = (req.query.roleIds as string).split(",");
-            find.roles = { $in: roleIds };
+            finalRoleIds = [...finalRoleIds, ...(req.query.roleIds as string).split(",")];
         }
 
         if (req.query.departmentId) {
@@ -37,8 +37,12 @@ export const list = async (req: Request, res: Response) => {
                 departmentId: req.query.departmentId,
                 deleted: false
             }).select("_id");
-            const departmentRoleIds = roles.map(r => r._id);
-            find.roles = { ...find.roles, $in: departmentRoleIds };
+            const departmentRoleIds = roles.map(r => r._id.toString());
+            finalRoleIds = [...finalRoleIds, ...departmentRoleIds];
+        }
+
+        if (finalRoleIds.length > 0) {
+            find.roles = { $in: [...new Set(finalRoleIds)] };
         }
 
         // Pagination

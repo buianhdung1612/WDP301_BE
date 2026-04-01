@@ -135,6 +135,19 @@ export const findBestStaffForBooking = async (
             return bStaffIds.includes(staff._id.toString());
         }).length;
 
+        // 1.5. Số đơn làm trong tuần (Tính từ đầu tuần đến cuối tuần của ngày booking)
+        const startOfWeek = dayjs(bookingDate).startOf('week').toDate();
+        const endOfWeek = dayjs(bookingDate).endOf('week').toDate();
+        const weekCount = await Booking.countDocuments({
+            "petStaffMap.staffId": staff._id,
+            bookingStatus: { $in: ["pending", "confirmed", "in-progress", "completed"] },
+            deleted: false,
+            start: {
+                $gte: startOfWeek,
+                $lte: endOfWeek
+            }
+        });
+
         // 2. Tổng số đơn đã làm trong quá khứ
         const totalPastCount = await Booking.countDocuments({
             "petStaffMap.staffId": staff._id,
@@ -142,36 +155,32 @@ export const findBestStaffForBooking = async (
             deleted: false
         });
 
-        // 3. Kinh nghiệm làm dịch vụ này (Số đơn dịch vụ này đã hoàn thành)
-        const experienceServiceCount = await Booking.countDocuments({
-            "petStaffMap.staffId": staff._id,
-            serviceId: serviceId,
-            bookingStatus: "completed",
-            deleted: false
-        });
-
-        console.log(`  v ${staff.fullName}: Đủ điều kiện (Hôm nay: ${todayCount}, Tổng quá khứ: ${totalPastCount}, Kinh nghiệm: ${experienceServiceCount})`);
+        console.log(`  v ${staff.fullName}: Đủ điều kiện (Ngày: ${todayCount}, Tuần: ${weekCount}, Lịch sử: ${totalPastCount})`);
         availableStaffList.push({
             staff,
             todayCount,
-            totalPastCount,
-            experienceServiceCount
+            weekCount,
+            totalPastCount
         });
     }
 
     // Sắp xếp theo thứ tự ưu tiên:
     // 1. Ưu tiên người làm ít hơn trong ngày (todayCount ASC)
-    // 2. Nếu bằng nhau, ưu tiên người làm ít hơn trong quá khứ (totalPastCount ASC)
-    // 3. Nếu vẫn bằng nhau, ưu tiên người có kinh nghiệm hơn với dịch vụ này (experienceServiceCount DESC)
+    // 2. Nếu bằng nhau, ưu tiên người làm ít hơn trong tuần (weekCount ASC)
+    // 3. Nếu vẫn bằng nhau, ưu tiên người làm ít hơn trong lịch sử quá khứ (totalPastCount ASC)
+    // 4. Nếu bằng nhau nữa thì trộn ngẫu nhiên (Random)
     const result = availableStaffList
         .sort((a, b) => {
             if (a.todayCount !== b.todayCount) {
                 return a.todayCount - b.todayCount;
             }
+            if (a.weekCount !== b.weekCount) {
+                return a.weekCount - b.weekCount;
+            }
             if (a.totalPastCount !== b.totalPastCount) {
                 return a.totalPastCount - b.totalPastCount;
             }
-            return b.experienceServiceCount - a.experienceServiceCount;
+            return Math.random() - 0.5;
         })
         .map(item => item.staff);
 

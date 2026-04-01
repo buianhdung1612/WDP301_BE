@@ -715,6 +715,11 @@ export const confirmBooking = async (req: Request, res: Response) => {
             });
         }
 
+        const transition = validateBookingTransition(booking.bookingStatus, "confirmed");
+        if (!transition.isValid) {
+            return res.status(400).json({ code: 400, message: transition.message });
+        }
+
         booking.bookingStatus = "confirmed";
         await booking.save();
 
@@ -741,6 +746,11 @@ export const checkInBooking = async (req: Request, res: Response) => {
                 code: 404,
                 message: "Lịch đặt không tồn tại"
             });
+        }
+
+        const transition = validateBookingTransition(booking.bookingStatus, "returned");
+        if (!transition.isValid) {
+            return res.status(400).json({ code: 400, message: transition.message });
         }
 
         booking.bookingStatus = "returned";
@@ -818,6 +828,11 @@ export const cancelBooking = async (req: Request, res: Response) => {
                 code: 404,
                 message: "Lịch đặt không tồn tại"
             });
+        }
+
+        const transition = validateBookingTransition(booking.bookingStatus, "cancelled");
+        if (!transition.isValid) {
+            return res.status(400).json({ code: 400, message: transition.message });
         }
 
         booking.bookingStatus = "cancelled";
@@ -1460,6 +1475,15 @@ export const getAvailableSlots = async (req: Request, res: Response) => {
     }
 };
 
+// Helper (local) to validate transitions for booking
+const validateBookingTransition = (current: string, next: string): { isValid: boolean; message?: string } => {
+    if (current === next) return { isValid: true };
+    if (["completed", "cancelled", "returned"].includes(current)) {
+        return { isValid: false, message: `Lịch đặt đã ở trạng thái kết thúc (${current === 'completed' ? 'Hoàn thành' : current === 'cancelled' ? 'Đã hủy' : 'KH đã đón(hoàn)'}), không thể chuyển sang ${next}!` };
+    }
+    return { isValid: true };
+};
+
 // [PATCH] /api/v1/admin/bookings/:id/complete
 export const completeBooking = async (req: Request, res: Response) => {
     try {
@@ -1473,14 +1497,12 @@ export const completeBooking = async (req: Request, res: Response) => {
             });
         }
 
-
-        // Khong cho hoan thanh neu chua thanh toan
-        if (booking.paymentStatus === "unpaid") {
-            return res.status(400).json({
-                code: 400,
-                message: "Không thể hoàn thành lịch đặt khi chưa thanh toán!"
-            });
+        const transition = validateBookingTransition(booking.bookingStatus, "completed");
+        if (!transition.isValid && !petId) {
+            // Only strictly block if they are trying to complete the entire booking
+            return res.status(400).json({ code: 400, message: transition.message });
         }
+
         // 1. Cập nhật trạng thái từng thú cưng
         if (petId) {
             const petMapping = booking.petStaffMap.find((m: any) => m.petId.toString() === petId.toString());
@@ -1491,19 +1513,54 @@ export const completeBooking = async (req: Request, res: Response) => {
                 const startedAt = petMapping.startedAt ? new Date(petMapping.startedAt) : null;
                 const timeElapsed = startedAt ? Math.round((now.getTime() - startedAt.getTime()) / 60000) : 0;
 
-                if (service && startedAt && (service as any).minDuration > 0 && timeElapsed < (service as any).minDuration) {
-                    return res.status(400).json({
-                        code: 400,
-                        message: `Hoàn thành quá sớm! Dịch vụ này yêu cầu tối thiểu ${(service as any).minDuration} phút (hiện tại: ${timeElapsed} phút).`
-                    });
+                if (service && (service as any).minDuration > 0) {
+                    if (!startedAt) {
+                        return res.status(400).json({
+                            code: 400,
+                            message: `Không thể hoàn thành phần việc! Dịch vụ yêu cầu tối thiểu ${(service as any).minDuration} phút nhưng nhân viên chưa ấn bắt đầu.`
+                        });
+                    }
+                    if (timeElapsed < (service as any).minDuration) {
+                        return res.status(400).json({
+                            code: 400,
+                            message: `Không thể hoàn thành phần việc! Dịch vụ yêu cầu tối thiểu ${(service as any).minDuration} phút (hiện tại: mới được ${timeElapsed} phút).`
+                        });
+                    }
                 }
 
                 petMapping.status = "completed";
                 petMapping.completedAt = now;
             }
         } else {
-            // Quy trình cũ: Hoàn thành tất cả (có thể bỏ qua validation nếu làm hàng loạt, 
-            // hoặc áp dụng cho từng con - ở đây tôi giữ logic đơn giản cho bulk)
+            // Khong cho hoan thanh tong don neu chua thanh toan
+            if (!["paid", "partially_paid"].includes(booking.paymentStatus)) {
+                return res.status(400).json({
+                    code: 400,
+                    message: "Không thể hoàn tất lịch đặt khi chưa thanh toán!"
+                });
+            }
+
+            // Quy trình cũ: Kiểm tra minDuration chung cho toàn bộ nếu hoàn thành hàng loạt
+            const service = await Service.findById(booking.serviceId);
+            const now = new Date();
+            const startedAt = booking.actualStart ? new Date(booking.actualStart) : null;
+            const timeElapsed = startedAt ? Math.round((now.getTime() - startedAt.getTime()) / 60000) : 0;
+
+            if (service && (service as any).minDuration > 0) {
+                if (!startedAt) {
+                    return res.status(400).json({
+                        code: 400,
+                        message: `Không thể hoàn thành toàn bộ! Dịch vụ yêu cầu tối thiểu ${(service as any).minDuration} phút nhưng chưa có thú cưng nào bắt đầu.`
+                    });
+                }
+                if (timeElapsed < (service as any).minDuration) {
+                    return res.status(400).json({
+                        code: 400,
+                        message: `Hoàn thành quá sớm! Dịch vụ yêu cầu tối thiểu ${(service as any).minDuration} phút (hiện tại: ${timeElapsed} phút).`
+                    });
+                }
+            }
+
             booking.petStaffMap.forEach((m: any) => {
                 m.status = "completed";
                 if (!m.completedAt) m.completedAt = new Date();
@@ -1514,8 +1571,11 @@ export const completeBooking = async (req: Request, res: Response) => {
         const allCompleted = booking.petStaffMap.every((m: any) => m.status === "completed");
 
         if (allCompleted) {
-            booking.bookingStatus = "completed";
-            booking.completedAt = new Date();
+            // Khi toàn bộ thú cưng đã hoàn thành, NẾU ĐÃ THANH TOÁN -> Hoàn thành tổng đơn
+            if (["paid", "partially_paid"].includes(booking.paymentStatus) && !["completed", "cancelled", "returned"].includes(booking.bookingStatus)) {
+                booking.bookingStatus = "completed";
+                booking.completedAt = new Date();
+            }
         }
 
         await booking.save();
@@ -1572,8 +1632,8 @@ export const completeBooking = async (req: Request, res: Response) => {
                                 console.log(`[Optimization] Creating notification for pet: ${pet?.name}`);
 
                                 await Notification.create({
-                                    title: 'Goi y toi uu dieu phoi',
-                                    content: `Nhan vien \ vua hoan thanh som. Co the ho tro \ lam cho thu cung \ de day nhanh tien do.`,
+                                    title: 'Gợi ý tối ưu điều phối',
+                                    content: `Nhân viên ${staff?.fullName || "trống"} vừa hoàn thành xong nhiệm vụ hiện tại. Có thể được điều phối hỗ trợ nhân viên ${busyStaff?.fullName || "trống"} phụ trách thú cưng ${pet?.name || "trống"} để đẩy nhanh tiến độ.`,
                                     type: 'system',
                                     receiverId: null,
                                     metadata: {
