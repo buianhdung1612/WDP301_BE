@@ -12,7 +12,7 @@ const schema = new mongoose.Schema(
         },
         type: {
             type: String,
-            enum: ["overrun", "booking", "order", "review", "boarding", "system"],
+            enum: ["overrun", "booking", "order", "review", "boarding", "system", "delayed"],
             default: "system"
         },
         link: String,

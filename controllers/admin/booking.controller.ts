@@ -11,7 +11,7 @@ import BookingReview from "../../models/booking-review.model";
 import dayjs from "dayjs";
 import puppeteer from "puppeteer";
 import { autoUpdateBookingStatuses } from "../../jobs/booking.job";
-import { findBestStaffForBooking, autoAssignPetsToStaff, checkOptimizedStaffAvailability } from "../../helpers/booking-assignment.helper";
+import { findBestStaffForBooking, autoAssignPetsToStaff, checkOptimizedStaffAvailability, cascadeStaffDelay } from "../../helpers/booking-assignment.helper";
 import { convertToSlug } from "../../helpers/slug.helper";
 import Notification from "../../models/notification.model";
 
@@ -739,40 +739,6 @@ export const confirmBooking = async (req: Request, res: Response) => {
     }
 };
 
-// [PATCH] /api/v1/admin/bookings/:id/check-in
-export const checkInBooking = async (req: Request, res: Response) => {
-    try {
-        const booking = await Booking.findById(req.params.id);
-
-        if (!booking || booking.deleted) {
-            return res.status(404).json({
-                code: 404,
-                message: "Lịch đặt không tồn tại"
-            });
-        }
-
-        const transition = validateBookingTransition(booking.bookingStatus, "returned");
-        if (!transition.isValid) {
-            return res.status(400).json({ code: 400, message: transition.message });
-        }
-
-        booking.bookingStatus = "returned";
-        booking.checkedInAt = new Date();
-        await booking.save();
-
-        res.json({
-            code: 200,
-            message: "Check-in khách thành công",
-            data: booking
-        });
-    } catch (error) {
-        res.status(500).json({
-            code: 500,
-            message: "Lỗi khi thực hiện check-in"
-        });
-    }
-};
-
 // [PATCH] /api/v1/admin/bookings/:id/check-out
 export const checkoutBooking = async (req: Request, res: Response) => {
     try {
@@ -1154,17 +1120,41 @@ export const extendBooking = async (req: Request, res: Response) => {
             });
         }
 
-        // Cập nhật thời gian kết thúc dự kiến
-        const newFinish = dayjs(currentFinish || new Date()).add(extendMin, 'minute').toDate();
+        // 1. Cập nhật thời gian kết thúc của đơn hiện tại
+        const oldFinish: Date = (currentFinish || new Date()) as Date;
+        const newFinish = dayjs(oldFinish).add(extendMin, 'minute').toDate();
         booking.expectedFinish = newFinish;
-        booking.end = newFinish; // Đồng bộ end để các logic tìm slot trống nhận diện là bận
-        booking.isOverrun = true; // Đánh dấu là đã lấn giờ để hệ thống cảnh báo xung đột
+        booking.end = newFinish;
+
+        // 2. Tự động lùi lịch cho các đơn tiếp theo (Cascading)
+        const staffIds = (booking.petStaffMap || []).map((m: any) => m.staffId?.toString()).filter(Boolean);
+        let allAffectedCodes: string[] = [];
+
+        for (const staffId of staffIds) {
+            const codes = await cascadeStaffDelay(staffId, extendMin, oldFinish);
+            allAffectedCodes = [...new Set([...allAffectedCodes, ...codes])];
+        }
+
+        // 3. Nếu có lùi lịch, đánh dấu là overrun để cảnh báo
+        if (allAffectedCodes.length > 0) {
+            booking.isOverrun = true;
+        }
 
         await booking.save();
 
+        // 4. Nếu có ảnh hưởng, gửi thông báo cho Admin
+        if (allAffectedCodes.length > 0) {
+            await Notification.create({
+                title: "Lùi lịch tự động",
+                content: `Đơn ${booking.code} gia hạn thêm ${extendMin}p, đã lùi lịch cho ${allAffectedCodes.length} đơn tiếp theo: ${allAffectedCodes.join(", ")}`,
+                type: "overrun",
+                link: `/admin/booking/detail/${booking._id}`
+            });
+        }
+
         res.json({
             code: 200,
-            message: `Gia hạn thành công thêm ${extendMin} phút`,
+            message: `Gia hạn thành công thêm ${extendMin} phút. Tự động lùi ${allAffectedCodes.length} lịch tiếp theo.`,
             data: booking
         });
     } catch (error) {

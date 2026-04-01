@@ -278,3 +278,41 @@ export const checkOptimizedStaffAvailability = async (
 
     return !overlappingBooking;
 };
+
+/**
+ * Tự động đẩy lùi lịch trình cho các đơn tiếp theo của nhân viên
+ * @param staffId ID nhân viên
+ * @param delayMinutes Số phút đẩy lùi
+ * @param afterTime Mốc thời gian bắt đầu lọc (thường là end time cũ của đơn vừa delay)
+ */
+export const cascadeStaffDelay = async (staffId: string, delayMinutes: number, afterTime: Date) => {
+    // Tìm tất cả các lịch đặt trong tương lai của nhân viên này (trong cùng ngày)
+    const futureBookings = await Booking.find({
+        "petStaffMap.staffId": staffId,
+        deleted: false,
+        bookingStatus: { $in: ["pending", "confirmed", "delayed", "in-progress"] },
+        start: { $gte: afterTime }
+    }).sort({ start: 1 });
+
+    const affectedCodes: string[] = [];
+
+    for (const booking of futureBookings) {
+        const newStart = dayjs(booking.start).add(delayMinutes, "minute").toDate();
+        const newEnd = dayjs(booking.end).add(delayMinutes, "minute").toDate();
+
+        const updateData: any = {
+            start: newStart,
+            end: newEnd
+        };
+
+        // Nếu đơn đang làm dở, cũng đẩy lùi mốc dự kiến xong
+        if (booking.expectedFinish) {
+            updateData.expectedFinish = dayjs(booking.expectedFinish).add(delayMinutes, "minute").toDate();
+        }
+
+        await Booking.updateOne({ _id: booking._id }, { $set: updateData });
+        if (booking.code) affectedCodes.push(booking.code);
+    }
+
+    return affectedCodes;
+};

@@ -3,6 +3,7 @@ import BookingConfig from "../models/booking-config.model";
 import Notification from "../models/notification.model";
 import cron from "node-cron";
 import dayjs from "dayjs";
+import { cascadeStaffDelay } from "../helpers/booking-assignment.helper";
 
 export const autoUpdateBookingStatuses = async () => {
     try {
@@ -41,35 +42,24 @@ export const autoUpdateBookingStatuses = async () => {
         }
 
         // 1. Chuyển sang delayed nếu quá giờ hẹn gracePeriod mà chưa bắt đầu
-        await Booking.updateMany(
-            {
-                bookingStatus: { $in: ["pending", "confirmed"] },
-                start: { $lt: new Date(now.getTime() - gracePeriod) },
-                deleted: false
-            },
-            { $set: { bookingStatus: "delayed" } }
-        );
+        const overGraceBookings = await Booking.find({
+            bookingStatus: { $in: ["pending", "confirmed"] },
+            start: { $lt: new Date(now.getTime() - gracePeriod) },
+            deleted: false
+        });
 
-        // 2. Tự động hủy nếu trễ quá cancelPeriod phút (No-show)
-        // Nếu autoCancelEnabled được bật, hệ thống sẽ tự hủy sau cancelPeriod
-        // Nếu không, chỉ những đơn pending (chưa thanh toán) có paymentExpireAt mới bị hủy bởi cancellation.job (logic riêng)
-        if (autoCancelEnabled) {
-            await Booking.updateMany(
-                {
-                    bookingStatus: "delayed",
-                    start: { $lt: new Date(now.getTime() - cancelPeriod) },
-                    impactedByOverrun: { $ne: true }, // Không tự động hủy nếu do lỗi cửa hàng (Overrun)
-                    deleted: false
-                },
-                {
-                    $set: {
-                        bookingStatus: "cancelled",
-                        cancelledReason: "Khách không đến (Tự động hủy sau thời gian chờ)",
-                        cancelledAt: now,
-                        cancelledBy: "system"
-                    }
-                }
-            );
+        for (const booking of overGraceBookings) {
+            await Booking.updateOne({ _id: booking._id }, { $set: { bookingStatus: "delayed" } });
+
+            // Thông báo cho Admin để gọi xác nhận
+            await Notification.create({
+                title: "Khách trễ hẹn",
+                content: `Lịch đặt ${booking.code} đã trễ hơn ${gracePeriodMinutes} phút. Vui lòng liên hệ xác nhận!`,
+                type: "delayed",
+                link: `/admin/booking/detail/${booking._id}`
+            });
+
+            console.log(`[JOB-DỊCH VỤ] Đã chuyển đơn ${booking.code} sang trạng thái TRỄ.`);
         }
 
         // 3. Tự động hoàn thành nếu quá maxDuration (HOẶC flagged OVERRUN)
@@ -109,47 +99,35 @@ export const autoUpdateBookingStatuses = async () => {
                         { $set: { isOverrun: true } }
                     );
 
-                    // Gửi thông báo socket & Lưu Database
-                    let notificationContent = `Lịch đặt ${booking.code} đã bị quá giờ!`;
-                    if (affectedBookings.length > 0) {
-                        notificationContent += ` Ảnh hưởng ${affectedBookings.length} lịch tiếp theo.`;
+                    // 1. Tự động lùi lịch cho các đơn tiếp theo (Cascading)
+                    const oldFinish = b.expectedFinish || b.end;
+                    const staffIds = (b.petStaffMap || []).map((m: any) => m.staffId?.toString()).filter(Boolean);
+                    let allAffectedCodes: string[] = [];
 
-                        // Đánh dấu các đơn bị ảnh hưởng để không bị Auto-Cancel
-                        const affectedIds = affectedBookings.map(b => b._id);
-                        await Booking.updateMany(
-                            { _id: { $in: affectedIds } },
-                            { $set: { impactedByOverrun: true } }
-                        );
+                    for (const staffId of staffIds) {
+                        const codes = await cascadeStaffDelay(staffId, 10, oldFinish);
+                        allAffectedCodes = [...new Set([...allAffectedCodes, ...codes])];
+                    }
+
+                    // 2. Cập nhật mốc dự kiến mới cho đơn hiện tại (+10p)
+                    const newExpectedFinish = new Date(now.getTime() + 10 * 60 * 1000);
+                    await Booking.updateOne(
+                        { _id: booking._id },
+                        { $set: { expectedFinish: newExpectedFinish, end: newExpectedFinish } }
+                    );
+
+                    // 3. Gửi thông báo cho Admin nếu có ảnh hưởng
+                    let notificationContent = `Lịch đặt ${booking.code} đã bị quá giờ!`;
+                    if (allAffectedCodes.length > 0) {
+                        notificationContent += ` Đã lùi lịch cho ${allAffectedCodes.length} đơn tiếp theo: ${allAffectedCodes.join(", ")}`;
                     }
 
                     await Notification.create({
                         title: "Cảnh báo quá giờ",
                         content: notificationContent,
                         type: "overrun",
-                        link: `/admin/booking/detail/${booking._id}`,
-                        metadata: {
-                            bookingId: booking._id,
-                            bookingCode: booking.code,
-                            affectedCount: affectedBookings.length
-                        }
+                        link: `/admin/booking/detail/${booking._id}`
                     });
-
-                    if ((global as any).io) {
-                        (global as any).io.to('admin').emit('overrun-alert', {
-                            bookingId: booking._id,
-                            bookingCode: booking.code,
-                            staffIds: staffIdsFromMap,
-                            affectedCount: affectedBookings.length,
-                            message: notificationContent
-                        });
-                    }
-
-                    // Cập nhật expectedFinish ban đầu (cộng 10p từ bây giờ)
-                    const newExpectedFinish = new Date(now.getTime() + 10 * 60 * 1000);
-                    await Booking.updateOne(
-                        { _id: booking._id },
-                        { $set: { expectedFinish: newExpectedFinish, end: newExpectedFinish } }
-                    );
 
                     console.log(`[JOB-DỊCH VỤ] Cảnh báo quá giờ cho lịch ${booking.code} (Ảnh hưởng ${affectedBookings.length} lịch)`);
                 } else if (b.expectedFinish && now > new Date(b.expectedFinish)) {
@@ -159,12 +137,20 @@ export const autoUpdateBookingStatuses = async () => {
                     const currentTotalExt = dayjs(b.expectedFinish).diff(dayjs(baseEnd), 'minute');
 
                     if (currentTotalExt < maxExtension) {
+                        const oldFinish = b.expectedFinish;
                         const newFinish = dayjs(b.expectedFinish).add(10, 'minute').toDate();
+
+                        // Lùi các đơn tiếp theo
+                        const staffIds = (b.petStaffMap || []).map((m: any) => m.staffId?.toString()).filter(Boolean);
+                        for (const staffId of staffIds) {
+                            await cascadeStaffDelay(staffId, 10, oldFinish);
+                        }
+
                         await Booking.updateOne(
                             { _id: b._id },
                             { $set: { expectedFinish: newFinish, end: newFinish } }
                         );
-                        console.log(`[JOB-DỊCH VỤ] Tự động gia hạn 10p cho lẻ ${b.code} vì vẫn đang làm.`);
+                        console.log(`[JOB-DỊCH VỤ] Tự động gia hạn 10p cho đơn ${b.code} vì vẫn đang làm.`);
                     }
                 }
             }
