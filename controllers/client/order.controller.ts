@@ -363,7 +363,7 @@ export const paymentZaloPay = async (req: Request, res: Response) => {
         description: `Thanh toán ${orderCode ? 'đơn hàng' : 'lịch đặt'} ${code}`,
         bank_code: "",
         mac: "",
-        callback_url: `${process.env.BACKEND_URL}/api/v1/client/order/payment-zalopay-result`
+        callback_url: `${(process.env.BACKEND_URL || "").replace(/\/$/, "")}/api/v1/client/order/payment-zalopay-result`
     };
 
     const data = config.app_id + "|" + order.app_trans_id + "|" + order.app_user + "|" + order.amount + "|" + order.app_time + "|" + order.embed_data + "|" + order.item;
@@ -381,6 +381,10 @@ export const paymentZalopayResult = async (req: Request, res: Response) => {
         let dataStr = req.body.data;
         let reqMac = req.body.mac;
         let mac = hmacSHA256(dataStr, config.key2).toString();
+
+        console.log(`[ZALOPAY CALLBACK] Data: ${dataStr}`);
+        console.log(`[ZALOPAY CALLBACK] Received MAC: ${reqMac}, Calculated MAC: ${mac}`);
+
         if (reqMac !== mac) {
             result.return_code = -1;
             result.return_message = "mac not equal";
@@ -409,12 +413,15 @@ export const paymentZalopayResult = async (req: Request, res: Response) => {
             } else {
                 const order = await Order.findOne({ phone, code, deleted: false });
                 if (order) {
-                    if (order.orderStatus !== "completed") {
-                        await addPointAfterPayment(code);
-                    }
+                    console.log(`[ZALOPAY CALLBACK] Valid Order Found: ${code}. Updating to PAID.`);
+                    await addPointAfterPayment(code);
                     order.paymentStatus = "paid";
-                    order.orderStatus = "completed";
-                    (order as any).completedAt = new Date();
+                    // Giữ trạng thái đơn hàng là pending để admin xác nhận giao hàng, 
+                    // chỉ tự động chuyển completed nếu bạn muốn khách nhận hàng luôn
+                    if (order.orderStatus === "pending") {
+                        order.orderStatus = "confirmed"; // Tự động xác nhận khi đã thanh toán
+                        (order as any).confirmedAt = new Date();
+                    }
                     await order.save();
                 }
             }
@@ -447,7 +454,8 @@ export const paymentVNPay = async (req: Request, res: Response) => {
     const ipAddr = req.headers['x-forwarded-for'] || req.connection.remoteAddress || req.socket.remoteAddress;
     const paymentSettings = await getApiPayment();
     let tmnCode = `${paymentSettings.vnpTmnCode}`;
-    let returnUrl = `http://localhost:3000/api/v1/client/order/payment-vnpay-result`;
+    const cleanBackendUrl = (process.env.BACKEND_URL || "").replace(/\/$/, "");
+    let returnUrl = `${cleanBackendUrl}/api/v1/client/order/payment-vnpay-result`;
     let orderId = `${phone}-${code}-${Date.now()}`;
     let amount = target.total || 0;
     if (bookingCode && target.depositAmount > 0 && target.paymentStatus === "unpaid") {
@@ -524,7 +532,9 @@ export const paymentVNPayResult = async (req: Request, res: Response) => {
                     }
                 } else {
                     await Order.findOneAndUpdate({ phone, code, deleted: false }, {
-                        paymentStatus: 'paid'
+                        paymentStatus: 'paid',
+                        orderStatus: 'confirmed',
+                        confirmedAt: new Date()
                     });
                     await addPointAfterPayment(code);
                 }
