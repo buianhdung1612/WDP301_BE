@@ -857,18 +857,21 @@ export const startInProgress = async (req: Request, res: Response) => {
             });
         }
 
-        // 2. Kiểm tra thời gian bắt đầu sớm
-        const config = await BookingConfig.findOne({}) || { allowEarlyStartMinutes: 30 };
-        const now = new Date();
-        const scheduledStart = booking.start ? new Date(booking.start as any) : now;
+        // 2. Kiểm tra thời gian bắt đầu sớm (Chỉ check cho đơn chưa bắt đầu thực tế)
+        if (booking.bookingStatus !== "in-progress") {
+            const config = await BookingConfig.findOne({}) || { allowEarlyStartMinutes: 30 };
+            const now = new Date();
+            // Ưu tiên dùng giờ gốc để khách hàng đến sớm so với giờ delay vẫn được làm
+            const scheduledStart = (booking.originalStart || booking.start) ? new Date((booking.originalStart || booking.start) as any) : now;
 
-        const earliestAllowed = new Date(scheduledStart.getTime() - (config.allowEarlyStartMinutes || 30) * 60000);
+            const earliestAllowed = new Date(scheduledStart.getTime() - (config.allowEarlyStartMinutes || 30) * 60000);
 
-        if (now < earliestAllowed) {
-            return res.status(400).json({
-                code: 400,
-                message: `Bắt đầu quá sớm! Chỉ cho phép làm sớm tối đa ${config.allowEarlyStartMinutes} phút so với lịch hẹn (${dayjs(scheduledStart).format("HH:mm")}).`
-            });
+            if (now < earliestAllowed) {
+                return res.status(400).json({
+                    code: 400,
+                    message: `Bắt đầu quá sớm! Chỉ cho phép làm sớm tối đa ${config.allowEarlyStartMinutes} phút so với lịch hẹn (${dayjs(scheduledStart).format("HH:mm")}).`
+                });
+            }
         }
 
         // 3. Cập nhật trạng thái từng thú cưng
@@ -1083,85 +1086,7 @@ export const rescheduleBooking = async (req: Request, res: Response) => {
     }
 };
 
-// [PATCH] /api/v1/admin/bookings/:id/extend
-export const extendBooking = async (req: Request, res: Response) => {
-    try {
-        const { id } = req.params;
-        const { minutes } = req.body;
-
-        if (!minutes || isNaN(parseInt(minutes)) || parseInt(minutes) <= 0) {
-            return res.status(400).json({ code: 400, message: "Số phút gia hạn không hợp lệ" });
-        }
-
-        const extendMin = parseInt(minutes);
-        const booking = await Booking.findById(id).populate("serviceId");
-
-        if (!booking || booking.deleted) {
-            return res.status(404).json({ code: 404, message: "Lịch đặt không tồn tại" });
-        }
-
-        if (booking.bookingStatus !== "in-progress") {
-            return res.status(400).json({ code: 400, message: "Chỉ đơn đang thực hiện mới có thể gia hạn thời gian" });
-        }
-
-        const service = booking.serviceId as any;
-        const maxExtension = service?.maxExtensionMinutes || 30;
-
-        // Tính tổng thời gian đã gia hạn so với mốc kết thúc gốc
-        const baseEnd = booking.originalEnd || booking.end;
-        const currentFinish = booking.expectedFinish || booking.end;
-        const currentTotalExt = dayjs(currentFinish).diff(dayjs(baseEnd), 'minute');
-
-        if (currentTotalExt + extendMin > maxExtension) {
-            const available = maxExtension - currentTotalExt;
-            return res.status(400).json({
-                code: 400,
-                message: `Tổng thời gian gia hạn tối đa cho ${service?.name || 'dịch vụ'} là ${maxExtension} phút. Bạn chỉ có thể gia hạn thêm tối đa ${available > 0 ? available : 0} phút.`
-            });
-        }
-
-        // 1. Cập nhật thời gian kết thúc của đơn hiện tại
-        const oldFinish: Date = (currentFinish || new Date()) as Date;
-        const newFinish = dayjs(oldFinish).add(extendMin, 'minute').toDate();
-        booking.expectedFinish = newFinish;
-        booking.end = newFinish;
-
-        // 2. Tự động lùi lịch cho các đơn tiếp theo (Cascading)
-        const staffIds = (booking.petStaffMap || []).map((m: any) => m.staffId?.toString()).filter(Boolean);
-        let allAffectedCodes: string[] = [];
-
-        for (const staffId of staffIds) {
-            const codes = await cascadeStaffDelay(staffId, extendMin, oldFinish);
-            allAffectedCodes = [...new Set([...allAffectedCodes, ...codes])];
-        }
-
-        // 3. Nếu có lùi lịch, đánh dấu là overrun để cảnh báo
-        if (allAffectedCodes.length > 0) {
-            booking.isOverrun = true;
-        }
-
-        await booking.save();
-
-        // 4. Nếu có ảnh hưởng, gửi thông báo cho Admin
-        if (allAffectedCodes.length > 0) {
-            await Notification.create({
-                title: "Lùi lịch tự động",
-                content: `Đơn ${booking.code} gia hạn thêm ${extendMin}p, đã lùi lịch cho ${allAffectedCodes.length} đơn tiếp theo: ${allAffectedCodes.join(", ")}`,
-                type: "overrun",
-                link: `/admin/booking/detail/${booking._id}`
-            });
-        }
-
-        res.json({
-            code: 200,
-            message: `Gia hạn thành công thêm ${extendMin} phút. Tự động lùi ${allAffectedCodes.length} lịch tiếp theo.`,
-            data: booking
-        });
-    } catch (error) {
-        console.error("Extend Booking Error:", error);
-        res.status(500).json({ code: 500, message: "Lỗi khi gia hạn thời gian" });
-    }
-};
+// Manual extendBooking removed as per user request to favor automated background extensions.
 
 export const updateBooking = async (req: Request, res: Response) => {
     try {
@@ -1311,11 +1236,19 @@ export const updateBooking = async (req: Request, res: Response) => {
         const allowedUpdates = [
             "serviceId", "userId", "petIds", "notes",
             "start", "end", "petStaffMap", "discount",
-            "paymentMethod", "paymentStatus"
+            "paymentMethod", "paymentStatus", "bookingStatus"
         ];
 
         allowedUpdates.forEach(update => {
             if (req.body[update] !== undefined) {
+                // Kiểm tra ràng buộc khi chuyển sang trạng thái Hoàn thành
+                if (update === "bookingStatus" && req.body[update] === "completed") {
+                    if (booking.paymentStatus !== "paid" && req.body.paymentStatus !== "paid") {
+                        // Không ném lỗi ở đây để tránh crash, nhưng sẽ gán lại trạng thái cũ
+                        console.log(`[UpdateBooking] Cố gắng hoàn thành đơn ${booking.code} nhưng chưa thanh toán đủ. Từ chối đổi trạng thái.`);
+                        return;
+                    }
+                }
                 (booking as any)[update] = req.body[update];
             }
         });
@@ -1525,11 +1458,11 @@ export const completeBooking = async (req: Request, res: Response) => {
                 petMapping.completedAt = now;
             }
         } else {
-            // Khong cho hoan thanh tong don neu chua thanh toan
-            if (!["paid", "partially_paid"].includes(booking.paymentStatus)) {
+            // Không cho hoàn thành tổng đơn nếu chưa thanh toán ĐỦ
+            if (booking.paymentStatus !== "paid") {
                 return res.status(400).json({
                     code: 400,
-                    message: "Không thể hoàn tất lịch đặt khi chưa thanh toán!"
+                    message: "Không thể hoàn tất lịch đặt khi chưa thanh toán đầy đủ!"
                 });
             }
 
@@ -1564,10 +1497,15 @@ export const completeBooking = async (req: Request, res: Response) => {
         const allCompleted = booking.petStaffMap.every((m: any) => m.status === "completed");
 
         if (allCompleted) {
-            // Khi toàn bộ thú cưng đã hoàn thành, NẾU ĐÃ THANH TOÁN ĐỦ -> Hoàn thành tổng đơn
-            if (booking.paymentStatus === 'paid' && !["completed", "cancelled", "returned"].includes(booking.bookingStatus)) {
+            // Khi toàn bộ thú cưng đã hoàn thành, CHỈ hoàn thành tổng đơn NẾU ĐÃ THANH TOÁN ĐỦ
+            if (booking.paymentStatus === "paid") {
                 booking.bookingStatus = "completed";
                 booking.completedAt = new Date();
+                // Co kéo lại thời gian kết thúc thực tế để rảnh nhân viên cho lịch sau
+                booking.expectedFinish = booking.completedAt;
+                booking.end = booking.completedAt;
+            } else {
+                console.log(`[JOB-DONE] Đơn ${booking.code} xong hết pet nhưng CHƯA THANH TOÁN ĐỦ (${booking.paymentStatus}). Đang chờ...`);
             }
         }
 

@@ -19,7 +19,7 @@ router.patch("/bookings/:id/complete", bookingController.completeBooking);
 router.patch("/bookings/:id/start", bookingController.startInProgress);
 router.patch("/bookings/:id/reschedule", checkPermission("booking_edit"), bookingController.rescheduleBooking);
 router.patch("/bookings/:id/update", checkPermission("booking_edit"), bookingController.updateBooking);
-router.patch("/bookings/:id/extend", bookingController.extendBooking);
+// Extension managed automatically via jobs
 router.patch("/bookings/:id/assign-staff", checkPermission("booking_assign"), bookingController.assignStaff);
 router.get("/bookings/:id/recommend-staff", checkPermission("booking_assign"), bookingController.getRecommendedStaff);
 router.post("/bookings/suggest-assignment", checkPermission("booking_create"), bookingController.suggestSmartAssignment);

@@ -81,78 +81,47 @@ export const autoUpdateBookingStatuses = async () => {
             const startTime = new Date(startVal);
             const deadline = new Date(startTime.getTime() + baseDuration * 60 * 1000);
 
-            // Nếu quá deadline (maxDuration), hệ thống đánh dấu Overrun
-            if (now > deadline) {
-                if (!b.isOverrun) {
-                    // Tìm các đơn hàng sau của cùng nhân viên (nếu có) bị ảnh hưởng
-                    const staffIdsFromMap = (b.petStaffMap || []).map((m: any) => String(m.staffId?._id || m.staffId));
-                    const affectedBookings = await Booking.find({
-                        bookingStatus: { $in: ["pending", "confirmed"] },
-                        "petStaffMap.staffId": { $in: staffIdsFromMap },
-                        start: { $lt: new Date(now.getTime() + 10 * 60000) }, // Dưới 10p tới là bị chồng lấn
-                        _id: { $ne: b._id },
-                        deleted: false
-                    });
+            // Nếu quá deadline (maxDuration), hệ thống đánh dấu Overrun và TỰ GIA HẠN LÊN MỨC TỐI ĐA TRONG 1 LẦN
+            if (now > deadline && !b.isOverrun) {
+                const maxExtension = service?.maxExtensionMinutes || 30;
 
-                    await Booking.updateOne(
-                        { _id: b._id },
-                        { $set: { isOverrun: true } }
-                    );
+                // 1. Tự động lùi lịch cho các đơn tiếp theo (Cascading) theo mức tối đa
+                const oldFinish = b.expectedFinish || b.end || deadline;
+                const staffIds = (b.petStaffMap || []).map((m: any) => m.staffId?.toString()).filter(Boolean);
+                let allAffectedCodes: string[] = [];
 
-                    // 1. Tự động lùi lịch cho các đơn tiếp theo (Cascading)
-                    const oldFinish = b.expectedFinish || b.end;
-                    const staffIds = (b.petStaffMap || []).map((m: any) => m.staffId?.toString()).filter(Boolean);
-                    let allAffectedCodes: string[] = [];
-
-                    for (const staffId of staffIds) {
-                        const codes = await cascadeStaffDelay(staffId, 10, oldFinish);
-                        allAffectedCodes = [...new Set([...allAffectedCodes, ...codes])];
-                    }
-
-                    // 2. Cập nhật mốc dự kiến mới cho đơn hiện tại (+10p)
-                    const newExpectedFinish = new Date(now.getTime() + 10 * 60 * 1000);
-                    await Booking.updateOne(
-                        { _id: booking._id },
-                        { $set: { expectedFinish: newExpectedFinish, end: newExpectedFinish } }
-                    );
-
-                    // 3. Gửi thông báo cho Admin nếu có ảnh hưởng
-                    let notificationContent = `Lịch đặt ${booking.code} đã bị quá giờ!`;
-                    if (allAffectedCodes.length > 0) {
-                        notificationContent += ` Đã lùi lịch cho ${allAffectedCodes.length} đơn tiếp theo: ${allAffectedCodes.join(", ")}`;
-                    }
-
-                    await Notification.create({
-                        title: "Cảnh báo quá giờ",
-                        content: notificationContent,
-                        type: "overrun",
-                        link: `/admin/booking/detail/${booking._id}`
-                    });
-
-                    console.log(`[JOB-DỊCH VỤ] Cảnh báo quá giờ cho lịch ${booking.code} (Ảnh hưởng ${affectedBookings.length} lịch)`);
-                } else if (b.expectedFinish && now > new Date(b.expectedFinish)) {
-                    // ĐÃ báo quá giờ rồi, nhưng vẫn quá giờ tiếp so với dự kiến đã gia hạn
-                    const maxExtension = service?.maxExtensionMinutes || 30;
-                    const baseEnd = b.originalEnd || b.end;
-                    const currentTotalExt = dayjs(b.expectedFinish).diff(dayjs(baseEnd), 'minute');
-
-                    if (currentTotalExt < maxExtension) {
-                        const oldFinish = b.expectedFinish;
-                        const newFinish = dayjs(b.expectedFinish).add(10, 'minute').toDate();
-
-                        // Lùi các đơn tiếp theo
-                        const staffIds = (b.petStaffMap || []).map((m: any) => m.staffId?.toString()).filter(Boolean);
-                        for (const staffId of staffIds) {
-                            await cascadeStaffDelay(staffId, 10, oldFinish);
-                        }
-
-                        await Booking.updateOne(
-                            { _id: b._id },
-                            { $set: { expectedFinish: newFinish, end: newFinish } }
-                        );
-                        console.log(`[JOB-DỊCH VỤ] Tự động gia hạn 10p cho đơn ${b.code} vì vẫn đang làm.`);
-                    }
+                for (const staffId of staffIds) {
+                    const codes = await cascadeStaffDelay(staffId, maxExtension, oldFinish);
+                    allAffectedCodes = [...new Set([...allAffectedCodes, ...codes])];
                 }
+
+                // 2. Cập nhật mốc dự kiến mới cho đơn hiện tại (+ maxExtension)
+                const newExpectedFinish = dayjs(oldFinish).add(maxExtension, 'minute').toDate();
+                await Booking.updateOne(
+                    { _id: b._id },
+                    {
+                        $set: {
+                            isOverrun: true,
+                            expectedFinish: newExpectedFinish,
+                            end: newExpectedFinish
+                        }
+                    }
+                );
+
+                // 3. Gửi thông báo cho Admin
+                let notificationContent = `Lịch đặt ${b.code} đã bắt đầu quá giờ (${maxExtension}p)!`;
+                if (allAffectedCodes.length > 0) {
+                    notificationContent += ` Đã lùi lịch cho ${allAffectedCodes.length} đơn tiếp theo: ${allAffectedCodes.join(", ")}`;
+                }
+
+                await Notification.create({
+                    title: "Cảnh báo quá giờ (Gia hạn tối đa)",
+                    content: notificationContent,
+                    type: "overrun",
+                    link: `/admin/booking/detail/${b._id}`
+                });
+
+                console.log(`[JOB-DỊCH VỤ] Đã tự gia hạn tối đa ${maxExtension}p cho đơn ${b.code} (Ảnh hưởng ${allAffectedCodes.length} lịch)`);
             }
         }
     } catch (error) {

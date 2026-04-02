@@ -561,18 +561,42 @@ export const cancelMyBooking = async (req: Request, res: Response) => {
         }
 
         if (["paid", "partially_paid"].includes(booking.paymentStatus)) {
-            booking.bookingStatus = "request_cancel";
-            booking.cancelledReason = reason || "Yêu cầu hủy lịch đã thanh toán";
-            booking.cancelledAt = new Date();
-            booking.cancelledBy = "customer";
+            const config = await BookingConfig.findOne({});
+            const refundHours = config?.refundCancellationHours || 0;
 
-            await booking.save();
+            const now = dayjs();
+            const start = dayjs(booking.start);
+            const diffHours = start.diff(now, 'hour');
 
-            return res.json({
-                code: 200,
-                message: "Yêu cầu hủy đã được gửi! Admin sẽ kiểm tra và hoàn tiền sớm nhất",
-                data: booking
-            });
+            if (refundHours === 0 || diffHours >= refundHours) {
+                // Hủy và yêu cầu hoàn tiền (trong hạn hoặc không cấu hình hạn)
+                booking.bookingStatus = "request_cancel";
+                booking.cancelledReason = reason || "Yêu cầu hủy lịch đã thanh toán";
+                booking.cancelledAt = new Date();
+                booking.cancelledBy = "customer";
+
+                await booking.save();
+
+                return res.json({
+                    code: 200,
+                    message: "Yêu cầu hủy đã được gửi! Admin sẽ kiểm tra và hoàn tiền sớm nhất",
+                    data: booking
+                });
+            } else {
+                // Quá hạn hoàn tiền nhưng vẫn cho phép hủy (mất cọc/tiền)
+                booking.bookingStatus = "cancelled";
+                booking.cancelledReason = (reason || "Khách hàng hủy") + ` (Quá hạn hoàn tiền >${refundHours}h)`;
+                booking.cancelledAt = new Date();
+                booking.cancelledBy = "customer";
+
+                await booking.save();
+
+                return res.json({
+                    code: 200,
+                    message: `Hủy lịch thành công. Lưu ý: Lịch đặt đã quá hạn hoàn tiền (${refundHours} giờ trước hẹn) nên bạn sẽ không được hoàn lại tiền cọc.`,
+                    data: booking
+                });
+            }
         }
 
         booking.bookingStatus = "cancelled";

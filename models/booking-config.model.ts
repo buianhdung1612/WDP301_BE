@@ -14,6 +14,10 @@ const schema = new mongoose.Schema(
             type: Number,
             default: 30 // minutes
         },
+        refundCancellationHours: {
+            type: Number,
+            default: 0 // hours
+        },
         autoCancelEnabled: {
             type: Boolean,
             default: false
