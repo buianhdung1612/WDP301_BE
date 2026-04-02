@@ -230,6 +230,13 @@ export const editPatch = async (req: Request, res: Response) => {
             });
         }
 
+        if (order.orderStatus === "cancelled" && paymentStatus === "paid") {
+            return res.status(400).json({
+                code: 400,
+                message: "Không thể chuyển trạng thái thanh toán sang 'Đã thanh toán' cho đơn hàng đã hủy."
+            });
+        }
+
         // 3. Nếu đơn hàng đã hoàn thành hoặc hủy, vẫn cho phép thay đổi trạng thái thanh toán (để đánh dấu hoàn lại hoặc COD thực thu)
         // Bỏ qua check cũ ở đây
 
