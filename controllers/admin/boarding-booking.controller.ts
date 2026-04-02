@@ -211,15 +211,26 @@ const mergeOwnAssignedScheduleItems = (options: {
             ? (submittedItem?.doneAt ? new Date(submittedItem.doneAt) : new Date())
             : null;
 
-        return {
+        const updatedItem: any = {
             ...existingItem,
             note: String(submittedItem?.note || "").trim(),
             proofMedia: normalizeProofMedia(submittedItem?.proofMedia),
             status,
             doneAt,
+            time: String(submittedItem?.time || "").trim() || existingItem.time,
             staffId: assignedId ? existingItem?.staffId : currentStaffId,
             staffName: assignedId ? existingItem?.staffName : String(submittedItem?.staffName || existingItem?.staffName || currentStaffName).trim(),
         };
+
+        if (type === "feeding") {
+            updatedItem.food = String(submittedItem?.food || "").trim() || existingItem.food;
+            updatedItem.amount = String(submittedItem?.amount || "").trim() || existingItem.amount;
+        } else if (type === "exercise") {
+            updatedItem.activity = String(submittedItem?.activity || "").trim() || existingItem.activity;
+            updatedItem.durationMinutes = submittedItem?.durationMinutes !== undefined ? submittedItem.durationMinutes : existingItem.durationMinutes;
+        }
+
+        return updatedItem;
     });
 
     return result;
