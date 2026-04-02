@@ -1241,6 +1241,14 @@ export const updateBooking = async (req: Request, res: Response) => {
             });
         }
 
+        // Nếu đang yêu cầu hủy, không cho đổi sang đã thanh toán (paid)
+        if (booking.bookingStatus === 'request_cancel' && req.body.paymentStatus === 'paid') {
+            return res.status(400).json({
+                code: 400,
+                message: "Đơn đang yêu cầu hủy không thể chuyển sang trạng thái đã thanh toán!"
+            });
+        }
+
         const allowedUpdates = [
             "serviceId", "userId", "petIds", "notes",
             "start", "end", "petStaffMap", "discount",

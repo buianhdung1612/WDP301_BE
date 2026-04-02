@@ -230,10 +230,10 @@ export const editPatch = async (req: Request, res: Response) => {
             });
         }
 
-        if (order.orderStatus === "cancelled" && paymentStatus === "paid") {
+        if (["cancelled", "request_cancel"].includes(order.orderStatus as string) && paymentStatus === "paid") {
             return res.status(400).json({
                 code: 400,
-                message: "Không thể chuyển trạng thái thanh toán sang 'Đã thanh toán' cho đơn hàng đã hủy."
+                message: "Không thể chuyển trạng thái thanh toán sang 'Đã thanh toán' cho đơn hàng đã hủy hoặc yêu cầu hủy."
             });
         }
 

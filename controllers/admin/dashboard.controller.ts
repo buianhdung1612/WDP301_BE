@@ -21,78 +21,38 @@ export const getEcommerceStats = async (req: Request, res: Response) => {
         const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
         const startOfLastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
         const endOfLastMonth = new Date(now.getFullYear(), now.getMonth(), 0);
+        const startOfYear = new Date(now.getFullYear(), 0, 1);
 
         const baseMatch = { orderStatus: "completed", deleted: false };
 
-        const [
-            currentStats, lastStats, yearlyData, topCategoriesRes,
-            totalProducts, totalUsers, recentOrders, recentProducts, topProducts
-        ] = await Promise.all([
-            // 1. Doanh thu tháng này
-            Order.aggregate([
-                { $match: { createdAt: { $gte: startOfMonth }, ...baseMatch } },
-                { $group: { _id: null, total: { $sum: { $subtract: ["$total", { $ifNull: ["$shipping.fee", 0] }] } }, count: { $sum: 1 } } }
-            ]),
-            // 2. Doanh thu tháng trước
-            Order.aggregate([
-                { $match: { createdAt: { $gte: startOfLastMonth, $lte: endOfLastMonth }, ...baseMatch } },
-                { $group: { _id: null, total: { $sum: { $subtract: ["$total", { $ifNull: ["$shipping.fee", 0] }] } }, count: { $sum: 1 } } }
-            ]),
-            // 3. Doanh thu theo tháng
-            Order.aggregate([
-                { $match: { createdAt: { $gte: new Date(now.getFullYear(), 0, 1) }, ...baseMatch } },
-                { $group: { _id: { $month: "$createdAt" }, total: { $sum: { $subtract: ["$total", { $ifNull: ["$shipping.fee", 0] }] } } } },
-                { $sort: { "_id": 1 } }
-            ]),
-            // 4. Doanh thu theo DANH MỤC CẤP CAO NHẤT (Sử dụng $graphLookup để tìm cha gốc)
+        // 1. Fetch Month-over-Month Stats for all sources
+        const [currShop, currService, currBoarding, prevShop, prevService, prevBoarding] = await Promise.all([
+            Order.aggregate([{ $match: { createdAt: { $gte: startOfMonth }, ...baseMatch } }, { $group: { _id: null, total: { $sum: { $subtract: ["$total", { $ifNull: ["$shipping.fee", 0] }] } }, count: { $sum: 1 } } }]),
+            Booking.aggregate([{ $match: { updatedAt: { $gte: startOfMonth }, bookingStatus: "completed", paymentStatus: "paid", deleted: false } }, { $group: { _id: null, total: { $sum: "$total" }, count: { $sum: 1 } } }]),
+            BoardingBooking.aggregate([{ $match: { updatedAt: { $gte: startOfMonth }, boardingStatus: "checked-out", paymentStatus: "paid", deleted: false } }, { $group: { _id: null, total: { $sum: "$total" }, count: { $sum: 1 } } }]),
+            Order.aggregate([{ $match: { createdAt: { $gte: startOfLastMonth, $lte: endOfLastMonth }, ...baseMatch } }, { $group: { _id: null, total: { $sum: { $subtract: ["$total", { $ifNull: ["$shipping.fee", 0] }] } }, count: { $sum: 1 } } }]),
+            Booking.aggregate([{ $match: { updatedAt: { $gte: startOfLastMonth, $lte: endOfLastMonth }, bookingStatus: "completed", paymentStatus: "paid", deleted: false } }, { $group: { _id: null, total: { $sum: "$total" }, count: { $sum: 1 } } }]),
+            BoardingBooking.aggregate([{ $match: { updatedAt: { $gte: startOfLastMonth, $lte: endOfLastMonth }, boardingStatus: "checked-out", paymentStatus: "paid", deleted: false } }, { $group: { _id: null, total: { $sum: "$total" }, count: { $sum: 1 } } }])
+        ]);
+
+        const currentRevenue = (currShop[0]?.total || 0) + (currService[0]?.total || 0) + (currBoarding[0]?.total || 0);
+        const lastRevenue = (prevShop[0]?.total || 0) + (prevService[0]?.total || 0) + (prevBoarding[0]?.total || 0);
+        const revenueMonthPercent = lastRevenue === 0 ? 100 : ((currentRevenue - lastRevenue) / lastRevenue) * 100;
+
+        // 2. Yearly charts & top categories
+        const [yearlyOrderData, yearlyServiceData, yearlyBoardingData, topCategoriesRes, totalProducts, totalUsers, recentOrders, recentProducts, topProducts, recentBookings, recentBoardings] = await Promise.all([
+            Order.aggregate([{ $match: { createdAt: { $gte: startOfYear }, ...baseMatch } }, { $group: { _id: { $month: "$createdAt" }, total: { $sum: { $subtract: ["$total", { $ifNull: ["$shipping.fee", 0] }] } } } }, { $sort: { "_id": 1 } }]),
+            Booking.aggregate([{ $match: { updatedAt: { $gte: startOfYear }, bookingStatus: "completed", paymentStatus: "paid", deleted: false } }, { $group: { _id: { $month: "$updatedAt" }, total: { $sum: "$total" } } }, { $sort: { "_id": 1 } }]),
+            BoardingBooking.aggregate([{ $match: { updatedAt: { $gte: startOfYear }, boardingStatus: "checked-out", paymentStatus: "paid", deleted: false } }, { $group: { _id: { $month: "$updatedAt" }, total: { $sum: "$total" } } }, { $sort: { "_id": 1 } }]),
             Order.aggregate([
                 { $match: baseMatch },
                 { $unwind: "$items" },
-                {
-                    $lookup: {
-                        from: "products",
-                        localField: "items.productId",
-                        foreignField: "_id",
-                        as: "productInfo"
-                    }
-                },
-                { $unwind: "$productInfo" },
-                // Tìm tất cả tổ tiên của danh mục hiện tại
-                {
-                    $graphLookup: {
-                        from: "categories-product",
-                        startWith: "$productInfo.categoryId",
-                        connectFromField: "parent",
-                        connectToField: "_id",
-                        as: "ancestors"
-                    }
-                },
-                // Chọn danh mục cha gốc (là danh mục trong ancestors mà có parent == null hoặc chính là danh mục đó nếu nó là gốc)
-                {
-                    $addFields: {
-                        rootCategory: {
-                            $reduce: {
-                                input: "$ancestors",
-                                initialValue: null,
-                                in: {
-                                    $cond: [
-                                        { $eq: ["$$this.parent", null] },
-                                        "$$this.name",
-                                        "$$value"
-                                    ]
-                                }
-                            }
-                        }
-                    }
-                },
-                {
-                    $group: {
-                        _id: { $ifNull: ["$rootCategory", "Khác"] },
-                        total: { $sum: { $multiply: ["$items.quantity", "$items.price"] } }
-                    }
-                },
-                { $sort: { total: -1 } },
-                { $limit: 10 }
+                { $lookup: { from: "products", localField: "items.productId", foreignField: "_id", as: "p" } },
+                { $unwind: "$p" },
+                { $lookup: { from: "categories-product", localField: "p.categoryId", foreignField: "_id", as: "c" } },
+                { $unwind: "$c" },
+                { $group: { _id: "$c.name", total: { $sum: { $multiply: ["$items.quantity", "$items.price"] } } } },
+                { $sort: { total: -1 } }, { $limit: 10 }
             ]),
             Product.countDocuments({ deleted: false }),
             AccountUser.countDocuments({ deleted: false }),
@@ -102,52 +62,89 @@ export const getEcommerceStats = async (req: Request, res: Response) => {
                 { $match: baseMatch },
                 { $unwind: "$items" },
                 { $group: { _id: "$items.productId", name: { $first: "$items.name" }, totalQuantity: { $sum: "$items.quantity" }, totalRevenue: { $sum: { $multiply: ["$items.quantity", "$items.price"] } } } },
-                { $sort: { totalQuantity: -1 } },
-                { $limit: 5 }
-            ])
+                { $sort: { totalQuantity: -1 } }, { $limit: 5 }
+            ]),
+            Booking.find({ bookingStatus: "completed", paymentStatus: "paid", deleted: false }).sort({ updatedAt: -1 }).limit(5).populate('userId', 'fullName avatar'),
+            BoardingBooking.find({ boardingStatus: "checked-out", paymentStatus: "paid", deleted: false }).sort({ updatedAt: -1 }).limit(5).populate('userId', 'fullName avatar')
         ]);
 
+        // 3. Process Yearly Charts
+        const yearlyOrderChart = Array(12).fill(0);
+        (yearlyOrderData as any[]).forEach(item => { yearlyOrderChart[item._id - 1] = item.total; });
+        const yearlyServiceChart = Array(12).fill(0);
+        (yearlyServiceData as any[]).forEach(item => { yearlyServiceChart[item._id - 1] = item.total; });
+        const yearlyBoardingChart = Array(12).fill(0);
+        (yearlyBoardingData as any[]).forEach(item => { yearlyBoardingChart[item._id - 1] = item.total; });
+
+        // 4. All-time Totals
+        const [allTimeShop, allTimeService, allTimeBoarding] = await Promise.all([
+            Order.aggregate([{ $match: { orderStatus: 'completed', deleted: false } }, { $group: { _id: null, total: { $sum: { $subtract: ["$total", { $ifNull: ["$shipping.fee", 0] }] } } } }]),
+            Booking.aggregate([{ $match: { bookingStatus: 'completed', paymentStatus: 'paid', deleted: false } }, { $group: { _id: null, total: { $sum: "$total" } } }]),
+            BoardingBooking.aggregate([{ $match: { boardingStatus: 'checked-out', paymentStatus: 'paid', deleted: false } }, { $group: { _id: null, total: { $sum: "$total" } } }])
+        ]);
+
+        const shopTotal = allTimeShop[0]?.total || 0;
+        const serviceTotal = allTimeService[0]?.total || 0;
+        const boardingTotal = allTimeBoarding[0]?.total || 0;
+        const grandTotal = shopTotal + serviceTotal + boardingTotal;
+
+        // 5. Recent Revenue Sources Hover History
+        const recentRevenueSources: any[] = [];
+        recentOrders.forEach((o: any) => {
+            recentRevenueSources.push({ id: o._id, label: o.userId?.fullName || o.fullName || "Khách vãng lai", amount: o.total - (o.shipping?.fee || 0), time: o.createdAt, type: 'order' });
+        });
+        recentBookings.forEach((b: any) => {
+            recentRevenueSources.push({ id: b._id, label: b.userId?.fullName || "Khách dịch vụ", amount: b.total, time: b.updatedAt, type: 'booking' });
+        });
+        recentBoardings.forEach((bb: any) => {
+            recentRevenueSources.push({ id: bb._id, label: bb.userId?.fullName || "Khách lưu trú", amount: bb.total, time: bb.updatedAt, type: 'boarding' });
+        });
+        recentRevenueSources.sort((a, b) => new Date(b.time).getTime() - new Date(a.time).getTime());
+        const finalRecentSources = recentRevenueSources.slice(0, 8);
+
+        // 6. Top Customers Calculation
         const topCustomersRaw = await Order.aggregate([
             { $match: baseMatch },
             { $group: { _id: "$userId", totalSpent: { $sum: "$total" }, totalOrders: { $sum: 1 } } },
-            { $sort: { totalSpent: -1 } },
-            { $limit: 5 }
+            { $sort: { totalSpent: -1 } }, { $limit: 5 }
         ]);
-
         const topCustomers = await Promise.all(topCustomersRaw.map(async (c) => {
             const user = await AccountUser.findById(c._id).select('fullName avatar');
             return { ...c, fullName: user?.fullName || 'Khách vãng lai', avatar: user?.avatar };
         }));
-
-        const yearlyRevenueChart = Array(12).fill(0);
-        yearlyData.forEach(item => { yearlyRevenueChart[item._id - 1] = item.total; });
-
-        const [serviceCount, boardingCount] = await Promise.all([
-            Booking.countDocuments({ bookingStatus: 'completed', deleted: false }),
-            BoardingBooking.countDocuments({ boardingStatus: 'checked-out', deleted: false })
-        ]);
-
-        const currentRevenue = currentStats[0]?.total || 0;
-        const lastRevenue = lastStats[0]?.total || 0;
-        const revenueMonthPercent = lastRevenue === 0 ? 100 : ((currentRevenue - lastRevenue) / lastRevenue) * 100;
 
         res.json({
             success: true,
             data: {
                 summary: {
                     monthlyRevenue: currentRevenue,
+                    shopRevenue: currShop[0]?.total || 0,
+                    serviceRevenue: currService[0]?.total || 0,
+                    boardingRevenue: currBoarding[0]?.total || 0,
                     revenueMonthPercent,
-                    totalOrders: currentStats[0]?.count || 0,
-                    totalServiceBookings: serviceCount,
-                    totalBoardingBookings: boardingCount,
+                    totalOrders: currShop[0]?.count || 0,
+                    totalServiceBookings: currService[0]?.count || 0,
+                    totalBoardingBookings: currBoarding[0]?.count || 0,
                     totalProducts,
-                    totalUsers
+                    totalUsers,
+                    recentRevenueSources: finalRecentSources,
+                    allTimeRevenue: {
+                        total: grandTotal,
+                        shop: shopTotal,
+                        service: serviceTotal,
+                        boarding: boardingTotal
+                    }
                 },
                 recentOrders,
                 recentProducts,
                 topSellingProducts: topProducts,
                 topCustomers,
-                yearlyRevenueChart,
+                yearlyRevenueChart: {
+                    shop: yearlyOrderChart,
+                    service: yearlyServiceChart,
+                    boarding: yearlyBoardingChart,
+                    total: yearlyOrderChart.map((val, i) => val + yearlyServiceChart[i] + yearlyBoardingChart[i])
+                },
                 topCategories: topCategoriesRes.map(c => ({ label: c._id, total: c.total }))
             }
         });
@@ -178,7 +175,10 @@ export const getAnalyticsStats = async (req: Request, res: Response) => {
             lastWeekPets,
             ordersByStatus,
             monthlyOrdersRes,
-            totalOrders
+            totalOrders,
+            recentOrders,
+            recentBookings,
+            recentBoardings
         ] = await Promise.all([
             // Sales
             Order.aggregate([
@@ -206,8 +206,42 @@ export const getAnalyticsStats = async (req: Request, res: Response) => {
                 { $group: { _id: { month: { $month: "$createdAt" } }, count: { $sum: 1 } } },
                 { $sort: { "_id.month": 1 } }
             ]),
-            Order.countDocuments({ deleted: false })
+            Order.countDocuments({ deleted: false }),
+            Order.find({ deleted: false, orderStatus: "completed" }).sort({ createdAt: -1 }).limit(5).populate('userId', 'fullName avatar'),
+            Booking.find({ bookingStatus: "completed", paymentStatus: "paid", deleted: false }).sort({ updatedAt: -1 }).limit(5).populate('userId', 'fullName avatar'),
+            BoardingBooking.find({ boardingStatus: "completed", paymentStatus: "paid", deleted: false }).sort({ updatedAt: -1 }).limit(5).populate('userId', 'fullName avatar')
         ]);
+
+        const recentRevenueSources: any[] = [];
+        recentOrders.forEach((o: any) => {
+            recentRevenueSources.push({
+                id: o._id,
+                label: o.userId?.fullName || o.fullName || "Khách hàng",
+                amount: o.total - (o.shipping?.fee || 0),
+                time: o.createdAt,
+                type: 'order'
+            });
+        });
+        recentBookings.forEach((b: any) => {
+            recentRevenueSources.push({
+                id: b._id,
+                label: b.userId?.fullName || "Khách dịch vụ",
+                amount: b.total,
+                time: b.updatedAt,
+                type: 'booking'
+            });
+        });
+        recentBoardings.forEach((bb: any) => {
+            recentRevenueSources.push({
+                id: bb._id,
+                label: bb.userId?.fullName || "Khách lưu trú",
+                amount: bb.total,
+                time: bb.updatedAt,
+                type: 'boarding'
+            });
+        });
+        recentRevenueSources.sort((a, b) => new Date(b.time).getTime() - new Date(a.time).getTime());
+        const finalRecentSources = recentRevenueSources.slice(0, 8);
 
         const weeklyRevenueTable: Record<string, number> = {};
         thisWeekSalesRes.forEach(item => weeklyRevenueTable[item._id] = item.total);
@@ -222,6 +256,27 @@ export const getAnalyticsStats = async (req: Request, res: Response) => {
         const monthlyVisits = Array(12).fill(0);
         monthlyOrdersRes.forEach(item => { monthlyVisits[item._id.month - 1] = item.count; });
 
+        // Calculate All-time Totals
+        const [allTimeShop, allTimeService, allTimeBoarding] = await Promise.all([
+            Order.aggregate([
+                { $match: { orderStatus: 'completed', deleted: false } },
+                { $group: { _id: null, total: { $sum: { $subtract: ["$total", { $ifNull: ["$shipping.fee", 0] }] } } } }
+            ]),
+            Booking.aggregate([
+                { $match: { bookingStatus: 'completed', paymentStatus: 'paid', deleted: false } },
+                { $group: { _id: null, total: { $sum: "$total" } } }
+            ]),
+            BoardingBooking.aggregate([
+                { $match: { boardingStatus: 'checked-out', paymentStatus: 'paid', deleted: false } },
+                { $group: { _id: null, total: { $sum: "$total" } } }
+            ])
+        ]);
+
+        const shopTotal = allTimeShop[0]?.total || 0;
+        const serviceTotal = allTimeService[0]?.total || 0;
+        const boardingTotal = allTimeBoarding[0]?.total || 0;
+        const grandTotal = shopTotal + serviceTotal + boardingTotal;
+
         const calculatePercent = (current: number, previous: number) => {
             if (previous === 0) return current > 0 ? 100 : 0;
             return parseFloat(((current - previous) / previous * 100).toFixed(1));
@@ -231,9 +286,12 @@ export const getAnalyticsStats = async (req: Request, res: Response) => {
             'pending': 'Chờ xác nhận',
             'confirmed': 'Đã xác nhận',
             'shipping': 'Đang giao',
+            'shipped': 'Đã giao',
             'completed': 'Hoàn thành',
             'cancelled': 'Đã hủy',
-            'refunded': 'Hoàn tiền'
+            'refunded': 'Hoàn tiền',
+            'returned': 'Trả hàng',
+            'request_cancel': 'Yêu cầu hủy'
         };
 
         res.json({
@@ -242,7 +300,14 @@ export const getAnalyticsStats = async (req: Request, res: Response) => {
                 weeklySales: {
                     total: thisWeekSalesTotal,
                     percent: calculatePercent(thisWeekSalesTotal, lastWeekSalesTotal),
-                    data: weeklyRevenueData
+                    data: weeklyRevenueData,
+                    recentRevenueSources: finalRecentSources,
+                    allTime: {
+                        total: grandTotal,
+                        shop: shopTotal,
+                        service: serviceTotal,
+                        boarding: boardingTotal
+                    }
                 },
                 newUsers: {
                     total: thisWeekUsers,
@@ -413,9 +478,17 @@ export const getBoardingStats = async (req: Request, res: Response) => {
 export const getServiceStats = async (req: Request, res: Response) => {
     try {
         const { startDate, endDate } = req.query;
+        const now = dayjs();
+        const startOfMonth = now.startOf('month').toDate();
+        const sixMonthsAgo = now.subtract(5, 'month').startOf('month').toDate();
+
         const match: any = { deleted: false };
         if (startDate && endDate) { match.createdAt = { $gte: new Date(startDate as string), $lte: new Date(endDate as string) }; }
-        const [popularServices, staffPerformance, revenueByCategory] = await Promise.all([
+
+        const [
+            popularServices, staffPerformance, revenueByCategory, counts,
+            thisMonthRevenueRes, revenueTrendRes, recentBookings
+        ] = await Promise.all([
             // Top 10 dịch vụ được đặt nhiều nhất
             Booking.aggregate([
                 { $match: match },
@@ -435,7 +508,7 @@ export const getServiceStats = async (req: Request, res: Response) => {
                 { $unwind: "$staff" },
                 { $project: { _id: 1, count: 1, name: "$staff.fullName" } }
             ]),
-            // Doanh mục dịch vụ mang lại doanh thu cao nhất
+            // Danh mục dịch vụ mang lại doanh thu cao nhất
             Booking.aggregate([
                 { $match: { ...match, bookingStatus: "completed" } },
                 { $lookup: { from: "services", localField: "serviceId", foreignField: "_id", as: "serviceInfo" } },
@@ -443,18 +516,79 @@ export const getServiceStats = async (req: Request, res: Response) => {
                 { $lookup: { from: "categories-service", localField: "serviceInfo.categoryId", foreignField: "_id", as: "cat" } },
                 { $unwind: "$cat" },
                 { $group: { _id: "$cat.name", total: { $sum: "$total" }, count: { $sum: 1 } } }
-            ])
+            ]),
+            // Counts
+            Promise.all([
+                Booking.countDocuments({ deleted: false }),
+                Booking.countDocuments({ bookingStatus: "pending", deleted: false }),
+                Booking.countDocuments({ bookingStatus: "confirmed", deleted: false })
+            ]),
+            // This month revenue
+            Booking.aggregate([
+                { $match: { bookingStatus: "completed", paymentStatus: "paid", deleted: false, updatedAt: { $gte: startOfMonth } } },
+                { $group: { _id: null, total: { $sum: "$total" } } }
+            ]),
+            // Revenue Trend (6 months)
+            Booking.aggregate([
+                { $match: { bookingStatus: "completed", paymentStatus: "paid", deleted: false, updatedAt: { $gte: sixMonthsAgo } } },
+                { $group: { _id: { month: { $month: "$updatedAt" }, year: { $year: "$updatedAt" } }, total: { $sum: "$total" } } },
+                { $sort: { "_id.year": 1, "_id.month": 1 } }
+            ]),
+            // Recent bookings for hover history
+            Booking.find({ bookingStatus: "completed", paymentStatus: "paid", deleted: false })
+                .sort({ updatedAt: -1 }).limit(8).populate('userId', 'fullName')
         ]);
-        res.json({ success: true, data: { popularServices, staffPerformance, revenueByCategory } });
+
+        const recentRevenueSources = recentBookings.map((b: any) => ({
+            id: b._id,
+            label: b.userId?.fullName || "Khách dịch vụ",
+            amount: b.total,
+            time: b.updatedAt,
+            type: 'booking'
+        }));
+
+        const revenueTrend = Array.from({ length: 6 }).map((_, i) => {
+            const date = now.subtract(5 - i, 'month');
+            const m = date.month() + 1;
+            const y = date.year();
+            const matchTrend = revenueTrendRes.find(r => r._id.month === m && r._id.year === y);
+            return {
+                month: `Thg ${m}`,
+                total: matchTrend ? matchTrend.total : 0
+            };
+        });
+
+        res.json({
+            success: true,
+            data: {
+                popularServices,
+                staffPerformance,
+                revenueByCategory,
+                totalBookings: counts[0],
+                pendingBookings: counts[1],
+                confirmedBookings: counts[2],
+                thisMonthRevenue: thisMonthRevenueRes[0]?.total || 0,
+                revenueTrend,
+                recentRevenueSources
+            }
+        });
     } catch (error: any) { res.status(500).json({ success: false, message: error.message }); }
 };
 
 export const getOrderStats = async (req: Request, res: Response) => {
     try {
         const { startDate, endDate } = req.query;
+        const now = dayjs();
+        const startOfMonth = now.startOf('month').toDate();
+        const sixMonthsAgo = now.subtract(5, 'month').startOf('month').toDate();
+
         const match: any = { deleted: false, orderStatus: 'completed' };
         if (startDate && endDate) { match.createdAt = { $gte: new Date(startDate as string), $lte: new Date(endDate as string) }; }
-        const [revenueByCategory, topProducts, orderDistribution] = await Promise.all([
+
+        const [
+            revenueByCategory, topProducts, orderDistribution, counts,
+            thisMonthRevenueRes, revenueTrendRes, recentOrders
+        ] = await Promise.all([
             Order.aggregate([
                 { $match: match },
                 { $unwind: "$items" },
@@ -471,36 +605,167 @@ export const getOrderStats = async (req: Request, res: Response) => {
                 { $sort: { totalQuantity: -1 } },
                 { $limit: 5 }
             ]),
-            Order.aggregate([{ $match: { deleted: false } }, { $group: { _id: "$orderStatus", count: { $sum: 1 } } }])
+            Order.aggregate([{ $match: { deleted: false } }, { $group: { _id: "$orderStatus", count: { $sum: 1 } } }]),
+            // Counts
+            Promise.all([
+                Order.countDocuments({ deleted: false }),
+                Order.countDocuments({ orderStatus: "pending", deleted: false }),
+                Order.countDocuments({ orderStatus: "confirmed", deleted: false })
+            ]),
+            // This month revenue
+            Order.aggregate([
+                { $match: { orderStatus: "completed", deleted: false, updatedAt: { $gte: startOfMonth } } },
+                { $group: { _id: null, total: { $sum: { $subtract: ["$total", { $ifNull: ["$shipping.fee", 0] }] } } } }
+            ]),
+            // Revenue Trend (6 months)
+            Order.aggregate([
+                { $match: { orderStatus: "completed", deleted: false, updatedAt: { $gte: sixMonthsAgo } } },
+                { $group: { _id: { month: { $month: "$updatedAt" }, year: { $year: "$updatedAt" } }, total: { $sum: { $subtract: ["$total", { $ifNull: ["$shipping.fee", 0] }] } } } },
+                { $sort: { "_id.year": 1, "_id.month": 1 } }
+            ]),
+            // Recent orders for hover history
+            Order.find({ orderStatus: "completed", deleted: false, updatedAt: { $gte: startOfMonth } })
+                .sort({ updatedAt: -1 }).limit(8).populate('userId', 'fullName')
         ]);
-        res.json({ success: true, data: { revenueByCategory, topProducts, orderDistribution } });
+
+        const recentRevenueSources = recentOrders.map((o: any) => ({
+            id: o._id,
+            label: o.userId?.fullName || o.fullName || "Khách vãng lai",
+            amount: o.total - (o.shipping?.fee || 0),
+            time: o.createdAt,
+            type: 'order'
+        }));
+
+        const statusMap: any = {
+            'pending': 'Chờ xác nhận',
+            'confirmed': 'Đã xác nhận',
+            'shipping': 'Đang giao',
+            'shipped': 'Đã giao',
+            'completed': 'Hoàn thành',
+            'cancelled': 'Đã hủy',
+            'returned': 'Trả hàng',
+            'request_cancel': 'Yêu cầu hủy'
+        };
+
+        const revenueTrend = Array.from({ length: 6 }).map((_, i) => {
+            const date = now.subtract(5 - i, 'month');
+            const m = date.month() + 1;
+            const y = date.year();
+            const matchTrend = revenueTrendRes.find(r => r._id.month === m && r._id.year === y);
+            return {
+                month: `Thg ${m}`,
+                total: matchTrend ? matchTrend.total : 0
+            };
+        });
+
+        res.json({
+            success: true,
+            data: {
+                revenueByCategory,
+                topProducts,
+                orderDistribution: orderDistribution.map((o: any) => ({ label: statusMap[o._id] || o._id, count: o.count })),
+                totalOrders: counts[0],
+                pendingOrders: counts[1],
+                confirmedOrders: counts[2],
+                thisMonthRevenue: thisMonthRevenueRes[0]?.total || 0,
+                revenueTrend,
+                recentRevenueSources
+            }
+        });
     } catch (error: any) { res.status(500).json({ success: false, message: error.message }); }
 };
 
 export const getDetailedBoardingStats = async (req: Request, res: Response) => {
     try {
-        const [occupancyRes, revenueByCageType, stayDuration] = await Promise.all([
+        const now = dayjs();
+        const startOfMonth = now.startOf('month').toDate();
+        const sixMonthsAgo = now.subtract(5, 'month').startOf('month').toDate();
+
+        const [
+            occupancyRes,
+            revenueByCageType,
+            stayDuration,
+            counts,
+            thisMonthRevenueRes,
+            statusDist,
+            revenueTrendRes
+        ] = await Promise.all([
             // Occupancy
             BoardingBooking.aggregate([
-                { $match: { boardingStatus: "checked-in", deleted: false } }, 
-                { $lookup: { from: "boarding-cages", localField: "cageId", foreignField: "_id", as: "cageInfo" } }, 
+                { $match: { boardingStatus: "checked-in", deleted: false } },
+                { $lookup: { from: "boarding-cages", localField: "cageId", foreignField: "_id", as: "cageInfo" } },
                 { $unwind: { path: "$cageInfo", preserveNullAndEmptyArrays: true } },
                 { $group: { _id: { $ifNull: ["$cageInfo.cageCode", "Khác"] }, count: { $sum: 1 } } }
             ]),
             // Revenue by cage
             BoardingBooking.aggregate([
-                { $match: { boardingStatus: "checked-out", deleted: false } }, 
-                { $lookup: { from: "boarding-cages", localField: "cageId", foreignField: "_id", as: "cage" } }, 
-                { $unwind: { path: "$cage", preserveNullAndEmptyArrays: true } }, 
+                { $match: { boardingStatus: "checked-out", deleted: false } },
+                { $lookup: { from: "boarding-cages", localField: "cageId", foreignField: "_id", as: "cage" } },
+                { $unwind: { path: "$cage", preserveNullAndEmptyArrays: true } },
                 { $group: { _id: { $ifNull: ["$cage.type", "Khác"] }, total: { $sum: "$total" } } }
             ]),
             // Stay Duration
             BoardingBooking.aggregate([
-                { $match: { boardingStatus: "checked-out", deleted: false } }, 
+                { $match: { boardingStatus: "checked-out", deleted: false } },
                 { $group: { _id: null, avgDays: { $avg: "$numberOfDays" } } }
+            ]),
+            // General Counts
+            Promise.all([
+                BoardingBooking.countDocuments({ deleted: false }),
+                BoardingBooking.countDocuments({ boardingStatus: "checked-in", deleted: false }),
+                BoardingBooking.countDocuments({ boardingStatus: "confirmed", deleted: false })
+            ]),
+            // This month revenue
+            BoardingBooking.aggregate([
+                { $match: { boardingStatus: "checked-out", paymentStatus: "paid", deleted: false, updatedAt: { $gte: startOfMonth } } },
+                { $group: { _id: null, total: { $sum: "$total" } } }
+            ]),
+            // Status Distribution
+            BoardingBooking.aggregate([
+                { $match: { deleted: false } },
+                { $group: { _id: "$boardingStatus", count: { $sum: 1 } } }
+            ]),
+            // Revenue Trend (6 months)
+            BoardingBooking.aggregate([
+                { $match: { boardingStatus: "checked-out", paymentStatus: "paid", deleted: false, updatedAt: { $gte: sixMonthsAgo } } },
+                {
+                    $group: {
+                        _id: {
+                            month: { $month: "$updatedAt" },
+                            year: { $year: "$updatedAt" }
+                        },
+                        total: { $sum: "$total" }
+                    }
+                },
+                { $sort: { "_id.year": 1, "_id.month": 1 } }
             ])
         ]);
-        res.json({ success: true, data: { occupancyRes, revenueByCageType, avgStayDuration: stayDuration[0]?.avgDays || 0 } });
+
+        const revenueTrend = Array.from({ length: 6 }).map((_, i) => {
+            const date = now.subtract(5 - i, 'month');
+            const m = date.month() + 1;
+            const y = date.year();
+            const match = revenueTrendRes.find(r => r._id.month === m && r._id.year === y);
+            return {
+                month: `Thg ${m}`,
+                total: match ? match.total : 0
+            };
+        });
+
+        res.json({
+            success: true,
+            data: {
+                occupancyRes,
+                revenueByCageType,
+                avgStayDuration: stayDuration[0]?.avgDays || 0,
+                totalOrders: counts[0],
+                checkedInOrders: counts[1],
+                upcomingOrders: counts[2],
+                thisMonthRevenue: thisMonthRevenueRes[0]?.total || 0,
+                statusDist,
+                revenueTrend
+            }
+        });
     } catch (error: any) { res.status(500).json({ success: false, message: error.message }); }
 };
 
