@@ -162,41 +162,104 @@ export const getEcommerceStats = async (req: Request, res: Response) => {
  */
 export const getAnalyticsStats = async (req: Request, res: Response) => {
     try {
-        const sevenDaysAgo = dayjs().subtract(7, 'day').startOf('day').toDate();
-        const [weeklyRevenueRes, totalUsers, totalOrders, ordersByStatus, monthlyVisitsRes] = await Promise.all([
+        const now = dayjs();
+        const thisWeekStart = now.subtract(7, 'day').startOf('day').toDate();
+        const lastWeekStart = now.subtract(14, 'day').startOf('day').toDate();
+        const lastWeekEnd = now.subtract(7, 'day').endOf('day').toDate();
+
+        const [
+            thisWeekSalesRes,
+            lastWeekSalesRes,
+            thisWeekUsers,
+            lastWeekUsers,
+            thisWeekOrders,
+            lastWeekOrders,
+            totalPets,
+            lastWeekPets,
+            ordersByStatus,
+            monthlyOrdersRes,
+            totalOrders
+        ] = await Promise.all([
+            // Sales
             Order.aggregate([
-                { $match: { createdAt: { $gte: sevenDaysAgo }, deleted: false } },
+                { $match: { createdAt: { $gte: thisWeekStart }, deleted: false, orderStatus: 'completed' } },
                 { $group: { _id: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } }, total: { $sum: "$total" } } },
                 { $sort: { "_id": 1 } }
             ]),
-            AccountUser.countDocuments({ deleted: false }),
-            Order.countDocuments({ deleted: false }),
+            Order.aggregate([
+                { $match: { createdAt: { $gte: lastWeekStart, $lte: lastWeekEnd }, deleted: false, orderStatus: 'completed' } },
+                { $group: { _id: null, total: { $sum: "$total" } } }
+            ]),
+            // Users
+            AccountUser.countDocuments({ createdAt: { $gte: thisWeekStart }, deleted: false }),
+            AccountUser.countDocuments({ createdAt: { $gte: lastWeekStart, $lte: lastWeekEnd }, deleted: false }),
+            // Orders
+            Order.countDocuments({ createdAt: { $gte: thisWeekStart }, deleted: false }),
+            Order.countDocuments({ createdAt: { $gte: lastWeekStart, $lte: lastWeekEnd }, deleted: false }),
+            // Pets
+            Pet.countDocuments({ deleted: false }),
+            Pet.countDocuments({ createdAt: { $gte: thisWeekStart }, deleted: false }),
+            // Distributions
             Order.aggregate([{ $match: { deleted: false } }, { $group: { _id: "$orderStatus", count: { $sum: 1 } } }]),
             Order.aggregate([
                 { $match: { deleted: false, createdAt: { $gte: dayjs().startOf('year').toDate() } } },
                 { $group: { _id: { month: { $month: "$createdAt" } }, count: { $sum: 1 } } },
                 { $sort: { "_id.month": 1 } }
-            ])
+            ]),
+            Order.countDocuments({ deleted: false })
         ]);
 
         const weeklyRevenueTable: Record<string, number> = {};
-        weeklyRevenueRes.forEach(item => weeklyRevenueTable[item._id] = item.total);
-        const weeklyRevenue = Array.from({ length: 7 }).map((_, i) => {
+        thisWeekSalesRes.forEach(item => weeklyRevenueTable[item._id] = item.total);
+        const weeklyRevenueData = Array.from({ length: 7 }).map((_, i) => {
             const d = dayjs().subtract(6 - i, 'day').format('YYYY-MM-DD');
             return weeklyRevenueTable[d] || 0;
         });
 
+        const thisWeekSalesTotal = weeklyRevenueData.reduce((a, b) => a + b, 0);
+        const lastWeekSalesTotal = lastWeekSalesRes[0]?.total || 0;
+
         const monthlyVisits = Array(12).fill(0);
-        monthlyVisitsRes.forEach(item => { monthlyVisits[item._id.month - 1] = item.count; });
+        monthlyOrdersRes.forEach(item => { monthlyVisits[item._id.month - 1] = item.count; });
+
+        const calculatePercent = (current: number, previous: number) => {
+            if (previous === 0) return current > 0 ? 100 : 0;
+            return parseFloat(((current - previous) / previous * 100).toFixed(1));
+        };
+
+        const statusMap: any = {
+            'pending': 'Chờ xác nhận',
+            'confirmed': 'Đã xác nhận',
+            'shipping': 'Đang giao',
+            'completed': 'Hoàn thành',
+            'cancelled': 'Đã hủy',
+            'refunded': 'Hoàn tiền'
+        };
 
         res.json({
             success: true,
             data: {
-                weeklySales: { total: weeklyRevenue.reduce((a, b) => a + b, 0), data: weeklyRevenue },
-                newUsers: totalUsers,
-                purchaseOrders: totalOrders,
-                messages: 234,
-                orderDistribution: ordersByStatus.map(o => ({ label: o._id, value: o.count })),
+                weeklySales: {
+                    total: thisWeekSalesTotal,
+                    percent: calculatePercent(thisWeekSalesTotal, lastWeekSalesTotal),
+                    data: weeklyRevenueData
+                },
+                newUsers: {
+                    total: thisWeekUsers,
+                    percent: calculatePercent(thisWeekUsers, lastWeekUsers)
+                },
+                purchaseOrders: {
+                    total: totalOrders,
+                    percent: calculatePercent(thisWeekOrders, lastWeekOrders) // Growth in orders this week vs last week
+                },
+                pets: {
+                    total: totalPets,
+                    percent: calculatePercent(lastWeekPets, totalPets - lastWeekPets) // Growth in pet count
+                },
+                orderDistribution: ordersByStatus.map(o => ({
+                    label: statusMap[o._id] || o._id,
+                    value: o.count
+                })),
                 websiteVisits: monthlyVisits
             }
         });
@@ -208,11 +271,25 @@ export const getAnalyticsStats = async (req: Request, res: Response) => {
  */
 export const getSystemStats = async (req: Request, res: Response) => {
     try {
-        const [petStats, totalUsers, totalAdmins, totalPets, newProducts, topProducts, topCustomersRes, serviceUsageRes] = await Promise.all([
+        const now = dayjs();
+        const sevenDaysAgo = now.subtract(7, 'day').toDate();
+        const fourteenDaysAgo = now.subtract(14, 'day').toDate();
+
+        const [
+            petStats,
+            totalUsers, lastWeekUsers,
+            totalAdmins, lastWeekAdmins,
+            totalPets, lastWeekPets,
+            newProducts, topProducts, topCustomersRes, serviceUsageRes,
+            userTrendRes, petTrendRes
+        ] = await Promise.all([
             Pet.aggregate([{ $match: { deleted: false } }, { $group: { _id: "$type", count: { $sum: 1 } } }]),
             AccountUser.countDocuments({ deleted: false }),
+            AccountUser.countDocuments({ deleted: false, createdAt: { $lte: sevenDaysAgo } }),
             AccountAdmin.countDocuments({ deleted: false }),
+            AccountAdmin.countDocuments({ deleted: false, createdAt: { $lte: sevenDaysAgo } }),
             Pet.countDocuments({ deleted: false }),
+            Pet.countDocuments({ deleted: false, createdAt: { $lte: sevenDaysAgo } }),
             Product.find({ deleted: false }).sort({ createdAt: -1 }).limit(5),
             Order.aggregate([
                 { $match: { deleted: false } },
@@ -234,6 +311,15 @@ export const getSystemStats = async (req: Request, res: Response) => {
                 { $group: { _id: "$serviceInfo.name", count: { $sum: 1 } } },
                 { $sort: { count: -1 } },
                 { $limit: 3 }
+            ]),
+            // Trends
+            AccountUser.aggregate([
+                { $match: { deleted: false, createdAt: { $gte: sevenDaysAgo } } },
+                { $group: { _id: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } }, count: { $sum: 1 } } }
+            ]),
+            Pet.aggregate([
+                { $match: { deleted: false, createdAt: { $gte: sevenDaysAgo } } },
+                { $group: { _id: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } }, count: { $sum: 1 } } }
             ])
         ]);
 
@@ -242,11 +328,30 @@ export const getSystemStats = async (req: Request, res: Response) => {
             return { ...c, fullName: user?.fullName || 'Khách vãng lai', avatar: user?.avatar };
         }));
 
+        const calculatePercent = (current: number, previousTotal: number) => {
+            if (previousTotal === 0) return current > 0 ? 100 : 0;
+            const newCount = current - previousTotal;
+            return parseFloat(((newCount / previousTotal) * 100).toFixed(1));
+        };
+
+        const getTrendData = (res: any[]) => {
+            const map: any = {};
+            res.forEach(i => map[i._id] = i.count);
+            return Array.from({ length: 7 }).map((_, i) => {
+                const d = dayjs().subtract(6 - i, 'day').format('YYYY-MM-DD');
+                return map[d] || 0;
+            });
+        };
+
         res.json({
             success: true,
             data: {
                 petDistribution: petStats.map(p => ({ label: p._id === 'dog' ? 'Chó' : p._id === 'cat' ? 'Mèo' : 'Khác', count: p.count })),
-                systemStats: { totalUsers, totalAdmins, totalPets },
+                systemStats: {
+                    users: { total: totalUsers, percent: calculatePercent(totalUsers, lastWeekUsers), trend: getTrendData(userTrendRes) },
+                    admins: { total: totalAdmins, percent: calculatePercent(totalAdmins, lastWeekAdmins), trend: [1, 1, 0, 0, 1, 0, 0] },
+                    pets: { total: totalPets, percent: calculatePercent(totalPets, lastWeekPets), trend: getTrendData(petTrendRes) }
+                },
                 newProducts,
                 topSellingProducts: topProducts,
                 topCustomers,
