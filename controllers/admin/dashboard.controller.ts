@@ -480,9 +480,25 @@ export const getOrderStats = async (req: Request, res: Response) => {
 export const getDetailedBoardingStats = async (req: Request, res: Response) => {
     try {
         const [occupancyRes, revenueByCageType, stayDuration] = await Promise.all([
-            BoardingBooking.aggregate([{ $match: { boardingStatus: "checked-in", deleted: false } }, { $group: { _id: "$cageId", count: { $sum: 1 } } }]),
-            BoardingBooking.aggregate([{ $match: { boardingStatus: "checked-out", deleted: false } }, { $lookup: { from: "boarding-cages", localField: "cageId", foreignField: "_id", as: "cage" } }, { $unwind: "$cage" }, { $group: { _id: "$cage.name", total: { $sum: "$total" } } }]),
-            BoardingBooking.aggregate([{ $match: { boardingStatus: "checked-out", deleted: false } }, { $group: { _id: null, avgDays: { $avg: "$numberOfDays" } } }])
+            // Occupancy
+            BoardingBooking.aggregate([
+                { $match: { boardingStatus: "checked-in", deleted: false } }, 
+                { $lookup: { from: "boarding-cages", localField: "cageId", foreignField: "_id", as: "cageInfo" } }, 
+                { $unwind: { path: "$cageInfo", preserveNullAndEmptyArrays: true } },
+                { $group: { _id: { $ifNull: ["$cageInfo.cageCode", "Khác"] }, count: { $sum: 1 } } }
+            ]),
+            // Revenue by cage
+            BoardingBooking.aggregate([
+                { $match: { boardingStatus: "checked-out", deleted: false } }, 
+                { $lookup: { from: "boarding-cages", localField: "cageId", foreignField: "_id", as: "cage" } }, 
+                { $unwind: { path: "$cage", preserveNullAndEmptyArrays: true } }, 
+                { $group: { _id: { $ifNull: ["$cage.type", "Khác"] }, total: { $sum: "$total" } } }
+            ]),
+            // Stay Duration
+            BoardingBooking.aggregate([
+                { $match: { boardingStatus: "checked-out", deleted: false } }, 
+                { $group: { _id: null, avgDays: { $avg: "$numberOfDays" } } }
+            ])
         ]);
         res.json({ success: true, data: { occupancyRes, revenueByCageType, avgStayDuration: stayDuration[0]?.avgDays || 0 } });
     } catch (error: any) { res.status(500).json({ success: false, message: error.message }); }

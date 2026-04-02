@@ -120,6 +120,13 @@ const buildDogFeedingTemplate = (dogs: PetLite[]): FeedingItem[] => {
                 status: "pending", petType: "dog", staffId: null, staffName: "", doneAt: null,
             },
             {
+                time: "12:00",
+                food: "Sữa dễ tiêu hoặc nước súp dinh dưỡng",
+                amount: "1 phần nhỏ",
+                note: "Bữa trưa nhẹ bụng cho chó lớn tuổi.",
+                status: "pending", petType: "dog", staffId: null, staffName: "", doneAt: null,
+            },
+            {
                 time: "18:00",
                 food: "Súp rau củ (Cà rốt, Bí đỏ) + Thịt gà xé",
                 amount: portion,
@@ -191,6 +198,13 @@ const buildCatFeedingTemplate = (cats: PetLite[]): FeedingItem[] => {
                 food: "Pate mềm / Hạt cho mèo già",
                 amount: portion,
                 note: "Bữa sáng dễ nhai cho mèo lớn tuổi.",
+                status: "pending", petType: "cat", staffId: null, staffName: "", doneAt: null,
+            },
+            {
+                time: "13:00",
+                food: "Sữa chống lão hóa hoặc súp dưỡng chất",
+                amount: "1 phần nhỏ",
+                note: "Bổ sung nước và vi lượng buổi trưa.",
                 status: "pending", petType: "cat", staffId: null, staffName: "", doneAt: null,
             },
             {
