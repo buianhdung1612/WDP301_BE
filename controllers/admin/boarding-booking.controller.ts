@@ -606,7 +606,7 @@ export const batchCreateBoardingBooking = async (req: Request, res: Response) =>
                 defaultStaff,
                 undefined,
                 undefined,
-                { careDate: checkIn, checkInDate: checkIn }
+                { careDate: checkIn, checkInDate: checkIn, checkOutDate: checkOut }
             );
 
             allOrderItems.push({
@@ -811,7 +811,7 @@ export const createBoardingBooking = async (req: Request, res: Response) => {
             defaultStaff,
             undefined,
             undefined,
-            { careDate: checkIn, checkInDate: checkIn }
+            { careDate: checkIn, checkInDate: checkIn, checkOutDate: checkOut }
         );
 
 
@@ -1429,7 +1429,7 @@ export const updateBoardingCareSchedule = async (req: Request, res: Response) =>
                 await getFreestBoardingStaffForDate(careDate || booking.checkInDate),
                 undefined,
                 undefined,
-                { careDate: careDate || booking.checkInDate, checkInDate: booking.checkInDate }
+                { careDate: careDate || booking.checkInDate, checkInDate: booking.checkInDate, checkOutDate: booking.checkOutDate }
             );
             booking.feedingSchedule = template.feedingSchedule;
             booking.exerciseSchedule = template.exerciseSchedule;

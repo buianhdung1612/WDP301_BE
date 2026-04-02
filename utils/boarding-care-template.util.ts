@@ -257,103 +257,133 @@ const buildCatExerciseTemplate = (): ExerciseItem[] => {
 export const buildDefaultBoardingCareSchedule = (
     pets: PetLite[],
     staff?: { staffId: string; staffName: string },
-    customFeeding?: Record<string, string>,
-    customExercise?: Record<string, string>,
+    customFeeding?: Record<string, any>,
+    customExercise?: Record<string, any>,
     options?: {
         careDate?: string | Date;
         checkInDate?: string | Date;
+        checkOutDate?: string | Date;
     }
 ) => {
     const staffIdRaw = staff?.staffId || null;
     const staffName = staff?.staffName || "";
     const safePets = Array.isArray(pets) ? pets : [];
-    let feedingSchedule: FeedingItem[] = [];
-    let exerciseSchedule: ExerciseItem[] = [];
+    
+    let finalFeeding: FeedingItem[] = [];
+    let finalExercise: ExerciseItem[] = [];
 
-    safePets.forEach((pet: any) => {
-        const type = normalizePetType(pet.type || pet.petType);
-        const pId = pet._id ? String(pet._id) : null;
-        const pName = pet.name || "";
+    let totalDays = 1;
+    if (options?.checkInDate && options?.checkOutDate) {
+        const cIn = dayjs(options.checkInDate).startOf("day");
+        const cOut = dayjs(options.checkOutDate).startOf("day");
+        totalDays = Math.max(1, cOut.diff(cIn, "day") + 1);
+    }
 
-        if (type === "dog") {
-            const dogFeeding = buildDogFeedingTemplate([pet]).map((i) => ({ ...i, petId: pId, petName: pName }));
-            const dogExercise = buildDogExerciseTemplate([pet]).map((i) => ({ ...i, petId: pId, petName: pName }));
-            feedingSchedule = feedingSchedule.concat(dogFeeding);
-            exerciseSchedule = exerciseSchedule.concat(dogExercise);
-        } else if (type === "cat") {
-            const catFeeding = buildCatFeedingTemplate([pet]).map((i) => ({ ...i, petId: pId, petName: pName }));
-            const catExercise = buildCatExerciseTemplate().map((i) => ({ ...i, petId: pId, petName: pName }));
-            feedingSchedule = feedingSchedule.concat(catFeeding);
-            exerciseSchedule = exerciseSchedule.concat(catExercise);
-        }
-    });
+    for (let dayIndex = 1; dayIndex <= totalDays; dayIndex++) {
+        let dayFeeding: FeedingItem[] = [];
+        let dayExercise: ExerciseItem[] = [];
 
-    // 1. Lọc theo giờ nếu là ngày Check-in đầu tiên
-    if (options?.careDate && options?.checkInDate) {
-        const cDate = dayjs(options.careDate);
-        const checkInFull = dayjs(options.checkInDate);
+        safePets.forEach((pet: any) => {
+            const type = normalizePetType(pet.type || pet.petType);
+            const pId = pet._id ? String(pet._id) : null;
+            const pName = pet.name || "";
 
-        if (cDate.isSame(checkInFull, "day")) {
-            // Chỉ lấy các task có giờ >= giờ check-in
+            if (type === "dog") {
+                dayFeeding = dayFeeding.concat(buildDogFeedingTemplate([pet]).map((i) => ({ ...i, petId: pId, petName: pName })));
+                dayExercise = dayExercise.concat(buildDogExerciseTemplate([pet]).map((i) => ({ ...i, petId: pId, petName: pName })));
+            } else if (type === "cat") {
+                dayFeeding = dayFeeding.concat(buildCatFeedingTemplate([pet]).map((i) => ({ ...i, petId: pId, petName: pName })));
+                dayExercise = dayExercise.concat(buildCatExerciseTemplate().map((i) => ({ ...i, petId: pId, petName: pName })));
+            }
+        });
+
+        // 1. Lọc theo giờ nếu là ngày Check-in đầu tiên hoặc Check-out cuối cùng
+        if (dayIndex === 1 && options?.checkInDate) {
+            const checkInFull = dayjs(options.checkInDate);
             const checkInTimeStr = checkInFull.format("HH:mm");
 
-            feedingSchedule = feedingSchedule.filter((item) => {
+            dayFeeding = dayFeeding.filter((item) => {
                 const itemTime = (item.time || "00:00").padStart(5, "0");
                 return itemTime >= checkInTimeStr;
             });
 
-            exerciseSchedule = exerciseSchedule.filter((item) => {
+            dayExercise = dayExercise.filter((item) => {
                 const itemTime = (item.time || "00:00").padStart(5, "0");
                 return itemTime >= checkInTimeStr;
             });
         }
+
+        if (dayIndex === totalDays && options?.checkOutDate) {
+            const checkOutFull = dayjs(options.checkOutDate);
+            const checkOutTimeStr = checkOutFull.format("HH:mm");
+
+            dayFeeding = dayFeeding.filter((item) => {
+                const itemTime = (item.time || "00:00").padStart(5, "0");
+                return itemTime <= checkOutTimeStr;
+            });
+
+            dayExercise = dayExercise.filter((item) => {
+                const itemTime = (item.time || "00:00").padStart(5, "0");
+                return itemTime <= checkOutTimeStr;
+            });
+        }
+
+        // 2. Apply custom overrides if provided (per item, matching by petId and time slot)
+        if (customFeeding) {
+            dayFeeding = dayFeeding.map((item) => {
+                const petId = String(item.petId);
+                const petOverridesAllDays = (customFeeding[petId] && typeof customFeeding[petId] === "object") ? customFeeding[petId] : customFeeding;
+                const dayOverrides = (petOverridesAllDays[dayIndex] && typeof petOverridesAllDays[dayIndex] === "object") 
+                    ? petOverridesAllDays[dayIndex] 
+                    : petOverridesAllDays;
+
+                const hour = parseInt(item.time.split(":")[0]);
+                let override = "";
+                if (hour < 11) override = dayOverrides["Sáng"];
+                else if (hour < 16) override = dayOverrides["Trưa"];
+                else override = dayOverrides["Tối"];
+
+                if (override && typeof override === "string") {
+                    return { ...item, food: override, note: (item.note || "") + " (Yêu cầu thay đổi món ăn)" };
+                }
+                return item;
+            });
+        }
+
+        if (customExercise) {
+            dayExercise = dayExercise.map((item) => {
+                const petId = String(item.petId);
+                const petOverridesAllDays = (customExercise[petId] && typeof customExercise[petId] === "object") ? customExercise[petId] : customExercise;
+                const dayOverrides = (petOverridesAllDays[dayIndex] && typeof petOverridesAllDays[dayIndex] === "object") 
+                    ? petOverridesAllDays[dayIndex] 
+                    : petOverridesAllDays;
+
+                const hour = parseInt(item.time.split(":")[0]);
+                let override = "";
+                if (hour < 11) override = dayOverrides["Sáng"];
+                else if (hour < 15) override = dayOverrides["Trưa"];
+                else override = dayOverrides["Tối"];
+
+                if (override && typeof override === "string") {
+                    return { ...item, activity: override, note: (item.note || "") + " (Yêu cầu thay đổi hoạt động)" };
+                }
+                return item;
+            });
+        }
+
+        // Gán nhân viên cho từng item trong ngày
+        dayFeeding = dayFeeding.map((item) => ({ ...item, staffId: staffIdRaw, staffName }));
+        dayExercise = dayExercise.map((item) => ({ ...item, staffId: staffIdRaw, staffName }));
+
+        // Thêm hậu tố Ngày vào giờ nếu gửi yêu cầu tạo cho nhiều ngày
+        if (totalDays > 1) {
+            dayFeeding = dayFeeding.map((item) => ({ ...item, time: `${item.time} - Ngày ${dayIndex}` }));
+            dayExercise = dayExercise.map((item) => ({ ...item, time: `${item.time} - Ngày ${dayIndex}` }));
+        }
+
+        finalFeeding = finalFeeding.concat(dayFeeding);
+        finalExercise = finalExercise.concat(dayExercise);
     }
-
-    // 2. Apply custom overrides if provided (per item, matching by petId and time slot)
-    if (customFeeding) {
-        feedingSchedule = feedingSchedule.map((item) => {
-            const petId = String(item.petId);
-            // Check for per-pet override first (customFeeding[petId]), then flat override for backward compatibility
-            const petOverrides = (customFeeding[petId] && typeof customFeeding[petId] === "object")
-                ? customFeeding[petId]
-                : customFeeding;
-
-            const hour = parseInt(item.time.split(":")[0]);
-            let override = "";
-            if (hour < 11) override = petOverrides["Sáng"];
-            else if (hour < 16) override = petOverrides["Trưa"];
-            else override = petOverrides["Tối"];
-
-            if (override && typeof override === "string") {
-                return { ...item, food: override, note: (item.note || "") + " (Yêu cầu thay đổi món ăn)" };
-            }
-            return item;
-        });
-    }
-
-    if (customExercise) {
-        exerciseSchedule = exerciseSchedule.map((item) => {
-            const petId = String(item.petId);
-            const petOverrides = (customExercise[petId] && typeof customExercise[petId] === "object")
-                ? customExercise[petId]
-                : customExercise;
-
-            const hour = parseInt(item.time.split(":")[0]);
-            let override = "";
-            if (hour < 11) override = petOverrides["Sáng"];
-            else if (hour < 15) override = petOverrides["Trưa"];
-            else override = petOverrides["Tối"];
-
-            if (override && typeof override === "string") {
-                return { ...item, activity: override, note: (item.note || "") + " (Yêu cầu thay đổi hoạt động)" };
-            }
-            return item;
-        });
-    }
-
-    // Gán nhân viên nếu có
-    const finalFeeding = feedingSchedule.map((item) => ({ ...item, staffId: staffIdRaw, staffName }));
-    const finalExercise = exerciseSchedule.map((item) => ({ ...item, staffId: staffIdRaw, staffName }));
 
     return {
         feedingSchedule: finalFeeding,

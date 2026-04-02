@@ -341,7 +341,11 @@ export const createBoardingBooking = async (req: Request, res: Response) => {
 
         const freestStaff = await getFreestBoardingStaffForDate(start, {}, normalizedPetIds.length);
         const staffWarning = !freestStaff;
-        const defaultCareSchedule = buildDefaultBoardingCareSchedule(pets as any[], freestStaff, customFeeding, customExercise);
+        const defaultCareSchedule = buildDefaultBoardingCareSchedule(pets as any[], freestStaff, customFeeding, customExercise, {
+            checkInDate: start,
+            checkOutDate: end,
+            careDate: start
+        });
 
         const depositAmount = getDepositAmount(totalPrice, paymentMethod, totalDays, config);
         const depositPercent = depositAmount > 0 ? (config.depositPercentage || 20) : 0;
