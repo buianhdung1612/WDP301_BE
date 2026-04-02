@@ -87,10 +87,11 @@ export const autoUpdateBookingStatuses = async () => {
 
                 // 1. Tự động lùi lịch cho các đơn tiếp theo (Cascading) theo mức tối đa
                 const oldFinish = b.expectedFinish || b.end || deadline;
-                const staffIds = (b.petStaffMap || []).map((m: any) => m.staffId?.toString()).filter(Boolean);
+                const rawStaffIds = (b.petStaffMap || []).map((m: any) => m.staffId?.toString()).filter(Boolean);
+                const uniqueStaffIds = Array.from(new Set(rawStaffIds)) as string[];
                 let allAffectedCodes: string[] = [];
 
-                for (const staffId of staffIds) {
+                for (const staffId of uniqueStaffIds) {
                     const codes = await cascadeStaffDelay(staffId, maxExtension, oldFinish);
                     allAffectedCodes = [...new Set([...allAffectedCodes, ...codes])];
                 }

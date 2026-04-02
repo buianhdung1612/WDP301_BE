@@ -316,3 +316,50 @@ export const cascadeStaffDelay = async (staffId: string, delayMinutes: number, a
 
     return affectedCodes;
 };
+/**
+ * Tự động thu gọn lịch trình (Compact) khi có một đơn hàng hoàn thành sớm hơn dự kiến.
+ * @param staffId ID nhân viên
+ * @param afterTime Mốc thời gian hoàn thành của đơn hàng hiện tại
+ */
+export const compactStaffSchedule = async (staffId: string, afterTime: Date) => {
+    // Tìm các đơn hàng tương lai của nhân viên này trong ngày
+    const futureBookings = await Booking.find({
+        "petStaffMap.staffId": staffId,
+        deleted: false,
+        bookingStatus: { $in: ["pending", "confirmed", "delayed"] },
+        start: { $gte: dayjs(afterTime).subtract(2, 'hour').toDate() } // Lấy rộng một chút để chắc chắn
+    }).sort({ start: 1 }).populate('serviceId');
+
+    let currentCursor = afterTime;
+
+    for (const booking of futureBookings) {
+        const b = booking as any;
+        const service = b.serviceId;
+        const duration = service?.duration || 60;
+
+        // Thời điểm sớm nhất mà khách đã đặt ban đầu
+        const originalStart = b.originalStart || b.start;
+
+        // Thời điểm bắt đầu lý tưởng là MAX(thời điểm nhân viên rảnh, thời điểm khách đặt gốc)
+        const idealStart = dayjs(currentCursor).isAfter(originalStart)
+            ? currentCursor
+            : originalStart;
+
+        // Chỉ cập nhật nếu thời điểm lý tưởng sớm hơn thời gian đang được xếp hiện tại
+        if (dayjs(idealStart).isBefore(b.start)) {
+            const newStart = idealStart;
+            const newEnd = dayjs(newStart).add(duration, 'minute').toDate();
+
+            await Booking.updateOne(
+                { _id: b._id },
+                { $set: { start: newStart, end: newEnd } }
+            );
+
+            currentCursor = newEnd;
+            console.log(`[COMPACT] Đã đẩy sớm đơn ${b.code} lên lúc ${dayjs(newStart).format("HH:mm")}`);
+        } else {
+            // Nếu không đẩy sớm được, thì mốc rảnh tiếp theo là mốc kết thúc của đơn này
+            currentCursor = b.end;
+        }
+    }
+};

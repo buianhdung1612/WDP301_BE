@@ -11,7 +11,7 @@ import BookingReview from "../../models/booking-review.model";
 import dayjs from "dayjs";
 import puppeteer from "puppeteer";
 import { autoUpdateBookingStatuses } from "../../jobs/booking.job";
-import { findBestStaffForBooking, autoAssignPetsToStaff, checkOptimizedStaffAvailability, cascadeStaffDelay } from "../../helpers/booking-assignment.helper";
+import { findBestStaffForBooking, autoAssignPetsToStaff, checkOptimizedStaffAvailability, cascadeStaffDelay, compactStaffSchedule } from "../../helpers/booking-assignment.helper";
 import { convertToSlug } from "../../helpers/slug.helper";
 import Notification from "../../models/notification.model";
 
@@ -772,6 +772,14 @@ export const checkoutBooking = async (req: Request, res: Response) => {
 
         await booking.save();
 
+        // Tự động thu gọn lịch trình cho nhân viên (đẩy các lịch delay lên sớm nhất có thể)
+        if (booking.petStaffMap && booking.petStaffMap.length > 0) {
+            const staffIds = Array.from(new Set(booking.petStaffMap.map((m: any) => m.staffId?.toString()).filter(Boolean))) as string[];
+            for (const sId of staffIds) {
+                await compactStaffSchedule(sId, booking.completedAt || new Date());
+            }
+        }
+
         res.json({
             code: 200,
             message: "Checkout (Hoàn thành đơn) thành công",
@@ -1456,6 +1464,11 @@ export const completeBooking = async (req: Request, res: Response) => {
 
                 petMapping.status = "completed";
                 petMapping.completedAt = now;
+
+                // Thu gọn lịch cho nhân viên này ngay khi họ xong việc với bé này
+                if (petMapping.staffId) {
+                    await compactStaffSchedule(petMapping.staffId.toString(), now);
+                }
             }
         } else {
             // Không cho hoàn thành tổng đơn nếu chưa thanh toán ĐỦ
@@ -1491,6 +1504,12 @@ export const completeBooking = async (req: Request, res: Response) => {
                 m.status = "completed";
                 if (!m.completedAt) m.completedAt = new Date();
             });
+
+            // Thu gọn lịch cho toàn bộ nhân viên tham gia đơn này
+            const staffIds = Array.from(new Set(booking.petStaffMap.map((m: any) => m.staffId?.toString()).filter(Boolean))) as string[];
+            for (const sId of staffIds) {
+                await compactStaffSchedule(sId, new Date());
+            }
         }
 
         // 2. Kiểm tra xem tất cả thú cưng đã xong chưa
